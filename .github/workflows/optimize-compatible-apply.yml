@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  benchmark-test-commit:
+  benchmark-test-report:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout latest main
@@ -24,217 +24,104 @@ jobs:
           fetch-depth: 0
 
       - name: Build and benchmark current production path
+        id: baseline
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/compatible-results"
+          set +e
+          mkdir -p .ci/performance/compatible-apply "$RUNNER_TEMP/compatible-results"
+          {
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-baseline-root" \
+              cargo build --release --bin cmg-bench &&
+            cp "$RUNNER_TEMP/cmg-compatible-baseline-root/release/cmg-bench" \
+               "$RUNNER_TEMP/cmg-bench-baseline" &&
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-baseline-c" \
+              cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release &&
+            cp "$RUNNER_TEMP/cmg-compatible-baseline-c/release/cmg-c-kernel-bench" \
+               "$RUNNER_TEMP/cmg-c-kernel-baseline" || exit $?
+            for CASE in path worker-firm; do
+              "$RUNNER_TEMP/cmg-bench-baseline" \
+                --case "$CASE" --vertices 20000 --rhs 4 --repetitions 5 \
+                --output "$RUNNER_TEMP/compatible-results/solve-baseline-${CASE}.json" || exit $?
+              "$RUNNER_TEMP/cmg-c-kernel-baseline" \
+                --case "$CASE" --vertices 100000 --repetitions 7 \
+                --output "$RUNNER_TEMP/compatible-results/cycle-baseline-${CASE}.json" || exit $?
+            done
+          } > .ci/performance/compatible-apply/baseline.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          exit 0
 
-          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-baseline-root" \
-            cargo build --release --bin cmg-bench
-          cp "$RUNNER_TEMP/cmg-compatible-baseline-root/release/cmg-bench" \
-             "$RUNNER_TEMP/cmg-bench-baseline"
-
-          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-baseline-c" \
-            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
-          cp "$RUNNER_TEMP/cmg-compatible-baseline-c/release/cmg-c-kernel-bench" \
-             "$RUNNER_TEMP/cmg-c-kernel-baseline"
-
-          for CASE in path worker-firm; do
-            "$RUNNER_TEMP/cmg-bench-baseline" \
-              --case "$CASE" --vertices 20000 --rhs 4 --repetitions 5 \
-              --output "$RUNNER_TEMP/compatible-results/solve-baseline-${CASE}.json"
-            "$RUNNER_TEMP/cmg-c-kernel-baseline" \
-              --case "$CASE" --vertices 100000 --repetitions 9 \
-              --output "$RUNNER_TEMP/compatible-results/cycle-baseline-${CASE}.json"
-          done
-
-      - name: Add compatible-RHS stationary core path
-        shell: python
+      - name: Apply auditable candidate patch
+        id: patch
+        if: ${{ steps.baseline.outputs.status == '0' }}
+        shell: bash
         run: |
-          from pathlib import Path
-
-          path = Path('src/preconditioner.rs')
-          text = path.read_text()
-          anchor = '    /// Apply with explicit compatibility-validation tolerances.\n'
-          method = '''    /// Apply a right-hand side already known to be component-compatible.
-    ///
-    /// This skips the fine-level compatibility scan and projection performed by
-    /// [`Self::apply_into`]. It is intended for Krylov solvers that validate and
-    /// project the submitted right-hand side once, then keep residuals in the
-    /// Laplacian range. Dimension, workspace, and option checks remain enabled,
-    /// and recursive coarse-level roundoff handling is unchanged.
-    pub fn apply_compatible_into(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-    ) -> Result<(), CmgError> {
-        self.apply_compatible_into_with_validation(
-            rhs,
-            output,
-            workspace,
-            ValidationOptions::default(),
-        )
-    }
-
-    /// Apply an already compatible right-hand side with explicit internal
-    /// validation tolerances.
-    ///
-    /// Callers are responsible for ensuring component-wise compatibility. The
-    /// method is safe for arbitrary slices, but an incompatible right-hand side
-    /// does not represent a solvable graph-Laplacian system.
-    pub fn apply_compatible_into_with_validation(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-    ) -> Result<(), CmgError> {
-        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
-        if rhs.len() != dimension {
-            return Err(CmgError::dimension(
-                "CmgPreconditioner::apply compatible rhs",
-                dimension,
-                rhs.len(),
-            ));
-        }
-        if output.len() != dimension {
-            return Err(CmgError::dimension(
-                "CmgPreconditioner::apply compatible output",
-                dimension,
-                output.len(),
-            ));
-        }
-        workspace.validate(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.level_components,
-        )?;
-        validation.validate()?;
-        self.apply_level(0, rhs, output, workspace, 1, validation)
-    }
-
-'''
-          if method not in text:
-              if text.count(anchor) != 1:
-                  raise SystemExit('compatible method insertion anchor changed')
-              text = text.replace(anchor, method + anchor, 1)
-          path.write_text(text)
-
-          path = Path('src/pcg.rs')
-          text = path.read_text()
-          old_name = 'preconditioner.apply_into_with_validation'
-          new_name = 'preconditioner.apply_compatible_into_with_validation'
-          if text.count(old_name) != 2:
-              raise SystemExit(
-                  f'expected two PCG preconditioner calls, found {text.count(old_name)}'
-              )
-          text = text.replace(old_name, new_name)
-          loop_anchor = '''        if iteration == options.max_iterations {
-            break;
-        }
-
-        preconditioner.apply_compatible_into_with_validation(
-'''
-          loop_replacement = '''        if iteration == options.max_iterations {
-            break;
-        }
-
-        // The submitted RHS was projected once at the public boundary. Remove
-        // only component-nullspace roundoff accumulated by recursive updates
-        // before using the compatible stationary core again.
-        components.center_in_place_with_workspace(
-            &mut workspace.residual,
-            &mut workspace.component,
-        )?;
-        preconditioner.apply_compatible_into_with_validation(
-'''
-          if text.count(loop_anchor) != 1:
-              raise SystemExit('PCG residual-centering anchor changed')
-          path.write_text(text.replace(loop_anchor, loop_replacement, 1))
-
-          path = Path('benchmarks/c-kernel/src/cycle.rs')
-          text = path.read_text()
-          old = 'preconditioner.apply_into('
-          new = 'preconditioner.apply_compatible_into('
-          if text.count(old) != 3:
-              raise SystemExit(
-                  f'expected three cycle apply calls, found {text.count(old)}'
-              )
-          path.write_text(text.replace(old, new))
-
-          path = Path('tests/upstream_cycle.rs')
-          text = path.read_text()
-          old = '''    let reference = reference_apply(&preconditioner, 0, &projected_rhs, 1);
-    assert_vector_close(&production, &reference, 1.0e-12);
-'''
-          new = '''    let reference = reference_apply(&preconditioner, 0, &projected_rhs, 1);
-    let mut compatible_workspace = preconditioner.workspace();
-    let mut compatible = vec![0.0; graph.vertex_count()];
-    preconditioner
-        .apply_compatible_into(
-            &projected_rhs,
-            &mut compatible,
-            &mut compatible_workspace,
-        )
-        .unwrap();
-    assert_vector_close(&production, &reference, 1.0e-12);
-    assert_vector_close(&compatible, &reference, 1.0e-12);
-'''
-          if text.count(old) != 1:
-              raise SystemExit('upstream-cycle compatible assertion anchor changed')
-          path.write_text(text.replace(old, new, 1))
+          set +e
+          python scripts/compatible_apply_experiment.py \
+            > .ci/performance/compatible-apply/patch.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Validate candidate
+        id: validate
+        if: ${{ steps.patch.outputs.status == '0' }}
         shell: bash
         run: |
-          set -euo pipefail
-          cargo fmt --all
-          cargo fmt --all -- --check
-          RUSTFLAGS='-D warnings' cargo check --lib --no-default-features
-          cargo clippy --all-targets --all-features -- -D warnings
-          RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
-          cargo test --all-targets
-          cargo test --all-targets --release
-          cargo test --all-targets --all-features
-          cargo test --all-targets --all-features --release
-          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all
-          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check
-          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets
-          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets --release
+          set +e
+          {
+            cargo fmt --all &&
+            cargo fmt --all -- --check &&
+            RUSTFLAGS='-D warnings' cargo check --lib --no-default-features &&
+            cargo clippy --all-targets --all-features -- -D warnings &&
+            RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features &&
+            cargo test --all-targets &&
+            cargo test --all-targets --all-features --release &&
+            cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all &&
+            cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check &&
+            cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings &&
+            cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets --release
+          } > .ci/performance/compatible-apply/validation.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Build and benchmark candidate
+        id: candidate
+        if: ${{ steps.validate.outputs.status == '0' }}
         shell: bash
         run: |
-          set -euo pipefail
-          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-candidate-root" \
-            cargo build --release --bin cmg-bench
-          cp "$RUNNER_TEMP/cmg-compatible-candidate-root/release/cmg-bench" \
-             "$RUNNER_TEMP/cmg-bench-candidate"
-
-          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-candidate-c" \
-            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
-          cp "$RUNNER_TEMP/cmg-compatible-candidate-c/release/cmg-c-kernel-bench" \
-             "$RUNNER_TEMP/cmg-c-kernel-candidate"
-
-          for CASE in path worker-firm; do
-            "$RUNNER_TEMP/cmg-bench-candidate" \
-              --case "$CASE" --vertices 20000 --rhs 4 --repetitions 5 \
-              --output "$RUNNER_TEMP/compatible-results/solve-candidate-${CASE}.json"
-            "$RUNNER_TEMP/cmg-c-kernel-candidate" \
-              --case "$CASE" --vertices 100000 --repetitions 9 \
-              --output "$RUNNER_TEMP/compatible-results/cycle-candidate-${CASE}.json"
-          done
+          set +e
+          {
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-candidate-root" \
+              cargo build --release --bin cmg-bench &&
+            cp "$RUNNER_TEMP/cmg-compatible-candidate-root/release/cmg-bench" \
+               "$RUNNER_TEMP/cmg-bench-candidate" &&
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-candidate-c" \
+              cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release &&
+            cp "$RUNNER_TEMP/cmg-compatible-candidate-c/release/cmg-c-kernel-bench" \
+               "$RUNNER_TEMP/cmg-c-kernel-candidate" || exit $?
+            for CASE in path worker-firm; do
+              "$RUNNER_TEMP/cmg-bench-candidate" \
+                --case "$CASE" --vertices 20000 --rhs 4 --repetitions 5 \
+                --output "$RUNNER_TEMP/compatible-results/solve-candidate-${CASE}.json" || exit $?
+              "$RUNNER_TEMP/cmg-c-kernel-candidate" \
+                --case "$CASE" --vertices 100000 --repetitions 7 \
+                --output "$RUNNER_TEMP/compatible-results/cycle-candidate-${CASE}.json" || exit $?
+            done
+          } > .ci/performance/compatible-apply/candidate.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Evaluate same-run result
         id: evaluate
+        if: ${{ steps.candidate.outputs.status == '0' }}
         shell: python
         run: |
           import json
           import math
           import os
-          import subprocess
           from pathlib import Path
 
           root = Path(os.environ['RUNNER_TEMP']) / 'compatible-results'
@@ -294,44 +181,143 @@ jobs:
               and solve_geomean <= 0.995
               and min(solve_ratios.values()) <= 0.985
           )
-          record = {
-              'schema': 2,
-              'tested_sha': subprocess.check_output(
-                  ['git', 'rev-parse', 'HEAD'], text=True
-              ).strip(),
-              'accepted': accepted,
+          evaluation = {
               'valid': valid,
+              'accepted': accepted,
               'cycle_ratios': cycle_ratios,
               'cycle_geometric_mean_ratio': cycle_geomean,
               'solve_ratios': solve_ratios,
               'solve_geometric_mean_ratio': solve_geomean,
               'records': records,
           }
+          Path('.ci/performance/compatible-apply/evaluation.json').write_text(
+              json.dumps(evaluation, indent=2) + '\n'
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('status=0\n')
+              output.write(f'accepted={str(accepted).lower()}\n')
+
+      - name: Build retained result or failure record
+        if: ${{ always() && !cancelled() }}
+        shell: python
+        env:
+          BASELINE_STATUS: ${{ steps.baseline.outputs.status }}
+          PATCH_STATUS: ${{ steps.patch.outputs.status }}
+          VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
+          CANDIDATE_STATUS: ${{ steps.candidate.outputs.status }}
+          EVALUATION_STATUS: ${{ steps.evaluate.outputs.status }}
+          ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          directory = Path('.ci/performance/compatible-apply')
+          directory.mkdir(parents=True, exist_ok=True)
+
+          def status(name):
+              return os.environ.get(name) or 'not-run'
+
+          def tail(name, count=200):
+              path = directory / name
+              if not path.exists():
+                  return []
+              return path.read_text(errors='replace').splitlines()[-count:]
+
+          evaluation_path = directory / 'evaluation.json'
+          evaluation = (
+              json.loads(evaluation_path.read_text())
+              if evaluation_path.exists() else None
+          )
+          statuses = {
+              'baseline': status('BASELINE_STATUS'),
+              'patch': status('PATCH_STATUS'),
+              'validation': status('VALIDATION_STATUS'),
+              'candidate': status('CANDIDATE_STATUS'),
+              'evaluation': status('EVALUATION_STATUS'),
+          }
+          completed = all(value == '0' for value in statuses.values())
+          accepted = completed and os.environ.get('ACCEPTED') == 'true'
+          record = {
+              'schema': 3,
+              'tested_sha': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'completed': completed,
+              'accepted': accepted,
+              'outcome': 'accepted' if accepted else (
+                  'rejected' if completed else 'failed'
+              ),
+              'statuses': statuses,
+              'evaluation': evaluation,
+              'log_tails': {
+                  'baseline': tail('baseline.log'),
+                  'patch': tail('patch.log'),
+                  'validation': tail('validation.log'),
+                  'candidate': tail('candidate.log'),
+              },
+          }
           Path('.ci/performance/compatible-apply-latest.json').write_text(
               json.dumps(record, indent=2) + '\n'
           )
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'accepted={str(accepted).lower()}\n')
 
-      - name: Commit accepted optimization or retained experiment
+      - name: Commit accepted source, rejection, or diagnostics
+        if: ${{ always() && !cancelled() }}
         shell: bash
         env:
+          BASELINE_STATUS: ${{ steps.baseline.outputs.status }}
+          PATCH_STATUS: ${{ steps.patch.outputs.status }}
+          VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
+          CANDIDATE_STATUS: ${{ steps.candidate.outputs.status }}
+          EVALUATION_STATUS: ${{ steps.evaluate.outputs.status }}
           ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
         run: |
           set -euo pipefail
-          rm .github/workflows/optimize-compatible-apply.yml
+          COMPLETED=false
+          if [ "$BASELINE_STATUS" = 0 ] && [ "$PATCH_STATUS" = 0 ] && \
+             [ "$VALIDATION_STATUS" = 0 ] && [ "$CANDIDATE_STATUS" = 0 ] && \
+             [ "$EVALUATION_STATUS" = 0 ]; then
+            COMPLETED=true
+          fi
+
           rm -rf target benchmarks/c-kernel/target
           rm -f benchmarks/c-kernel/Cargo.lock
-          if [ "$ACCEPTED" != true ]; then
-            git restore src/preconditioner.rs src/pcg.rs tests/upstream_cycle.rs benchmarks/c-kernel/src/cycle.rs
+          if [ "$COMPLETED" != true ] || [ "$ACCEPTED" != true ]; then
+            git restore src/preconditioner.rs src/pcg.rs \
+              tests/upstream_cycle.rs benchmarks/c-kernel/src/cycle.rs
           fi
+          if [ "$COMPLETED" = true ]; then
+            rm .github/workflows/optimize-compatible-apply.yml
+            rm scripts/compatible_apply_experiment.py
+          fi
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          if [ "$ACCEPTED" = true ]; then
-            git commit -m 'perf: skip repeated fine-level projection in PCG'
+          if [ "$COMPLETED" = true ] && [ "$ACCEPTED" = true ]; then
+            MESSAGE='perf: skip repeated fine-level projection in PCG'
+          elif [ "$COMPLETED" = true ]; then
+            MESSAGE='perf: record rejected compatible-RHS experiment'
           else
-            git commit -m 'perf: record compatible-RHS fast-path experiment'
+            MESSAGE='ci: record compatible-RHS experiment failure [skip ci]'
           fi
+          git commit -m "$MESSAGE"
           git pull --rebase origin main
           git push origin HEAD:main
+
+      - name: Enforce successful completion
+        if: ${{ always() && !cancelled() }}
+        shell: bash
+        env:
+          BASELINE_STATUS: ${{ steps.baseline.outputs.status }}
+          PATCH_STATUS: ${{ steps.patch.outputs.status }}
+          VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
+          CANDIDATE_STATUS: ${{ steps.candidate.outputs.status }}
+          EVALUATION_STATUS: ${{ steps.evaluate.outputs.status }}
+        run: |
+          test "$BASELINE_STATUS" = 0
+          test "$PATCH_STATUS" = 0
+          test "$VALIDATION_STATUS" = 0
+          test "$CANDIDATE_STATUS" = 0
+          test "$EVALUATION_STATUS" = 0
