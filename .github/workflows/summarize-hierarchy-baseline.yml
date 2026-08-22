@@ -1,0 +1,63 @@
+name: Summarize hierarchy baseline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/summarize-hierarchy-baseline.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Write exact baseline into live plan
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          data = json.loads(
+              Path('.ci/performance/hierarchy-build-baseline.json').read_text()
+          )
+          rows = []
+          for case in data['cases']:
+              rows.append(
+                  f"| {case['case']} | {case['vertices']:,} | "
+                  f"{case['edges']:,} | {case['median_ns'] / 1e6:.2f} | "
+                  f"{case['peak_rss_kib'] / 1024:.1f} |"
+              )
+          table = '''#### Recorded hierarchy-build baseline
+
+| Case | Vertices | Edges | Median build (ms) | Peak RSS (MiB) |
+|---|---:|---:|---:|---:|
+''' + '\n'.join(rows) + '\n\n'
+
+          path = Path('PERFORMANCE_PLAN.md')
+          text = path.read_text()
+          anchor = '### Hierarchy-build baseline checkpoint — 2026-08-22\n'
+          if anchor not in text:
+              raise SystemExit('hierarchy baseline checkpoint not found')
+          if '#### Recorded hierarchy-build baseline' not in text:
+              insertion = text.index('\n## Current next action', text.index(anchor))
+              text = text[:insertion] + '\n' + table + text[insertion:]
+          path.write_text(text)
+          Path('.github/workflows/summarize-hierarchy-baseline.yml').unlink()
+
+      - name: Commit summary checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: summarize hierarchy-build baseline'
+          git pull --rebase origin main
+          git push origin HEAD:main
