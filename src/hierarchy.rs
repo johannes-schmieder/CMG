@@ -224,11 +224,7 @@ impl CmgHierarchy {
         &self.report
     }
 
-    pub(crate) fn set_repeat(
-        &mut self,
-        level_index: usize,
-        repeat: usize,
-    ) -> Result<(), CmgError> {
+    pub(crate) fn set_repeat(&mut self, level_index: usize, repeat: usize) -> Result<(), CmgError> {
         let level = self
             .levels
             .get_mut(level_index)
