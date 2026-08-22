@@ -17,7 +17,7 @@ pub struct CmgPreconditioner {
 impl CmgPreconditioner {
     /// Build the complete hierarchy and any direct terminal factorization.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        let hierarchy = CmgHierarchy::build(graph, options)?;
+        let mut hierarchy = CmgHierarchy::build(graph, options)?;
         let level_components = hierarchy
             .levels()
             .iter()
@@ -43,10 +43,12 @@ impl CmgPreconditioner {
         if hierarchy.levels().len() >= 2 {
             if let Some(factor) = &direct_terminal {
                 let penultimate = hierarchy.levels().len() - 2;
-                repeat_counts[penultimate] = repeat_from_nonzeros(
+                let repeat = repeat_from_nonzeros(
                     hierarchy.levels()[penultimate].graph().matrix_nnz(),
                     factor.factor_nonzeros(),
                 );
+                repeat_counts[penultimate] = repeat;
+                hierarchy.set_repeat(penultimate, repeat)?;
             }
         }
 
