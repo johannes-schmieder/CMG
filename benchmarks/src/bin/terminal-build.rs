@@ -81,7 +81,7 @@ fn benchmark_case(name: &str, graph: &Laplacian, edge_count: usize, repetitions:
 
     println!(
         "{{\"case\":\"{name}\",\"vertices\":{},\"edges\":{edge_count},\"repetitions\":{repetitions},\"median_ns\":{}}}",
-        graph.n_vertices(),
+        graph.vertex_count(),
         median(elapsed_ns),
     );
 }
