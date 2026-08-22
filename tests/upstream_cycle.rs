@@ -1,4 +1,20 @@
-use cmg::{CmgOptions, CmgPreconditioner, Laplacian, TerminalReason};
+use cmg::{
+    CmgOptions, CmgPreconditioner, Components, Laplacian, TerminalReason, ValidationOptions,
+};
+
+fn project_rhs(graph: &Laplacian, rhs: &[f64], compatibility_tolerance: f64) -> Vec<f64> {
+    let mut projected = rhs.to_vec();
+    Components::from_laplacian(graph)
+        .project_rhs_in_place(
+            &mut projected,
+            ValidationOptions {
+                symmetry_tolerance: ValidationOptions::default().symmetry_tolerance,
+                compatibility_tolerance,
+            },
+        )
+        .unwrap();
+    projected
+}
 
 fn reference_apply(
     preconditioner: &CmgPreconditioner,
@@ -41,7 +57,8 @@ fn reference_apply(
         for (value, rhs_value) in residual.iter_mut().zip(rhs) {
             *value = *rhs_value - *value;
         }
-        let coarse_rhs = aggregation.restrict(&residual).unwrap();
+        let coarse_graph = preconditioner.hierarchy().levels()[level_index + 1].graph();
+        let coarse_rhs = project_rhs(coarse_graph, &aggregation.restrict(&residual).unwrap(), 1.0);
         let coarse_solution = reference_apply(preconditioner, level_index + 1, &coarse_rhs);
         aggregation
             .prolong_add_into(&coarse_solution, &mut solution)
@@ -64,9 +81,14 @@ fn reference_apply(
 
 fn assert_vector_close(left: &[f64], right: &[f64], tolerance: f64) {
     assert_eq!(left.len(), right.len());
-    for (left_value, right_value) in left.iter().zip(right) {
+    for (index, (left_value, right_value)) in left.iter().zip(right).enumerate() {
         let scale = 1.0_f64.max(left_value.abs()).max(right_value.abs());
-        assert!((left_value - right_value).abs() <= tolerance * scale);
+        assert!(
+            (left_value - right_value).abs() <= tolerance * scale,
+            "mismatch at index {index}: production={left_value:.17e}, reference={right_value:.17e}, absolute_difference={:.17e}, allowed={:.17e}",
+            (left_value - right_value).abs(),
+            tolerance * scale,
+        );
     }
 }
 
@@ -84,7 +106,12 @@ fn compare(graph: Laplacian) {
         .collect();
     let rhs = graph.matvec(&known).unwrap();
     let production = preconditioner.apply(&rhs).unwrap();
-    let reference = reference_apply(&preconditioner, 0, &rhs);
+    let projected_rhs = project_rhs(
+        &graph,
+        &rhs,
+        ValidationOptions::default().compatibility_tolerance,
+    );
+    let reference = reference_apply(&preconditioner, 0, &projected_rhs);
     assert_vector_close(&production, &reference, 1.0e-12);
 }
 
