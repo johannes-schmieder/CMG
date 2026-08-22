@@ -10,12 +10,17 @@
 
 mod components;
 mod error;
+mod forest;
 mod graph;
 mod options;
 mod sddm;
 
 pub use components::Components;
 pub use error::CmgError;
+pub use forest::{
+    ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest,
+    split_forest,
+};
 pub use graph::{Edge, Laplacian};
 pub use options::ValidationOptions;
 pub use sddm::{SddmAugmentation, SddmMatrix};
