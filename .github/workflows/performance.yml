@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       vertices:
-        description: Synthetic worker-firm vertex count
+        description: Synthetic graph vertex count
         required: false
         default: '20000'
       rhs:
@@ -28,18 +28,29 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
     env:
+      BASELINE_REF: b45b252f88925028e3ad9a73a3f75eeab05f6754
+      TESTED_SHA: ${{ github.sha }}
+      RUN_ID: ${{ github.run_id }}
       VERTICES: ${{ github.event.inputs.vertices || '20000' }}
       RHS: ${{ github.event.inputs.rhs || '4' }}
       REPETITIONS: ${{ github.event.inputs.repetitions || '3' }}
     steps:
-      - name: Checkout
+      - name: Checkout candidate
         uses: actions/checkout@v4
+        with:
+          path: candidate
+
+      - name: Checkout frozen benchmark baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b45b252f88925028e3ad9a73a3f75eeab05f6754
+          path: baseline
 
       - name: Record machine
         shell: bash
@@ -50,52 +61,142 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Build benchmark
-        run: cargo build --release --bin cmg-bench
-
-      - name: Run path benchmark
+      - name: Build baseline
         shell: bash
         run: |
-          target/release/cmg-bench \
-            --case path \
-            --vertices "$VERTICES" \
-            --rhs "$RHS" \
-            --repetitions "$REPETITIONS" \
-            --output benchmark-path.json
+          cd baseline
+          CMG_BENCH_COMMIT="$BASELINE_REF" \
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-baseline" \
+            cargo build --release --bin cmg-bench
 
-      - name: Run worker-firm benchmark
+      - name: Build candidate
         shell: bash
         run: |
-          target/release/cmg-bench \
-            --case worker-firm \
-            --vertices "$VERTICES" \
-            --rhs "$RHS" \
-            --repetitions "$REPETITIONS" \
-            --output benchmark-worker-firm.json
+          cd candidate
+          CMG_BENCH_COMMIT="$TESTED_SHA" \
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-candidate" \
+            cargo build --release --bin cmg-bench
+
+      - name: Run matched benchmarks
+        shell: bash
+        run: |
+          mkdir -p results
+          for CASE in path worker-firm; do
+            "$GITHUB_WORKSPACE/target-baseline/release/cmg-bench" \
+              --case "$CASE" \
+              --vertices "$VERTICES" \
+              --rhs "$RHS" \
+              --repetitions "$REPETITIONS" \
+              --output "results/${CASE}-baseline.json"
+            "$GITHUB_WORKSPACE/target-candidate/release/cmg-bench" \
+              --case "$CASE" \
+              --vertices "$VERTICES" \
+              --rhs "$RHS" \
+              --repetitions "$REPETITIONS" \
+              --output "results/${CASE}-candidate.json"
+          done
+
+      - name: Build comparison record
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          timing_fields = (
+              "graph_build_median_ns",
+              "hierarchy_build_median_ns",
+              "preconditioner_apply_median_ns",
+              "solve_batch_median_ns",
+              "solve_per_rhs_median_ns",
+          )
+
+          def load(path):
+              return json.loads(Path(path).read_text())
+
+          def compare(case):
+              baseline = load(f"results/{case}-baseline.json")
+              candidate = load(f"results/{case}-candidate.json")
+              ratios = {}
+              for field in timing_fields:
+                  denominator = baseline.get(field, 0)
+                  ratios[field] = candidate.get(field, 0) / denominator if denominator else None
+              return {
+                  "baseline": baseline,
+                  "candidate": candidate,
+                  "candidate_over_baseline": ratios,
+              }
+
+          record = {
+              "schema": 1,
+              "tested_sha": os.environ["TESTED_SHA"],
+              "baseline_ref": os.environ["BASELINE_REF"],
+              "run_id": os.environ["RUN_ID"],
+              "vertices": int(os.environ["VERTICES"]),
+              "rhs": int(os.environ["RHS"]),
+              "repetitions": int(os.environ["REPETITIONS"]),
+              "results": {
+                  "path": compare("path"),
+                  "worker_firm": compare("worker-firm"),
+              },
+          }
+          Path("results/latest.json").write_text(json.dumps(record, indent=2) + "\n")
+          PY
 
       - name: Publish summary
         shell: bash
         run: |
-          {
-            echo '## CMG performance checkpoint'
-            echo
-            echo '**Path**'
-            echo '```json'
-            cat benchmark-path.json
-            echo '```'
-            echo
-            echo '**Worker–firm**'
-            echo '```json'
-            cat benchmark-worker-firm.json
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("results/latest.json").read_text())
+          print("## CMG performance checkpoint")
+          print()
+          print(f"Candidate: `{data['tested_sha']}`")
+          print(f"Baseline: `{data['baseline_ref']}`")
+          print()
+          print("| Case | Hierarchy | Apply | Solve/RHS |")
+          print("|---|---:|---:|---:|")
+          for name, result in data["results"].items():
+              ratios = result["candidate_over_baseline"]
+              print(
+                  f"| {name} | "
+                  f"{ratios['hierarchy_build_median_ns']:.3f}x | "
+                  f"{ratios['preconditioner_apply_median_ns']:.3f}x | "
+                  f"{ratios['solve_per_rhs_median_ns']:.3f}x |"
+              )
+          print()
+          print("Ratios below 1.0 favor the candidate. Hosted-runner timings are directional.")
+          PY
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
           name: cmg-performance-${{ github.sha }}
-          path: |
-            benchmark-path.json
-            benchmark-worker-firm.json
+          path: results/*.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Persist latest comparison
+        shell: bash
+        run: |
+          git -C candidate config user.name 'github-actions[bot]'
+          git -C candidate config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for ATTEMPT in 1 2 3; do
+            git -C candidate fetch origin main
+            git -C candidate reset --hard origin/main
+            mkdir -p candidate/.ci/performance
+            cp results/latest.json candidate/.ci/performance/latest.json
+            git -C candidate add .ci/performance/latest.json
+            if git -C candidate diff --cached --quiet; then
+              exit 0
+            fi
+            git -C candidate commit -m 'perf: record benchmark comparison [skip ci]'
+            if git -C candidate push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

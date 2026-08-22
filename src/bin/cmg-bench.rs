@@ -9,7 +9,11 @@ use std::io;
 use std::mem::size_of_val;
 use std::time::Instant;
 
-const BASELINE_COMMIT: &str = "b65ae28a15f00925348046bb474c8133e5128cd0";
+const BENCHMARK_BASELINE_COMMIT: &str = "b45b252f88925028e3ad9a73a3f75eeab05f6754";
+const SOURCE_COMMIT: &str = match option_env!("CMG_BENCH_COMMIT") {
+    Some(value) => value,
+    None => "unknown",
+};
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -134,21 +138,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 + size_of_val(level.inverse_diagonal())
         })
         .sum();
-    let cmg_workspace_bytes: usize = cmg_workspace
-        .dimensions()
-        .iter()
-        .copied()
-        .sum::<usize>()
-        .saturating_mul(8)
-        .saturating_mul(5);
-    let pcg_workspace_bytes =
-        graph.vertex_count().saturating_mul(8).saturating_mul(8) + cmg_workspace_bytes;
+    let terminal_factor_bytes = preconditioner
+        .terminal_factor()
+        .map_or(0, cmg::GroundedLdl::byte_len);
+    let cmg_workspace_bytes = cmg_workspace.byte_len();
+    let pcg_workspace_bytes = pcg_workspace.byte_len();
+
+    let graph_build_median_ns = median(&mut graph_build_ns);
+    let hierarchy_build_median_ns = median(&mut hierarchy_build_ns);
+    let preconditioner_apply_median_ns = median(&mut apply_ns);
+    let solve_batch_median_ns = median(&mut solve_batch_ns);
+    let solve_per_rhs_median_ns = solve_batch_median_ns / config.rhs_count as u128;
 
     let json = format!(
         concat!(
             "{{\n",
-            "  \"schema\": 1,\n",
-            "  \"baseline_commit\": \"{}\",\n",
+            "  \"schema\": 2,\n",
+            "  \"source_commit\": \"{}\",\n",
+            "  \"benchmark_baseline_commit\": \"{}\",\n",
             "  \"case\": \"{}\",\n",
             "  \"logical_cpus\": {},\n",
             "  \"vertices\": {},\n",
@@ -165,8 +172,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  \"solve_per_rhs_median_ns\": {},\n",
             "  \"graph_core_bytes\": {},\n",
             "  \"hierarchy_core_bytes\": {},\n",
-            "  \"cmg_workspace_estimated_bytes\": {},\n",
-            "  \"pcg_workspace_estimated_bytes\": {},\n",
+            "  \"terminal_factor_bytes\": {},\n",
+            "  \"cmg_workspace_bytes\": {},\n",
+            "  \"pcg_workspace_bytes\": {},\n",
             "  \"terminal_reason\": \"{:?}\",\n",
             "  \"level_vertices\": {},\n",
             "  \"level_matrix_nonzeros\": {},\n",
@@ -174,7 +182,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  \"backward_errors\": {}\n",
             "}}\n"
         ),
-        BASELINE_COMMIT,
+        SOURCE_COMMIT,
+        BENCHMARK_BASELINE_COMMIT,
         config.case,
         logical_cpus,
         graph.vertex_count(),
@@ -184,13 +193,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.repetitions,
         config.direct_threshold,
         generation_ns,
-        median(&mut graph_build_ns),
-        median(&mut hierarchy_build_ns),
-        median(&mut apply_ns),
-        median(&mut solve_batch_ns),
-        median(&mut solve_batch_ns) / config.rhs_count as u128,
+        graph_build_median_ns,
+        hierarchy_build_median_ns,
+        preconditioner_apply_median_ns,
+        solve_batch_median_ns,
+        solve_per_rhs_median_ns,
         graph_bytes,
         hierarchy_core_bytes,
+        terminal_factor_bytes,
         cmg_workspace_bytes,
         pcg_workspace_bytes,
         report.terminal_reason(),
