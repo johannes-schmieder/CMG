@@ -10,31 +10,31 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 preconditioner = Path("src/preconditioner.rs")
 text = preconditioner.read_text()
-old_projection = '''            let components = &self.level_components[level_index + 1];
-            let mut component_workspace = workspace.take_component(level_index + 1);
-            let projection = components.project_rhs_in_place_with_workspace(
-                &mut local.coarse_rhs,
-                ValidationOptions {
-                    symmetry_tolerance: validation.symmetry_tolerance,
-                    compatibility_tolerance: 1.0,
-                },
-                &mut component_workspace,
-            );
-            workspace.put_component(level_index + 1, component_workspace);
-            projection?;
+old_projection = '''                let mut component_workspace = workspace.take_component(level_index + 1);
+                let projection = self.level_components[level_index + 1]
+                    .project_rhs_in_place_with_workspace(
+                        &mut local.coarse_rhs,
+                        ValidationOptions {
+                            symmetry_tolerance: validation.symmetry_tolerance,
+                            compatibility_tolerance: 1.0,
+                        },
+                        &mut component_workspace,
+                    );
+                workspace.put_component(level_index + 1, component_workspace);
+                projection?;
 '''
-new_projection = '''            let components = &self.level_components[level_index + 1];
-            let mut component_workspace = workspace.take_component(level_index + 1);
-            // Restricted residuals are component-compatible in exact
-            // arithmetic. Remove only floating-point null-space drift before
-            // the recursive solve instead of repeating full public-boundary
-            // compatibility validation and exact correction passes.
-            let centering = components.center_in_place_with_workspace(
-                &mut local.coarse_rhs,
-                &mut component_workspace,
-            );
-            workspace.put_component(level_index + 1, component_workspace);
-            centering?;
+new_projection = '''                let components = &self.level_components[level_index + 1];
+                let mut component_workspace = workspace.take_component(level_index + 1);
+                // Restricted residuals are component-compatible in exact
+                // arithmetic. Remove only floating-point null-space drift before
+                // the recursive solve instead of repeating full public-boundary
+                // compatibility validation and exact correction passes.
+                let centering = components.center_in_place_with_workspace(
+                    &mut local.coarse_rhs,
+                    &mut component_workspace,
+                );
+                workspace.put_component(level_index + 1, component_workspace);
+                centering?;
 '''
 text = replace_once(
     text,
