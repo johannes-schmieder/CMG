@@ -68,8 +68,7 @@ fn worker_firm_graph(per_side: usize, degree: usize) -> BenchGraph {
     }
     let edge_count = edges.len();
     BenchGraph {
-        graph: Laplacian::from_edges(vertices, edges)
-            .expect("valid worker-firm graph"),
+        graph: Laplacian::from_edges(vertices, edges).expect("valid worker-firm graph"),
         vertices,
         edges: edge_count,
     }
@@ -81,9 +80,7 @@ fn build_case(case: &str, scale: usize) -> BenchGraph {
         "grid" => grid_graph(scale),
         "worker-firm" => worker_firm_graph(scale, 3),
         "dense-worker-firm" => worker_firm_graph(scale, 16),
-        _ => panic!(
-            "unknown case {case}; expected path, grid, worker-firm, or dense-worker-firm"
-        ),
+        _ => panic!("unknown case {case}; expected path, grid, worker-firm, or dense-worker-firm"),
     }
 }
 
@@ -107,21 +104,16 @@ fn main() {
     let bench_graph = build_case(&case, scale);
 
     black_box(
-        CmgPreconditioner::build(
-            black_box(&bench_graph.graph),
-            CmgOptions::default(),
-        )
-        .expect("CMG hierarchy build should succeed"),
+        CmgPreconditioner::build(black_box(&bench_graph.graph), CmgOptions::default())
+            .expect("CMG hierarchy build should succeed"),
     );
 
     let mut elapsed_ns = Vec::with_capacity(repetitions);
     for _ in 0..repetitions {
         let start = Instant::now();
-        let preconditioner = CmgPreconditioner::build(
-            black_box(&bench_graph.graph),
-            CmgOptions::default(),
-        )
-        .expect("CMG hierarchy build should succeed");
+        let preconditioner =
+            CmgPreconditioner::build(black_box(&bench_graph.graph), CmgOptions::default())
+                .expect("CMG hierarchy build should succeed");
         elapsed_ns.push(start.elapsed().as_nanos());
         black_box(preconditioner);
     }

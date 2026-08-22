@@ -188,27 +188,43 @@ impl GroundedLdl {
             is_anchor[anchor] = true;
         }
 
-        let dense = graph.to_dense();
         let active_vertices: Vec<usize> = (0..vertex_count)
             .filter(|vertex| !is_anchor[*vertex])
             .collect();
         let mut pattern_nonzeros = vec![0_usize; vertex_count];
-        for &row in &active_vertices {
-            pattern_nonzeros[row] = active_vertices
-                .iter()
-                .filter(|&&column| dense[row][column] != 0.0)
-                .count();
+        for &vertex in &active_vertices {
+            // Every active grounded row retains its positive diagonal.
+            pattern_nonzeros[vertex] = 1;
+        }
+        for edge in graph.edges() {
+            if !is_anchor[edge.u()] && !is_anchor[edge.v()] {
+                pattern_nonzeros[edge.u()] += 1;
+                pattern_nonzeros[edge.v()] += 1;
+            }
         }
 
         let mut permutation = active_vertices;
         permutation.sort_by_key(|&vertex| (pattern_nonzeros[vertex], vertex));
         let dimension = permutation.len();
 
+        // Assemble the ordered grounded matrix directly. The previous path
+        // first materialized the full graph matrix and then copied the active
+        // permutation into this second dense buffer. Direct assembly removes
+        // one vertex_count^2 allocation and its complete permutation scan.
         let mut matrix = vec![vec![0.0; dimension]; dimension];
-        for (row, &original_row) in permutation.iter().enumerate() {
-            for (column, &original_column) in permutation.iter().enumerate() {
-                matrix[row][column] = dense[original_row][original_column];
+        let mut factor_index = vec![usize::MAX; vertex_count];
+        for (factor_vertex, &original_vertex) in permutation.iter().enumerate() {
+            factor_index[original_vertex] = factor_vertex;
+            matrix[factor_vertex][factor_vertex] = graph.diagonal()[original_vertex];
+        }
+        for edge in graph.edges() {
+            let factor_u = factor_index[edge.u()];
+            let factor_v = factor_index[edge.v()];
+            if factor_u == usize::MAX || factor_v == usize::MAX {
+                continue;
             }
+            matrix[factor_u][factor_v] -= edge.weight();
+            matrix[factor_v][factor_u] -= edge.weight();
         }
 
         let mut dense_lower = vec![vec![0.0; dimension]; dimension];

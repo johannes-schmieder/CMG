@@ -10,9 +10,7 @@ fn median(mut values: Vec<u128>) -> u128 {
 
 fn unique_path(edges: usize) -> (usize, Vec<(usize, usize, f64)>) {
     let vertices = edges + 1;
-    let input = (0..edges)
-        .map(|vertex| (vertex, vertex + 1, 1.0))
-        .collect();
+    let input = (0..edges).map(|vertex| (vertex, vertex + 1, 1.0)).collect();
     (vertices, input)
 }
 
@@ -56,7 +54,9 @@ fn make_case(case: &str, scale: usize) -> (usize, Vec<(usize, usize, f64)>) {
 
 fn main() {
     let mut arguments = std::env::args().skip(1);
-    let case = arguments.next().unwrap_or_else(|| "duplicates-4".to_owned());
+    let case = arguments
+        .next()
+        .unwrap_or_else(|| "duplicates-4".to_owned());
     let scale = arguments
         .next()
         .map(|argument| argument.parse::<usize>().expect("scale must be an integer"))
@@ -84,8 +84,8 @@ fn main() {
     for _ in 0..repetitions {
         let input = raw_edges.clone();
         let start = Instant::now();
-        let graph = Laplacian::from_edges(vertices, input)
-            .expect("benchmark graph should be valid");
+        let graph =
+            Laplacian::from_edges(vertices, input).expect("benchmark graph should be valid");
         elapsed_ns.push(start.elapsed().as_nanos());
         retained_edges = graph.edge_count();
         black_box(graph);

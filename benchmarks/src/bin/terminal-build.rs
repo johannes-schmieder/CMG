@@ -89,7 +89,11 @@ fn benchmark_case(name: &str, graph: &Laplacian, edge_count: usize, repetitions:
 fn main() {
     let repetitions = std::env::args()
         .nth(1)
-        .map(|argument| argument.parse::<usize>().expect("repetitions must be an integer"))
+        .map(|argument| {
+            argument
+                .parse::<usize>()
+                .expect("repetitions must be an integer")
+        })
         .unwrap_or(9)
         .max(1);
 

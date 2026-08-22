@@ -20,6 +20,7 @@ Retained records:
 - `.ci/performance/recursive-centering-latest.json`: accepted internal coarse-residual centering experiment.
 - `.ci/performance/compact-centering-metadata-latest.json`: accepted coarse-centering metadata experiment.
 - `.ci/performance/prevalidated-pcg-apply-latest.json`: rejected prevalidated PCG apply experiment.
+- `.ci/performance/terminal-factor-latest.json`: accepted direct terminal-factor assembly experiment.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -88,6 +89,10 @@ Backward errors changed only at floating-point roundoff scale. The full-cycle qu
 
 The compact coarse-centering metadata experiment was retained after cross-checking hierarchy structure, iterations, backward errors, and the pinned-C stationary cycle. Candidate metadata was `0.623x` and `0.794x` of the old label-only lower bound on path and worker–firm cases. The same-run geometric-mean solve ratio was `0.991x` and the C-cycle ratio was `0.934x`.
 
+The private prevalidated-PCG apply experiment was not retained. It preserved hierarchy structure, iterations, and backward errors, but its solve-time geometric-mean ratio was `1.012x` and the 20,000-vertex ratio was `1.008x`.
+
+The direct terminal-factor assembly experiment removed one dense setup buffer while preserving the complete numerical test suite. Its geometric terminal-build ratio was `0.922x` and its worst case was `0.932x`; the candidate was retained.
+
 ### Terminal and workspace memory
 
 - Completed strict-lower factors select packed-triangular or sparse row/column traversal storage by retained-byte cost.
@@ -96,6 +101,7 @@ The compact coarse-centering metadata experiment was retained after cross-checki
 - Recursive hierarchy levels write their solution directly into caller-provided output storage; the former per-level solution vector and final copy were removed.
 - PCG fresh/final residual certification reuses existing storage; per-RHS PCG workspace was reduced from eight to six fine-dimension vectors at commit `f145ac92`.
 - `GroundedLdl`, `CmgWorkspace`, and `PcgWorkspace` report retained principal heap bytes.
+- Terminal LDL construction assembles the ordered grounded matrix directly from graph diagonals and active edges, eliminating one dense full-graph matrix and its permutation copy.
 - Full public-quality `Components` metadata is retained only at the finest level. Coarse levels retain a minimal centering plan, use four-byte labels when labels are needed, and omit labels entirely for a single component.
 - Coarse centering scratch stores only sums, compensation terms, and means; the larger projection workspace is retained only for the public finest-level compatibility boundary.
 
@@ -134,12 +140,10 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ## Current hot spots
 
-1. The compatible public method still validates dimensions, workspace structure, and options on every PCG application. A crate-private prevalidated core may remove small repeated checks inside PCG.
-2. Single-RHS production PCG remains mostly serial even when the optional parallel feature is enabled.
-3. Coarse contraction still allocates endpoint triples and sorts at every level.
-4. Terminal setup materializes dense temporary matrices before retaining compressed factors.
-5. Aggregation maps remain native-width `usize`; compact storage could reduce bandwidth, but must be evaluated without duplicating labels.
-6. Hosted hardware has qualified only 1–4 threads.
+1. Single-RHS production PCG remains mostly serial even when the optional parallel feature is enabled.
+2. Coarse contraction still allocates endpoint triples and sorts at every level.
+3. Aggregation maps remain native-width `usize`; compact storage could reduce bandwidth, but must be evaluated without duplicating labels.
+4. Hosted hardware has qualified only 1–4 threads.
 
 ## Rejected or deferred experiments
 
@@ -169,10 +173,11 @@ After in-place level output and recursive centering, the accepted recursive-cent
 | 2026-08-22 | `40f7d234` | Per-level solution scratch removed; memory and solve-time gates passed |
 | 2026-08-22 | `f6378554` | Recursive full compatibility projection replaced by centering; C parity and solve gates passed |
 | 2026-08-22 | compact centering metadata | Full component metadata retained only at the finest level; memory, solve, and C-cycle gates passed |
+| 2026-08-22 | prevalidated PCG apply | Rejected: numerical results matched, but end-to-end solve timing did not improve |
+| 2026-08-22 | direct terminal-factor assembly | Retained after full tests and same-host build timing |
 
 ## Current next action
 
-1. Continue large setup profiling, especially coarse contraction allocation and sorting.
-2. Qualify the direct-terminal build benchmark and evaluate eliminating one dense factor-construction buffer.
-3. Obtain 8–32-thread and high-memory evidence when a suitable runner is available.
-4. Remove remaining obsolete one-shot workflows and staging scripts after the active checkpoint is secure.
+1. Profile hierarchy construction on larger sparse and denser worker–firm cases, focusing on coarse contraction allocation and sorting.
+2. Obtain 8–32-thread and high-memory evidence when a suitable runner is available.
+3. Remove remaining obsolete one-shot workflows and staging scripts after the active checkpoint is secure.
