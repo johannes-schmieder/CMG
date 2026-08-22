@@ -247,12 +247,14 @@ impl CsrLaplacian {
         selections.into_iter().unzip()
     }
 
+    #[cfg(feature = "parallel")]
     fn maximum_weight_neighbors_serial(&self) -> (Vec<usize>, Vec<f64>) {
         (0..self.vertex_count)
             .map(|row| self.maximum_weight_neighbor(row))
             .unzip()
     }
 
+    #[cfg(feature = "parallel")]
     fn maximum_weight_neighbor(&self, row: usize) -> (usize, f64) {
         let mut best_neighbor = row;
         let mut best_weight = 0.0;

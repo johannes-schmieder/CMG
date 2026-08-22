@@ -4,6 +4,7 @@ use crate::CmgError;
 
 /// Minimum item count for setup kernels whose parallel path pays sorting or
 /// temporary sparse-storage overhead.
+#[cfg(feature = "parallel")]
 pub(crate) const PARALLEL_SETUP_MIN_ITEMS: usize = 65_536;
 
 /// Options controlling optional package-owned parallel execution.
