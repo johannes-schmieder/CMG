@@ -5,13 +5,16 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/optimize-terminal-factor-memory.yml'
-      - 'scripts/optimize_terminal_factor_memory.py'
 
 permissions:
   contents: write
 
+concurrency:
+  group: terminal-factor-memory
+  cancel-in-progress: false
+
 jobs:
-  benchmark-and-gate:
+  evaluate:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -21,266 +24,95 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Run same-run baseline/candidate gate
-        shell: python
-        run: |
-          import json
-          import math
-          import os
-          from pathlib import Path
-          import shutil
-          import statistics
-          import subprocess
-
-          root = Path.cwd()
-          record_path = root / '.ci/performance/terminal-factor-latest.json'
-          record_path.parent.mkdir(parents=True, exist_ok=True)
-          baseline_source = (root / 'src/ldl.rs').read_text()
-          baseline_sha = subprocess.check_output(
-              ['git', 'rev-parse', 'HEAD'], text=True
-          ).strip()
-
-          def run(command, *, env=None, check=True):
-              print('+', ' '.join(command), flush=True)
-              completed = subprocess.run(
-                  command,
-                  cwd=root,
-                  env=env,
-                  text=True,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.STDOUT,
-              )
-              print(completed.stdout, end='')
-              if check and completed.returncode != 0:
-                  raise RuntimeError(
-                      f"command failed ({completed.returncode}): {' '.join(command)}"
-                  )
-              return completed
-
-          def build_benchmark(target_dir):
-              env = os.environ.copy()
-              env['CARGO_TARGET_DIR'] = str(target_dir)
-              run([
-                  'cargo', 'build', '--release',
-                  '--manifest-path', 'benchmarks/Cargo.toml',
-                  '--bin', 'terminal-build',
-              ], env=env)
-              return target_dir / 'release' / 'terminal-build'
-
-          def run_benchmark(binary):
-              completed = run([str(binary), '5'])
-              parsed = {}
-              for line in completed.stdout.splitlines():
-                  line = line.strip()
-                  if not line.startswith('{'):
-                      continue
-                  item = json.loads(line)
-                  parsed[item['case']] = item
-              required = {
-                  'path-600',
-                  'grid-24x24',
-                  'worker-firm-300x300',
-              }
-              if set(parsed) != required:
-                  raise RuntimeError(
-                      f'benchmark cases differ: got {sorted(parsed)}, expected {sorted(required)}'
-                  )
-              return parsed
-
-          result = {
-              'schema_version': 1,
-              'experiment': 'direct-terminal-factor-assembly',
-              'baseline_sha': baseline_sha,
-              'accepted': False,
-              'validation': 'not_run',
-              'decision_reason': '',
-              'dense_buffer_bytes_saved_at_threshold_700': 700 * 700 * 8,
-              'cases': {},
-          }
-
-          baseline_binary = None
-          candidate_binary = None
-          try:
-              baseline_binary = build_benchmark(Path('/tmp/cmg-terminal-baseline'))
-              run(['python', 'scripts/optimize_terminal_factor_memory.py'])
-              run(['cargo', 'fmt', '--all'])
-              run([
-                  'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
-                  '--all', '--', '--check',
-              ])
-              run(['cargo', 'fmt', '--all', '--', '--check'])
-              run([
-                  'cargo', 'clippy', '--all-targets', '--all-features',
-                  '--', '-D', 'warnings',
-              ])
-              run([
-                  'cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml',
-                  '--all-targets', '--', '-D', 'warnings',
-              ])
-              doc_env = os.environ.copy()
-              doc_env['RUSTDOCFLAGS'] = '-D warnings'
-              run(['cargo', 'doc', '--no-deps'], env=doc_env)
-              run(['cargo', 'test', '--all-targets'])
-              run(['cargo', 'test', '--all-targets', '--release'])
-              run(['cargo', 'build', '--release'])
-              candidate_binary = build_benchmark(Path('/tmp/cmg-terminal-candidate'))
-              result['validation'] = 'success'
-
-              baseline_runs = []
-              candidate_runs = []
-              schedule = [
-                  ('baseline', baseline_binary),
-                  ('candidate', candidate_binary),
-                  ('candidate', candidate_binary),
-                  ('baseline', baseline_binary),
-                  ('baseline', baseline_binary),
-                  ('candidate', candidate_binary),
-              ]
-              for label, binary in schedule:
-                  sample = run_benchmark(binary)
-                  if label == 'baseline':
-                      baseline_runs.append(sample)
-                  else:
-                      candidate_runs.append(sample)
-
-              ratios = []
-              for case in sorted(baseline_runs[0]):
-                  baseline_values = [
-                      sample[case]['median_ns'] for sample in baseline_runs
-                  ]
-                  candidate_values = [
-                      sample[case]['median_ns'] for sample in candidate_runs
-                  ]
-                  baseline_median = statistics.median(baseline_values)
-                  candidate_median = statistics.median(candidate_values)
-                  ratio = candidate_median / baseline_median
-                  ratios.append(ratio)
-                  vertices = baseline_runs[0][case]['vertices']
-                  result['cases'][case] = {
-                      'vertices': vertices,
-                      'edges': baseline_runs[0][case]['edges'],
-                      'baseline_round_medians_ns': baseline_values,
-                      'candidate_round_medians_ns': candidate_values,
-                      'baseline_median_ns': baseline_median,
-                      'candidate_median_ns': candidate_median,
-                      'candidate_over_baseline': ratio,
-                      'dense_buffer_bytes_saved': vertices * vertices * 8,
-                  }
-
-              geometric_ratio = math.exp(
-                  sum(math.log(ratio) for ratio in ratios) / len(ratios)
-              )
-              worst_ratio = max(ratios)
-              result['geometric_candidate_over_baseline'] = geometric_ratio
-              result['worst_candidate_over_baseline'] = worst_ratio
-              result['acceptance_limits'] = {
-                  'geometric_ratio_max': 1.02,
-                  'per_case_ratio_max': 1.05,
-              }
-              result['accepted'] = (
-                  geometric_ratio <= 1.02 and worst_ratio <= 1.05
-              )
-              if result['accepted']:
-                  result['decision_reason'] = (
-                      'full qualification passed; removed one dense n^2 setup '
-                      'buffer; measured terminal-build performance met the gate'
-                  )
-              else:
-                  result['decision_reason'] = (
-                      'qualification passed but terminal-build timing exceeded '
-                      'the same-run acceptance gate'
-                  )
-          except Exception as error:
-              result['decision_reason'] = f'experiment failed: {error}'
-              result['error'] = repr(error)
-              print(result['decision_reason'], flush=True)
-
-          if not result['accepted']:
-              (root / 'src/ldl.rs').write_text(baseline_source)
-              run(['cargo', 'fmt', '--all'], check=False)
-
-          record_path.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
-
-          plan_path = root / 'PERFORMANCE_PLAN.md'
-          plan = plan_path.read_text()
-          marker = '## Current next action\n'
-          if marker not in plan:
-              raise RuntimeError('current-next-action heading not found')
-          status = 'accepted' if result['accepted'] else 'not retained'
-          geometry = result.get('geometric_candidate_over_baseline')
-          worst = result.get('worst_candidate_over_baseline')
-          timing = (
-              f' The geometric candidate/baseline ratio was {geometry:.3f} '
-              f'and the worst case was {worst:.3f}.'
-              if geometry is not None and worst is not None
-              else ''
-          )
-          checkpoint = f'''### Terminal-factor construction checkpoint — 2026-08-22
-
-- Direct assembly of the ordered grounded matrix was **{status}**.
-- The experiment removes one dense `n x n` `f64` setup buffer, saving up to
-  {result['dense_buffer_bytes_saved_at_threshold_700']:,} bytes at the default
-  terminal threshold of 700 vertices.{timing}
-- Full formatting, Clippy, rustdoc, debug tests, release tests, and release
-  compilation status: `{result['validation']}`.
-- Machine-readable evidence: `.ci/performance/terminal-factor-latest.json`.
-
-'''
-          if '### Terminal-factor construction checkpoint — 2026-08-22' not in plan:
-              plan = plan.replace(marker, checkpoint + marker, 1)
-
-          old_first = (
-              '1. Remove one of the two dense terminal-factor construction '
-              'buffers by assembling the permuted grounded matrix directly in '
-              'the factor workspace; retain the change only after full '
-              'qualification and setup benchmarks.'
-          )
-          if result['accepted']:
-              new_first = (
-                  '1. Profile hierarchy construction on larger sparse and denser '
-                  'worker-firm cases; focus on contraction sorting, allocation '
-                  'reuse, and retained hierarchy memory.'
-              )
-          else:
-              new_first = (
-                  '1. Keep the qualified terminal-factor implementation and '
-                  'profile hierarchy construction on larger sparse and denser '
-                  'worker-firm cases before attempting another structural change.'
-              )
-          if old_first in plan:
-              plan = plan.replace(old_first, new_first, 1)
-          plan_path.write_text(plan)
-
-          Path('scripts/optimize_terminal_factor_memory.py').unlink(missing_ok=True)
-          Path('.github/workflows/optimize-terminal-factor-memory.yml').unlink(
-              missing_ok=True
-          )
-          try:
-              Path('scripts').rmdir()
-          except OSError:
-              pass
-
-          message = (
-              'perf: assemble terminal factor directly'
-              if result['accepted']
-              else 'perf: record terminal-factor assembly experiment'
-          )
-          run(['git', 'config', 'user.name', 'github-actions[bot]'])
-          run([
-              'git', 'config', 'user.email',
-              '41898282+github-actions[bot]@users.noreply.github.com',
-          ])
-          run(['git', 'add', '-A'])
-          status_output = subprocess.check_output(
-              ['git', 'status', '--porcelain'], text=True
-          )
-          if status_output.strip():
-              run(['git', 'commit', '-m', message])
-              run(['git', 'pull', '--rebase', 'origin', 'main'])
-              run(['git', 'push', 'origin', 'HEAD:main'])
-
-      - name: Show retained result
-        if: always()
+      - name: Record baseline
         shell: bash
         run: |
-          git show origin/main:.ci/performance/terminal-factor-latest.json || true
+          set -euo pipefail
+          echo "BASELINE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/terminal-factor-results"
+
+      - name: Build baseline benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-terminal-baseline" \
+            cargo build --manifest-path benchmarks/Cargo.toml \
+              --release --bin terminal-build
+          cp "$RUNNER_TEMP/cmg-terminal-baseline/release/terminal-build" \
+             "$RUNNER_TEMP/terminal-build-baseline"
+
+      - name: Apply and validate candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/optimize_terminal_factor_memory.py
+          python3 -m py_compile scripts/terminal_factor_experiment.py
+          python3 scripts/optimize_terminal_factor_memory.py
+          cargo fmt --all
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check
+          RUSTFLAGS='-D warnings' cargo check --lib --no-default-features
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+          cargo test --all-targets --all-features
+          cargo test --all-targets --all-features --release
+          cargo test --manifest-path benchmarks/Cargo.toml --all-targets --release
+          RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --document-private-items --all-features
+          cargo build --release --all-features
+
+      - name: Build candidate benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-terminal-candidate" \
+            cargo build --manifest-path benchmarks/Cargo.toml \
+              --release --bin terminal-build
+          cp "$RUNNER_TEMP/cmg-terminal-candidate/release/terminal-build" \
+             "$RUNNER_TEMP/terminal-build-candidate"
+
+      - name: Run alternating same-host benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/terminal-factor-results"
+          for round in 0 1 2; do
+            if (( round % 2 == 0 )); then
+              "$RUNNER_TEMP/terminal-build-baseline" 5 > "$ROOT/baseline-$round.jsonl"
+              "$RUNNER_TEMP/terminal-build-candidate" 5 > "$ROOT/candidate-$round.jsonl"
+            else
+              "$RUNNER_TEMP/terminal-build-candidate" 5 > "$ROOT/candidate-$round.jsonl"
+              "$RUNNER_TEMP/terminal-build-baseline" 5 > "$ROOT/baseline-$round.jsonl"
+            fi
+          done
+
+      - name: Evaluate candidate
+        id: evaluate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/terminal_factor_experiment.py evaluate
+
+      - name: Update plan and commit result
+        shell: bash
+        env:
+          ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
+        run: |
+          set -euo pipefail
+          python3 scripts/terminal_factor_experiment.py plan
+          if [ "$ACCEPTED" != true ]; then
+            git restore src/ldl.rs
+          fi
+          rm scripts/optimize_terminal_factor_memory.py
+          rm scripts/terminal_factor_experiment.py
+          rm -f benchmarks/Cargo.lock
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if [ "$ACCEPTED" = true ]; then
+            git commit -m 'perf: assemble terminal factor directly'
+          else
+            git commit -m 'perf: record rejected terminal-factor assembly experiment'
+          fi
+          git pull --rebase origin main
+          git push origin HEAD:main
