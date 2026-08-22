@@ -1,6 +1,5 @@
 use cmg::{
-    CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace,
-    solve_pcg_with_workspace,
+    CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace, solve_pcg_with_workspace,
 };
 use std::env;
 use std::error::Error;
@@ -74,11 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut cmg_workspace = preconditioner.workspace();
     let mut apply_output = vec![0.0; graph.vertex_count()];
-    preconditioner.apply_into(
-        &right_hand_sides[0],
-        &mut apply_output,
-        &mut cmg_workspace,
-    )?;
+    preconditioner.apply_into(&right_hand_sides[0], &mut apply_output, &mut cmg_workspace)?;
     black_box(&apply_output);
 
     let mut apply_ns = Vec::with_capacity(config.repetitions);
@@ -146,8 +141,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .sum::<usize>()
         .saturating_mul(8)
         .saturating_mul(5);
-    let pcg_workspace_bytes = graph.vertex_count().saturating_mul(8).saturating_mul(8)
-        + cmg_workspace_bytes;
+    let pcg_workspace_bytes =
+        graph.vertex_count().saturating_mul(8).saturating_mul(8) + cmg_workspace_bytes;
 
     let json = format!(
         concat!(
@@ -219,7 +214,8 @@ fn parse_config() -> Result<Config, Box<dyn Error>> {
         match argument.as_str() {
             "--case" => config.case = next_value(&mut arguments, "--case")?,
             "--vertices" => {
-                config.vertices = parse_usize(next_value(&mut arguments, "--vertices")?, "vertices")?;
+                config.vertices =
+                    parse_usize(next_value(&mut arguments, "--vertices")?, "vertices")?;
             }
             "--rhs" => {
                 config.rhs_count = parse_usize(next_value(&mut arguments, "--rhs")?, "rhs")?;
@@ -259,7 +255,10 @@ fn parse_config() -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-fn next_value(arguments: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, io::Error> {
+fn next_value(
+    arguments: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<String, io::Error> {
     arguments
         .next()
         .ok_or_else(|| invalid_input(format!("missing value for {flag}")))
@@ -311,11 +310,7 @@ fn worker_firm_edges(vertices: usize) -> Vec<(usize, usize, f64)> {
     let mut edges = Vec::with_capacity(worker_count.saturating_mul(3));
     for worker in 0..worker_count {
         let first = worker % firm_count;
-        edges.push((
-            worker,
-            worker_count + first,
-            deterministic_weight(worker),
-        ));
+        edges.push((worker, worker_count + first, deterministic_weight(worker)));
         if firm_count > 1 {
             let second = worker.wrapping_mul(48_271).wrapping_add(1) % firm_count;
             if second != first {
@@ -344,10 +339,7 @@ fn deterministic_weight(seed: usize) -> f64 {
     0.5 + (seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_024) as f64 / 512.0
 }
 
-fn make_right_hand_sides(
-    graph: &Laplacian,
-    count: usize,
-) -> Result<Vec<Vec<f64>>, cmg::CmgError> {
+fn make_right_hand_sides(graph: &Laplacian, count: usize) -> Result<Vec<Vec<f64>>, cmg::CmgError> {
     (0..count)
         .map(|rhs_index| {
             let target: Vec<f64> = (0..graph.vertex_count())
