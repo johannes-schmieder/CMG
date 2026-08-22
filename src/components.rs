@@ -68,38 +68,52 @@ impl Components {
         self.compensated_sums(values, "Components::sums")
     }
 
-    /// Verify that a right-hand side sums to numerical zero on every component.
+    /// Verify that a right-hand side is numerically compatible with every
+    /// component null space.
     pub fn validate_rhs(&self, rhs: &[f64], options: ValidationOptions) -> Result<(), CmgError> {
         let options = options.validate()?;
-        if rhs.len() != self.labels.len() {
-            return Err(CmgError::dimension(
-                "Components::validate_rhs",
-                self.labels.len(),
-                rhs.len(),
-            ));
+        let (sums, scales) = self.compatibility_data(rhs, "Components::validate_rhs")?;
+        self.validate_component_sums(&sums, &scales, options)
+    }
+
+    /// Project accepted floating-point compatibility defects onto the exact
+    /// Laplacian range and return the Euclidean norm of the removed component.
+    ///
+    /// A component whose sum exceeds `compatibility_tolerance` relative to its
+    /// one-norm is rejected rather than modified.
+    pub fn project_rhs_in_place(
+        &self,
+        rhs: &mut [f64],
+        options: ValidationOptions,
+    ) -> Result<f64, CmgError> {
+        let options = options.validate()?;
+        let (sums, scales) = self.compatibility_data(rhs, "Components::project_rhs_in_place")?;
+        self.validate_component_sums(&sums, &scales, options)?;
+
+        let means: Vec<f64> = sums
+            .iter()
+            .zip(&self.sizes)
+            .map(|(sum, size)| *sum / *size as f64)
+            .collect();
+        let projection_scale = means.iter().map(|mean| mean.abs()).fold(0.0, f64::max);
+        let projection_norm = if projection_scale == 0.0 {
+            0.0
+        } else {
+            let squared = means
+                .iter()
+                .zip(&self.sizes)
+                .map(|(mean, size)| {
+                    let scaled = *mean / projection_scale;
+                    *size as f64 * scaled * scaled
+                })
+                .sum::<f64>();
+            projection_scale * squared.sqrt()
+        };
+
+        for (value, label) in rhs.iter_mut().zip(&self.labels) {
+            *value -= means[*label];
         }
-        let sums = self.compensated_sums(rhs, "Components::validate_rhs")?;
-        let mut scale_sums = vec![0.0; self.count()];
-        let mut scale_corrections = vec![0.0; self.count()];
-        for (value, label) in rhs.iter().zip(&self.labels) {
-            neumaier_add(
-                &mut scale_sums[*label],
-                &mut scale_corrections[*label],
-                value.abs(),
-            );
-        }
-        for component in 0..self.count() {
-            let scale = scale_sums[component] + scale_corrections[component];
-            let tolerance = options.compatibility_tolerance * scale.max(1.0);
-            if sums[component].abs() > tolerance {
-                return Err(CmgError::IncompatibleLaplacianRhs {
-                    component,
-                    sum: sums[component],
-                    tolerance,
-                });
-            }
-        }
-        Ok(())
+        Ok(projection_norm)
     }
 
     /// Subtract the mean within every component in place.
@@ -119,6 +133,67 @@ impl Components {
             .collect();
         for (value, label) in values.iter_mut().zip(&self.labels) {
             *value -= means[*label];
+        }
+        Ok(())
+    }
+
+    fn compatibility_data(
+        &self,
+        values: &[f64],
+        context: &'static str,
+    ) -> Result<(Vec<f64>, Vec<f64>), CmgError> {
+        if values.len() != self.labels.len() {
+            return Err(CmgError::dimension(
+                context,
+                self.labels.len(),
+                values.len(),
+            ));
+        }
+        let mut sums = vec![0.0; self.count()];
+        let mut corrections = vec![0.0; self.count()];
+        let mut scales = vec![0.0; self.count()];
+        let mut scale_corrections = vec![0.0; self.count()];
+        for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
+            if !value.is_finite() {
+                return Err(CmgError::NonFiniteMatrixValue {
+                    row: vertex,
+                    column: 0,
+                    value: *value,
+                });
+            }
+            neumaier_add(&mut sums[*label], &mut corrections[*label], *value);
+            neumaier_add(
+                &mut scales[*label],
+                &mut scale_corrections[*label],
+                value.abs(),
+            );
+        }
+        for ((sum, correction), (scale, scale_correction)) in sums
+            .iter_mut()
+            .zip(corrections)
+            .zip(scales.iter_mut().zip(scale_corrections))
+        {
+            *sum += correction;
+            *scale += scale_correction;
+        }
+        Ok((sums, scales))
+    }
+
+    fn validate_component_sums(
+        &self,
+        sums: &[f64],
+        scales: &[f64],
+        options: ValidationOptions,
+    ) -> Result<(), CmgError> {
+        for component in 0..self.count() {
+            let tolerance = options.compatibility_tolerance * scales[component].max(1.0);
+            if sums[component].abs() > tolerance {
+                return Err(CmgError::IncompatibleLaplacianRhs {
+                    component,
+                    sum: sums[component],
+                    tolerance,
+                });
+            }
         }
         Ok(())
     }
