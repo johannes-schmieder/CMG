@@ -12,9 +12,7 @@ impl ColumnIndices {
     fn byte_len(&self) -> usize {
         match self {
             Self::Compact(values) => values.len().saturating_mul(core::mem::size_of::<u32>()),
-            Self::Native(values) => values
-                .len()
-                .saturating_mul(core::mem::size_of::<usize>()),
+            Self::Native(values) => values.len().saturating_mul(core::mem::size_of::<usize>()),
         }
     }
 
@@ -198,12 +196,16 @@ impl CsrLaplacian {
 
 fn rows_are_sorted(row_offsets: &[usize], columns: &ColumnIndices) -> bool {
     match columns {
-        ColumnIndices::Compact(columns) => row_offsets
-            .windows(2)
-            .all(|window| columns[window[0]..window[1]].windows(2).all(|pair| pair[0] < pair[1])),
-        ColumnIndices::Native(columns) => row_offsets
-            .windows(2)
-            .all(|window| columns[window[0]..window[1]].windows(2).all(|pair| pair[0] < pair[1])),
+        ColumnIndices::Compact(columns) => row_offsets.windows(2).all(|window| {
+            columns[window[0]..window[1]]
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        }),
+        ColumnIndices::Native(columns) => row_offsets.windows(2).all(|window| {
+            columns[window[0]..window[1]]
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        }),
     }
 }
 
