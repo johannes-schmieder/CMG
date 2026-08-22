@@ -1,0 +1,315 @@
+name: Compact edge endpoints
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-edge-endpoints.yml'
+      - 'scripts/compact_edge_endpoints.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Run compact endpoint qualification and A/B gate
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import re
+          import statistics
+          import subprocess
+
+          root = Path.cwd()
+          baseline_graph_source = Path('src/graph.rs').read_text()
+          baseline_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+
+          def run(command, *, env=None, timeout=3600, check=True):
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  env=env,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=timeout,
+              )
+              print(completed.stdout, end='')
+              if check and completed.returncode != 0:
+                  raise RuntimeError(
+                      f"command failed ({completed.returncode}): {' '.join(command)}"
+                  )
+              return completed
+
+          def build(target):
+              env = os.environ.copy()
+              env['CARGO_TARGET_DIR'] = str(target)
+              for binary in ('graph-build', 'hierarchy-build'):
+                  run([
+                      'cargo', 'build', '--release',
+                      '--manifest-path', 'benchmarks/Cargo.toml',
+                      '--bin', binary,
+                  ], env=env)
+              return {
+                  name: target / 'release' / name
+                  for name in ('graph-build', 'hierarchy-build')
+              }
+
+          def sample(binary, arguments, tag):
+              time_file = Path(f'/tmp/cmg-compact-edge-{tag}.time')
+              completed = run([
+                  '/usr/bin/time', '-v', '-o', str(time_file),
+                  str(binary), *[str(value) for value in arguments],
+              ], timeout=3600)
+              payloads = [
+                  json.loads(line)
+                  for line in completed.stdout.splitlines()
+                  if line.strip().startswith('{')
+              ]
+              if len(payloads) != 1:
+                  raise RuntimeError(f'unexpected benchmark output: {payloads}')
+              timing = time_file.read_text()
+              rss = re.search(
+                  r'Maximum resident set size \(kbytes\):\s*(\d+)', timing
+              )
+              if rss is None:
+                  raise RuntimeError('peak RSS missing')
+              payloads[0]['peak_rss_kib'] = int(rss.group(1))
+              return payloads[0]
+
+          def compare_case(baseline_binary, candidate_binary, arguments, name):
+              baseline_samples = []
+              candidate_samples = []
+              schedule = [
+                  ('baseline', baseline_binary),
+                  ('candidate', candidate_binary),
+                  ('candidate', candidate_binary),
+                  ('baseline', baseline_binary),
+              ]
+              for index, (label, binary) in enumerate(schedule):
+                  observation = sample(
+                      binary, arguments, f'{name}-{label}-{index}'
+                  )
+                  (baseline_samples if label == 'baseline' else candidate_samples).append(
+                      observation
+                  )
+              baseline_ns = statistics.median(
+                  item['median_ns'] for item in baseline_samples
+              )
+              candidate_ns = statistics.median(
+                  item['median_ns'] for item in candidate_samples
+              )
+              baseline_rss = max(
+                  item['peak_rss_kib'] for item in baseline_samples
+              )
+              candidate_rss = max(
+                  item['peak_rss_kib'] for item in candidate_samples
+              )
+              return {
+                  'arguments': arguments,
+                  'baseline_median_ns': baseline_ns,
+                  'candidate_median_ns': candidate_ns,
+                  'candidate_over_baseline_time': candidate_ns / baseline_ns,
+                  'baseline_peak_rss_kib': baseline_rss,
+                  'candidate_peak_rss_kib': candidate_rss,
+                  'candidate_over_baseline_peak_rss': candidate_rss / baseline_rss,
+                  'metadata': baseline_samples[0],
+              }
+
+          result = {
+              'schema_version': 1,
+              'experiment': 'compact-edge-endpoints-u32',
+              'baseline_sha': baseline_sha,
+              'accepted': False,
+              'validation': 'not_run',
+              'decision_reason': '',
+              'expected_edge_size_bytes': 16,
+              'graph_cases': {},
+              'hierarchy_cases': {},
+          }
+
+          try:
+              analysis_path = Path('.ci/performance/index-layout-analysis.json')
+              if analysis_path.exists():
+                  analysis = json.loads(analysis_path.read_text())
+                  result['baseline_edge_size_bytes'] = analysis.get(
+                      'layouts', {}
+                  ).get('Edge', {}).get('size_bytes')
+              baseline = build(Path('/tmp/cmg-compact-edge-baseline'))
+              run(['python', 'scripts/compact_edge_endpoints.py'])
+              run(['cargo', 'fmt', '--all'])
+              run(['cargo', 'fmt', '--all', '--', '--check'])
+              run([
+                  'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all', '--', '--check',
+              ])
+              run([
+                  'cargo', 'clippy', '--all-targets', '--all-features',
+                  '--', '-D', 'warnings',
+              ])
+              run([
+                  'cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all-targets', '--', '-D', 'warnings',
+              ])
+              doc_env = os.environ.copy()
+              doc_env['RUSTDOCFLAGS'] = '-D warnings'
+              run(['cargo', 'doc', '--no-deps'], env=doc_env)
+              run(['cargo', 'test', '--all-targets'])
+              run(['cargo', 'test', '--all-targets', '--release'])
+              run(['cargo', 'build', '--release'])
+              run([
+                  'cargo', 'test', 'compact_edge_layout_tests::edge_uses_compact_endpoints',
+                  '--', '--exact', '--nocapture',
+              ])
+              candidate = build(Path('/tmp/cmg-compact-edge-candidate'))
+              result['validation'] = 'success'
+
+              graph_specs = [
+                  ('unique-1m', ['unique', 1_000_000, 2]),
+                  ('duplicates-4-1m', ['duplicates-4', 250_000, 2]),
+                  ('duplicates-16-1.2m', ['duplicates-16', 75_000, 2]),
+              ]
+              hierarchy_specs = [
+                  ('worker-firm-600k', ['worker-firm', 200_000, 2]),
+                  ('dense-worker-firm-800k', ['dense-worker-firm', 50_000, 2]),
+              ]
+
+              time_ratios = []
+              memory_ratios = []
+              for name, arguments in graph_specs:
+                  comparison = compare_case(
+                      baseline['graph-build'], candidate['graph-build'],
+                      arguments, name,
+                  )
+                  result['graph_cases'][name] = comparison
+                  time_ratios.append(
+                      comparison['candidate_over_baseline_time']
+                  )
+                  memory_ratios.append(
+                      comparison['candidate_over_baseline_peak_rss']
+                  )
+              for name, arguments in hierarchy_specs:
+                  comparison = compare_case(
+                      baseline['hierarchy-build'], candidate['hierarchy-build'],
+                      arguments, name,
+                  )
+                  result['hierarchy_cases'][name] = comparison
+                  time_ratios.append(
+                      comparison['candidate_over_baseline_time']
+                  )
+                  memory_ratios.append(
+                      comparison['candidate_over_baseline_peak_rss']
+                  )
+
+              geometric_time = math.exp(
+                  sum(math.log(value) for value in time_ratios)
+                  / len(time_ratios)
+              )
+              best_memory = min(memory_ratios)
+              worst_memory = max(memory_ratios)
+              result['geometric_candidate_over_baseline_time'] = geometric_time
+              result['worst_candidate_over_baseline_time'] = max(time_ratios)
+              result['best_candidate_over_baseline_peak_rss'] = best_memory
+              result['worst_candidate_over_baseline_peak_rss'] = worst_memory
+              result['acceptance_limits'] = {
+                  'geometric_time_ratio_max': 1.03,
+                  'per_case_time_ratio_max': 1.08,
+                  'at_least_one_peak_rss_ratio_max': 0.97,
+                  'worst_peak_rss_ratio_max': 1.02,
+              }
+              result['accepted'] = (
+                  geometric_time <= 1.03
+                  and max(time_ratios) <= 1.08
+                  and best_memory <= 0.97
+                  and worst_memory <= 1.02
+              )
+              result['decision_reason'] = (
+                  'full qualification passed; Edge is 16 bytes; memory improved and timing met the gate'
+                  if result['accepted']
+                  else 'qualification passed but timing or measured peak-memory evidence missed the gate'
+              )
+          except Exception as error:
+              result['decision_reason'] = f'experiment failed: {error}'
+              result['error'] = repr(error)
+              print(result['decision_reason'], flush=True)
+
+          if not result['accepted']:
+              Path('src/graph.rs').write_text(baseline_graph_source)
+              run(['cargo', 'fmt', '--all'], check=False)
+
+          record = Path('.ci/performance/compact-edge-endpoints-latest.json')
+          record.parent.mkdir(parents=True, exist_ok=True)
+          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if marker not in plan:
+              raise RuntimeError('current-next-action heading missing')
+          status = 'accepted' if result['accepted'] else 'not retained'
+          timing = result.get('geometric_candidate_over_baseline_time')
+          memory = result.get('best_candidate_over_baseline_peak_rss')
+          evidence = ''
+          if timing is not None and memory is not None:
+              evidence = (
+                  f' Geometric time ratio: {timing:.3f}; best peak-RSS '
+                  f'ratio: {memory:.3f}.'
+              )
+          checkpoint = f'''### Compact edge endpoint checkpoint — 2026-08-22
+
+- Storing retained edge endpoints as checked `u32` values while preserving the
+  public `usize` API was **{status}**.{evidence}
+- The candidate is guarded against endpoint values above `u32::MAX` through the
+  existing typed bounds-error path and includes a 16-byte layout invariant.
+- Qualification status: `{result['validation']}`.
+- Machine-readable evidence:
+  `.ci/performance/compact-edge-endpoints-latest.json`.
+
+'''
+          if '### Compact edge endpoint checkpoint — 2026-08-22' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          plan_path.write_text(plan)
+
+          for staging in (
+              'scripts/compact_edge_endpoints.py',
+              '.github/workflows/compact-edge-endpoints.yml',
+          ):
+              Path(staging).unlink(missing_ok=True)
+          try:
+              Path('scripts').rmdir()
+          except OSError:
+              pass
+
+          run(['git', 'config', 'user.name', 'github-actions[bot]'])
+          run([
+              'git', 'config', 'user.email',
+              '41898282+github-actions[bot]@users.noreply.github.com',
+          ])
+          run(['git', 'add', '-A'])
+          message = (
+              'perf: compact retained edge endpoints'
+              if result['accepted']
+              else 'perf: record compact edge endpoint experiment'
+          )
+          run(['git', 'commit', '-m', message])
+          run(['git', 'pull', '--rebase', 'origin', 'main'])
+          run(['git', 'push', 'origin', 'HEAD:main'])
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/compact-edge-endpoints-latest.json || true
