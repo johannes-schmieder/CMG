@@ -1,0 +1,56 @@
+name: Apply final qualification patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/apply_final_qualification.py'
+      - '.github/workflows/apply-final-qualification.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply tested qualification patch
+        run: python3 scripts/apply_final_qualification.py
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      - name: Debug tests
+        run: cargo test --all-targets
+
+      - name: Release tests
+        run: cargo test --all-targets --release
+
+      - name: Commit qualified patch and remove one-shot machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/apply_final_qualification.py
+          rm .github/workflows/apply-final-qualification.yml
+          rmdir scripts 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test: add exhaustive small-system qualification'
+          git pull --rebase origin main
+          git push origin HEAD:main
