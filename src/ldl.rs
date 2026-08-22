@@ -29,12 +29,8 @@ impl LowerFactor {
 
         let packed_bytes = packed_slots.saturating_mul(core::mem::size_of::<f64>());
         let sparse_bytes = strict_nonzeros
-            .saturating_mul(
-                2 * core::mem::size_of::<u32>() + 2 * core::mem::size_of::<f64>(),
-            )
-            .saturating_add(
-                2 * (dimension + 1).saturating_mul(core::mem::size_of::<usize>()),
-            );
+            .saturating_mul(2 * core::mem::size_of::<u32>() + 2 * core::mem::size_of::<f64>())
+            .saturating_add(2 * (dimension + 1).saturating_mul(core::mem::size_of::<usize>()));
 
         if dimension <= u32::MAX as usize && sparse_bytes < packed_bytes {
             let mut row_offsets = Vec::with_capacity(dimension + 1);
@@ -386,8 +382,7 @@ impl GroundedLdl {
         }
 
         for row in 0..dimension {
-            forward[row] = rhs[self.permutation[row]]
-                - self.lower.forward_correction(row, forward);
+            forward[row] = rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
         }
         for (value, pivot) in forward.iter_mut().zip(&self.diagonal) {
             *value /= *pivot;
