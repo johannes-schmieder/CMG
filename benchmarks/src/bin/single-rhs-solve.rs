@@ -2,8 +2,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use cmg::{
-    CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace,
-    solve_pcg_with_workspace,
+    CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace, solve_pcg_with_workspace,
 };
 
 struct BenchGraph {
