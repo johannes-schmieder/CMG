@@ -1,3 +1,5 @@
+mod projection;
+
 use cmg::Laplacian;
 use std::env;
 use std::error::Error;
@@ -181,11 +183,12 @@ fn main() -> Result<(), AnyError> {
     let edge_visits = graph.edge_count() as f64 * loops as f64;
     let rust_edges_per_second = edge_visits * 1.0e9 / rust_median_ns as f64;
     let c_edges_per_second = edge_visits * 1.0e9 / c_median_ns as f64;
+    let projection = projection::benchmark(&config.case, graph.vertex_count(), config.repetitions)?;
 
     let json = format!(
         concat!(
             "{{\n",
-            "  \"schema\": 1,\n",
+            "  \"schema\": 2,\n",
             "  \"source_commit\": \"{}\",\n",
             "  \"upstream_commit\": \"{}\",\n",
             "  \"case\": \"{}\",\n",
@@ -199,7 +202,8 @@ fn main() -> Result<(), AnyError> {
             "  \"rust_edges_per_second\": {:.17e},\n",
             "  \"c_edges_per_second\": {:.17e},\n",
             "  \"max_abs_error\": {:.17e},\n",
-            "  \"max_scaled_error\": {:.17e}\n",
+            "  \"max_scaled_error\": {:.17e},\n",
+            "  \"projection\": {}\n",
             "}}\n"
         ),
         SOURCE_COMMIT,
@@ -216,6 +220,7 @@ fn main() -> Result<(), AnyError> {
         c_edges_per_second,
         max_abs_error,
         max_scaled_error,
+        projection.to_json(),
     );
 
     if let Some(path) = config.output {

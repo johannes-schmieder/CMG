@@ -1,0 +1,12 @@
+/home/runner/work/CMG/CMG/benchmarks/c-kernel/target/debug/deps/cmg_c_kernel_bench-ecf573c5b290a1c6.d: /home/runner/work/CMG/CMG/clippy.toml src/main.rs src/projection.rs Cargo.toml
+
+/home/runner/work/CMG/CMG/benchmarks/c-kernel/target/debug/deps/libcmg_c_kernel_bench-ecf573c5b290a1c6.rmeta: /home/runner/work/CMG/CMG/clippy.toml src/main.rs src/projection.rs Cargo.toml
+
+/home/runner/work/CMG/CMG/clippy.toml:
+src/main.rs:
+src/projection.rs:
+Cargo.toml:
+
+# env-dep:CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__
+# env-dep:CLIPPY_CONF_DIR
+# env-dep:CMG_BENCH_COMMIT

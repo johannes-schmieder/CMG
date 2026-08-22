@@ -253,10 +253,8 @@ pub(crate) fn benchmark(
         loops,
         restriction_rust_median_ns,
         restriction_c_median_ns,
-        restriction_rust_over_c: restriction_rust_median_ns as f64
-            / restriction_c_median_ns as f64,
-        restriction_rust_values_per_second: visits * 1.0e9
-            / restriction_rust_median_ns as f64,
+        restriction_rust_over_c: restriction_rust_median_ns as f64 / restriction_c_median_ns as f64,
+        restriction_rust_values_per_second: visits * 1.0e9 / restriction_rust_median_ns as f64,
         restriction_c_values_per_second: visits * 1.0e9 / restriction_c_median_ns as f64,
         restriction_max_abs_error,
         restriction_max_scaled_error,
@@ -264,8 +262,7 @@ pub(crate) fn benchmark(
         prolongation_c_median_ns,
         prolongation_rust_over_c: prolongation_rust_median_ns as f64
             / prolongation_c_median_ns as f64,
-        prolongation_rust_values_per_second: visits * 1.0e9
-            / prolongation_rust_median_ns as f64,
+        prolongation_rust_values_per_second: visits * 1.0e9 / prolongation_rust_median_ns as f64,
         prolongation_c_values_per_second: visits * 1.0e9 / prolongation_c_median_ns as f64,
         prolongation_max_abs_error,
         prolongation_max_scaled_error,
@@ -280,13 +277,12 @@ fn make_aggregation(case: &str, fine_dimension: usize) -> Result<Aggregation, An
     };
     let coarse_dimension = fine_dimension.div_ceil(group_size).max(1);
     let labels = match case {
-        "path" => (0..fine_dimension).map(|index| index / group_size).collect(),
+        "path" => (0..fine_dimension)
+            .map(|index| index / group_size)
+            .collect(),
         "worker-firm" => (0..fine_dimension)
             .map(|index| {
-                index
-                    .wrapping_mul(2_654_435_761)
-                    .wrapping_add(index >> 3)
-                    % coarse_dimension
+                index.wrapping_mul(2_654_435_761).wrapping_add(index >> 3) % coarse_dimension
             })
             .collect(),
         _ => unreachable!(),

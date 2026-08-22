@@ -166,8 +166,10 @@ fn main() -> Result<(), AnyError> {
         data.aggregation
             .restrict_into(black_box(&data.fine_input), black_box(&mut rust_restricted))?;
         data.c_restrict_into(black_box(&mut c_restricted));
-        data.aggregation
-            .prolong_into(black_box(&data.coarse_input), black_box(&mut rust_prolonged))?;
+        data.aggregation.prolong_into(
+            black_box(&data.coarse_input),
+            black_box(&mut rust_prolonged),
+        )?;
         data.c_prolong_into(black_box(&mut c_prolonged));
     }
 
@@ -178,31 +180,15 @@ fn main() -> Result<(), AnyError> {
 
     for repetition in 0..config.repetitions {
         if repetition % 2 == 0 {
-            rust_restrict_times.push(time_rust_restrict(
-                &data,
-                &mut rust_restricted,
-                loops,
-            )?);
+            rust_restrict_times.push(time_rust_restrict(&data, &mut rust_restricted, loops)?);
             c_restrict_times.push(time_c_restrict(&data, &mut c_restricted, loops));
-            rust_prolong_times.push(time_rust_prolong(
-                &data,
-                &mut rust_prolonged,
-                loops,
-            )?);
+            rust_prolong_times.push(time_rust_prolong(&data, &mut rust_prolonged, loops)?);
             c_prolong_times.push(time_c_prolong(&data, &mut c_prolonged, loops));
         } else {
             c_prolong_times.push(time_c_prolong(&data, &mut c_prolonged, loops));
-            rust_prolong_times.push(time_rust_prolong(
-                &data,
-                &mut rust_prolonged,
-                loops,
-            )?);
+            rust_prolong_times.push(time_rust_prolong(&data, &mut rust_prolonged, loops)?);
             c_restrict_times.push(time_c_restrict(&data, &mut c_restricted, loops));
-            rust_restrict_times.push(time_rust_restrict(
-                &data,
-                &mut rust_restricted,
-                loops,
-            )?);
+            rust_restrict_times.push(time_rust_restrict(&data, &mut rust_restricted, loops)?);
         }
     }
 
