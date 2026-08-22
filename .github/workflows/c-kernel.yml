@@ -66,12 +66,6 @@ jobs:
                 --repetitions 7 \
                 --output ".ci/performance/c-kernel/${CASE}.json" || exit $?
             done
-            cargo run --quiet --release \
-              --manifest-path benchmarks/c-kernel/Cargo.toml \
-              --example projection -- \
-              --vertices 100000 \
-              --repetitions 7 \
-              --output ".ci/performance/c-kernel/projection.json"
           } > .ci/performance/c-kernel/benchmark.log 2>&1
           STATUS=$?
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"
@@ -104,7 +98,7 @@ jobs:
           validation = os.environ.get('VALIDATION_STATUS') or 'not-run'
           benchmark = os.environ.get('BENCHMARK_STATUS') or 'not-run'
           record = {
-              'schema': 3,
+              'schema': 2,
               'tested_sha': os.environ['CMG_BENCH_COMMIT'],
               'upstream_commit': '19752fc102f8cae8e34f66457bfaccb1aaa60375',
               'runner': 'ubuntu-latest',
@@ -114,7 +108,6 @@ jobs:
               'results': {
                   'path': read_json('path.json'),
                   'worker_firm': read_json('worker-firm.json'),
-                  'projection': read_json('projection.json'),
               },
               'validation_log_tail': tail('validation.log'),
               'benchmark_log_tail': tail('benchmark.log'),
