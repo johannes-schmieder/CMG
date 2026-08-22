@@ -36,7 +36,7 @@ intentional interface or numerical deviations.
 - [x] upstream hierarchy terminal and stagnation rules;
 - [ ] final upstream nonzero-ratio recursive repeat schedule, including the
       direct-terminal factor nonzero count;
-- [ ] grounded degree-ordered LDL^T terminal solver;
+- [x] grounded degree-ordered LDL^T terminal solver;
 - [ ] stationary recursive CMG cycle with damped Jacobi smoothing;
 - [ ] reusable immutable hierarchy and caller-owned workspaces;
 - [ ] PCG with fresh original-system residual certification;
@@ -57,7 +57,7 @@ src/
   forest.rs           Heavy-edge forest, splitting, and forest components
   coarsen.rs          Restriction, prolongation, and Galerkin contraction
   hierarchy.rs        Hierarchy construction, stops, repeats, diagnostics
-  ldl.rs              Grounded terminal LDL^T
+  ldl.rs              Component-grounded terminal LDL^T
   workspace.rs        Reusable application workspaces
   preconditioner.rs   Stationary recursive CMG cycle
   pcg.rs              Certified PCG and batched solves
@@ -86,9 +86,9 @@ stationary reference port is qualified.
 | 0. Contract, provenance, CI | **complete** | Cross-platform quality/test checkpoint green |
 | 1. Graph and SDDM core | **complete** | Dense assembly, energy, exact augmentation, and component tests green |
 | 2. Forest decomposition | **complete** | Golden parent/split/component tests and quality gates green |
-| 3. Coarse graphs and hierarchy | **implemented; formatted quality CI running** | Dense `R L R^T`, stop-rule, and hierarchy tests green on three OSes |
-| 4. Terminal LDL^T | **in progress locally** | Dense-reference solution and residual tests pass |
-| 5. CMG cycle | not started | Linearity, symmetry, positivity, and recursion tests pass |
+| 3. Coarse graphs and hierarchy | **complete** | Dense `R L R^T`, stop-rule, hierarchy, Clippy, and docs gates green |
+| 4. Terminal LDL^T | **implemented; formatted quality CI running** | Connected/disconnected direct solves and fresh residual tests green on three OSes |
+| 5. CMG cycle | **in progress locally** | Linearity, symmetry, positivity, and recursion tests pass |
 | 6. PCG and batching | not started | Certified end-to-end small solves pass |
 | 7. Adversarial qualification | not started | Debug/release suites pass on all CI platforms |
 | 8. Completion audit and docs | not started | Every upstream production routine is covered |
@@ -112,7 +112,11 @@ The current code provides:
 - exact edge-based construction of `R L R^T`;
 - direct, full-contraction, vertex-stagnation, fill-stagnation, and maximum-level
   terminals with explicit diagnostics;
-- provisional nonzero-ratio repeat counts for ordinary coarse levels.
+- provisional nonzero-ratio repeat counts for ordinary coarse levels;
+- one deterministic highest-index anchor per connected component;
+- static grounded-row nonzero ordering and no-pivot LDL^T factorization;
+- reusable terminal factors, factor-nonzero diagnostics, compatibility checks,
+  and gauge-explicit direct solves.
 
 The exact augmentation intentionally improves on the MATLAB wrapper's numerical
 `1e-13` classification: a small but positive row-sum excess is not discarded or
@@ -133,12 +137,15 @@ Current exact tests include:
 - heavy-edge tie behavior and a pinned-C-kernel forest split vector;
 - deterministic forest component labels and low-effective-degree behavior;
 - restriction/prolongation and dense-oracle Galerkin equality;
-- every hierarchy terminal reason, strict level reduction, and repeat lower
-  bounds on a forced multilevel path.
+- every hierarchy terminal reason, strict level reduction, and repeat bounds;
+- weighted-path direct factor values and fresh residuals;
+- static-degree ordering on a star;
+- independent grounding and direct solves for disconnected components and
+  isolated vertices;
+- known-solution gauge recovery and incompatible-RHS rejection.
 
-Remaining invariants include direct-factor residuals, preconditioner
-linearity/symmetry/positivity, batch equality, and end-to-end residual
-certification.
+Remaining invariants include preconditioner linearity/symmetry/positivity,
+workspace reuse, batch equality, and end-to-end residual certification.
 
 ## 8. Intentional differences from the MATLAB interface
 
@@ -150,6 +157,8 @@ certification.
   below the MATLAB wrapper's numerical strict-dominance threshold.
 - Rust exposes hierarchy diagnostics and certified PCG results directly.
 - A configurable maximum-level guard is added as a hard safety limit.
+- The direct terminal grounds one vertex per component rather than assuming a
+  connected graph with one final coordinate.
 
 The hierarchy constants and stationary cycle remain faithful to the pinned
 upstream implementation unless a deviation is recorded here.
@@ -165,20 +174,21 @@ upstream implementation unless a deviation is recorded here.
 | 2026-08-22 | Deterministic, single-threaded first | Correctness before parallel optimization |
 | 2026-08-22 | Augment every positive SDDM excess | Preserve the supplied matrix exactly |
 | 2026-08-22 | Lowest-neighbor heavy-edge tie rule | Stable behavior matching sparse index order |
-| 2026-08-22 | Ground one deterministic vertex per component | Extend the upstream connected-graph terminal safely to disconnected inputs |
+| 2026-08-22 | Ground the highest-index vertex per component | Deterministic disconnected extension of the upstream final-coordinate gauge |
+| 2026-08-22 | Dense storage for the first terminal factor | Auditability first; terminal size is bounded by the direct threshold |
 
 ## 10. Current risks and open defects
 
-- The formatted hierarchy checkpoint needs the full quality rerun triggered by
-  this plan update because GitHub suppresses recursive runs from formatting-bot
+- The formatted LDL checkpoint needs the full quality rerun triggered by this
+  plan update because GitHub suppresses recursive runs from formatting-bot
   commits.
 - The final repeat count before a direct terminal must use the terminal LDL
   factor nonzero count, as in upstream, rather than the provisional coarse graph
   count.
+- Dense LDL setup is cubic and should eventually be replaced or supplemented by
+  sparse storage for unusually dense terminal levels; correctness comes first.
 - The upstream hierarchy can stagnate on dense graphs. The Rust port preserves
   its iterative terminal fallback and reports it explicitly.
-- The first terminal LDL implementation prioritizes auditability over sparse
-  asymptotic performance; optimization follows parity and qualification.
 - Local Rust compilation is unavailable in the agent container, so every Rust
   checkpoint is validated through GitHub Actions.
 
@@ -190,11 +200,14 @@ upstream implementation unless a deviation is recorded here.
 | Graph foundation | `cfd4d073` | green after rustfmt | deterministic graph, components, energy and dense oracle |
 | Exact SDDM layer | `8c5f710b`–`9fa8af0b` | green | exact augmentation and focused tests on three OSes |
 | Forest decomposition | `a5b80c9b`–`f5fc26d3` | green | heavy-edge, split kernel, low-degree correction, labels |
-| Hierarchy construction | `0403d435` | tests green; initial format failure fixed | exact Galerkin contraction and all terminal guards |
-| Hierarchy rustfmt | `f51405a7` | full quality rerun triggered | formatted source checkpoint |
+| Hierarchy construction | `0403d435`–`5b0a399b` | green | exact Galerkin contraction and all terminal guards |
+| Terminal LDL^T | `5abf4ed6` | tests green; initial format failure fixed | component grounding, degree ordering, factor and solve tests |
+| Terminal rustfmt | `512cc091` | full quality rerun triggered | formatted source checkpoint |
 
 ## 12. Current next action
 
-Complete and qualify the deterministic component-grounded, static-degree-ordered
-LDL^T terminal solver. Then integrate its factor nonzero count into the final
-upstream repeat schedule before implementing the recursive stationary cycle.
+Integrate the terminal factor nonzero count into the final repeat schedule and
+implement the exact stationary recursive cycle with caller-owned reusable
+workspaces. Qualify direct, iterative-terminal, and forced-multilevel paths for
+linearity, numerical symmetry, and positive action on compatible right-hand
+sides.
