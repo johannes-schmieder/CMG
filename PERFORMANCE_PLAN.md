@@ -21,6 +21,7 @@ Retained records:
 - `.ci/performance/compact-centering-metadata-latest.json`: accepted coarse-centering metadata experiment.
 - `.ci/performance/prevalidated-pcg-apply-latest.json`: rejected prevalidated PCG apply experiment.
 - `.ci/performance/terminal-factor-latest.json`: accepted direct terminal-factor assembly experiment.
+- `.ci/performance/inplace-edge-compaction-latest.json`: rejected in-place edge-compaction experiment.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -93,6 +94,8 @@ The private prevalidated-PCG apply experiment was not retained. It preserved hie
 
 The direct terminal-factor assembly experiment removed one dense setup buffer while preserving the complete numerical test suite. Its geometric terminal-build ratio was `0.922x` and its worst case was `0.932x`; the candidate was retained.
 
+The in-place canonical-edge compaction experiment preserved every graph and hierarchy benchmark invariant. Its graph-build timing geometric mean was `0.921x`, its hierarchy-build geometric mean was `1.034x`, and the best duplicate-heavy peak-RSS ratio was `0.949x`; the candidate was not retained.
+
 ### Terminal and workspace memory
 
 - Completed strict-lower factors select packed-triangular or sparse row/column traversal storage by retained-byte cost.
@@ -150,6 +153,7 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Unsafe unchecked aggregation loops were rejected because the crate globally forbids unsafe production code; safe kernels were retained.
 - Duplicating native and compact aggregation labels is not accepted without an end-to-end memory and speed win.
 - Skipping public-compatible apply checks inside PCG was benchmarked and rejected because it did not produce a stable end-to-end solve improvement; the fully checked path remains.
+- In-place canonical edge compaction was benchmarked and not retained because its timing or memory gates did not provide a stable end-to-end win.
 - Pipelined CG, K-cycles, aggressive SIMD, NUMA pinning, and panel Krylov methods remain deferred until ordinary stationary CMG is allocation-free and profiles identify a remaining bottleneck.
 
 ## Checkpoint log
@@ -175,9 +179,10 @@ After in-place level output and recursive centering, the accepted recursive-cent
 | 2026-08-22 | compact centering metadata | Full component metadata retained only at the finest level; memory, solve, and C-cycle gates passed |
 | 2026-08-22 | prevalidated PCG apply | Rejected: numerical results matched, but end-to-end solve timing did not improve |
 | 2026-08-22 | direct terminal-factor assembly | Retained after full tests and same-host build timing |
+| 2026-08-22 | in-place edge compaction | Rejected after graph/hierarchy timing and peak-RSS gates |
 
 ## Current next action
 
-1. Profile hierarchy construction on larger sparse and denser worker–firm cases, focusing on coarse contraction allocation and sorting.
+1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
 2. Obtain 8–32-thread and high-memory evidence when a suitable runner is available.
 3. Remove remaining obsolete one-shot workflows and staging scripts after the active checkpoint is secure.

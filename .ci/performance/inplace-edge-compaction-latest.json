@@ -1,0 +1,458 @@
+{
+  "schema": 1,
+  "experiment": "in-place-canonical-edge-compaction",
+  "baseline_sha": "5b1f072dedde4c058c549d17c2ed4cfa03d4c119",
+  "accepted": false,
+  "reasons": [
+    "hierarchy-build geometric timing ratio exceeded 1.03",
+    "one hierarchy-build peak RSS ratio exceeded 1.03"
+  ],
+  "validation": "success",
+  "rounds": 3,
+  "graph_time_ratios": {
+    "unique-500000": 0.8135857963585732,
+    "duplicates-4-250000": 0.9101237791442416,
+    "duplicates-16-75000": 1.0004389852333728,
+    "coarse-collisions-75000": 0.9726185486593184
+  },
+  "graph_time_geometric_mean_ratio": 0.9213173368500642,
+  "graph_peak_rss_ratios": {
+    "unique-500000": 0.9033103582176488,
+    "duplicates-4-250000": 0.9488228199884642,
+    "duplicates-16-75000": 0.9869845184271818,
+    "coarse-collisions-75000": 0.9865814696485623
+  },
+  "hierarchy_time_ratios": {
+    "worker-firm-50000": 1.0242229271996712,
+    "dense-worker-firm-20000": 1.0434427008656937
+  },
+  "hierarchy_time_geometric_mean_ratio": 1.0337881492093977,
+  "hierarchy_peak_rss_ratios": {
+    "worker-firm-50000": 1.0671038584718622,
+    "dense-worker-firm-20000": 0.9704805624963682
+  },
+  "graph_records": {
+    "unique-500000": {
+      "baseline": [
+        {
+          "case": "unique",
+          "scale": 500000,
+          "vertices": 500001,
+          "raw_edges": 500000,
+          "retained_edges": 500000,
+          "repetitions": 3,
+          "median_ns": 7799690,
+          "peak_rss_kib": 41168
+        },
+        {
+          "case": "unique",
+          "scale": 500000,
+          "vertices": 500001,
+          "raw_edges": 500000,
+          "retained_edges": 500000,
+          "repetitions": 3,
+          "median_ns": 7986392,
+          "peak_rss_kib": 41268
+        },
+        {
+          "case": "unique",
+          "scale": 500000,
+          "vertices": 500001,
+          "raw_edges": 500000,
+          "retained_edges": 500000,
+          "repetitions": 3,
+          "median_ns": 7408513,
+          "peak_rss_kib": 41204
+        }
+      ],
+      "candidate": [
+        {
+          "case": "unique",
+          "scale": 500000,
+          "vertices": 500001,
+          "raw_edges": 500000,
+          "retained_edges": 500000,
+          "repetitions": 3,
+          "median_ns": 6482485,
+          "peak_rss_kib": 37164
+        },
+        {
+          "case": "unique",
+          "scale": 500000,
+          "vertices": 500001,
+          "raw_edges": 500000,
+          "retained_edges": 500000,
+          "repetitions": 3,
+          "median_ns": 6345717,
+          "peak_rss_kib": 37304
+        },
+        {
+          "case": "unique",
+          "scale": 500000,
+          "vertices": 500001,
+          "raw_edges": 500000,
+          "retained_edges": 500000,
+          "repetitions": 3,
+          "median_ns": 6281088,
+          "peak_rss_kib": 37220
+        }
+      ],
+      "baseline_median_ns": 7799690,
+      "candidate_median_ns": 6345717,
+      "candidate_over_baseline_time": 0.8135857963585732,
+      "baseline_peak_rss_kib": 41204,
+      "candidate_peak_rss_kib": 37220,
+      "candidate_over_baseline_peak_rss": 0.9033103582176488
+    },
+    "duplicates-4-250000": {
+      "baseline": [
+        {
+          "case": "duplicates-4",
+          "scale": 250000,
+          "vertices": 500000,
+          "raw_edges": 1000000,
+          "retained_edges": 250000,
+          "repetitions": 3,
+          "median_ns": 12327521,
+          "peak_rss_kib": 76308
+        },
+        {
+          "case": "duplicates-4",
+          "scale": 250000,
+          "vertices": 500000,
+          "raw_edges": 1000000,
+          "retained_edges": 250000,
+          "repetitions": 3,
+          "median_ns": 11534164,
+          "peak_rss_kib": 76264
+        },
+        {
+          "case": "duplicates-4",
+          "scale": 250000,
+          "vertices": 500000,
+          "raw_edges": 1000000,
+          "retained_edges": 250000,
+          "repetitions": 3,
+          "median_ns": 12802932,
+          "peak_rss_kib": 76284
+        }
+      ],
+      "candidate": [
+        {
+          "case": "duplicates-4",
+          "scale": 250000,
+          "vertices": 500000,
+          "raw_edges": 1000000,
+          "retained_edges": 250000,
+          "repetitions": 3,
+          "median_ns": 13917673,
+          "peak_rss_kib": 72380
+        },
+        {
+          "case": "duplicates-4",
+          "scale": 250000,
+          "vertices": 500000,
+          "raw_edges": 1000000,
+          "retained_edges": 250000,
+          "repetitions": 3,
+          "median_ns": 11219570,
+          "peak_rss_kib": 72428
+        },
+        {
+          "case": "duplicates-4",
+          "scale": 250000,
+          "vertices": 500000,
+          "raw_edges": 1000000,
+          "retained_edges": 250000,
+          "repetitions": 3,
+          "median_ns": 9649648,
+          "peak_rss_kib": 72348
+        }
+      ],
+      "baseline_median_ns": 12327521,
+      "candidate_median_ns": 11219570,
+      "candidate_over_baseline_time": 0.9101237791442416,
+      "baseline_peak_rss_kib": 76284,
+      "candidate_peak_rss_kib": 72380,
+      "candidate_over_baseline_peak_rss": 0.9488228199884642
+    },
+    "duplicates-16-75000": {
+      "baseline": [
+        {
+          "case": "duplicates-16",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 75000,
+          "repetitions": 3,
+          "median_ns": 11720212,
+          "peak_rss_kib": 87548
+        },
+        {
+          "case": "duplicates-16",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 75000,
+          "repetitions": 3,
+          "median_ns": 12525109,
+          "peak_rss_kib": 87588
+        },
+        {
+          "case": "duplicates-16",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 75000,
+          "repetitions": 3,
+          "median_ns": 10704552,
+          "peak_rss_kib": 87684
+        }
+      ],
+      "candidate": [
+        {
+          "case": "duplicates-16",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 75000,
+          "repetitions": 3,
+          "median_ns": 11725357,
+          "peak_rss_kib": 86480
+        },
+        {
+          "case": "duplicates-16",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 75000,
+          "repetitions": 3,
+          "median_ns": 11446167,
+          "peak_rss_kib": 86428
+        },
+        {
+          "case": "duplicates-16",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 75000,
+          "repetitions": 3,
+          "median_ns": 12346508,
+          "peak_rss_kib": 86448
+        }
+      ],
+      "baseline_median_ns": 11720212,
+      "candidate_median_ns": 11725357,
+      "candidate_over_baseline_time": 1.0004389852333728,
+      "baseline_peak_rss_kib": 87588,
+      "candidate_peak_rss_kib": 86448,
+      "candidate_over_baseline_peak_rss": 0.9869845184271818
+    },
+    "coarse-collisions-75000": {
+      "baseline": [
+        {
+          "case": "coarse-collisions",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 225000,
+          "repetitions": 3,
+          "median_ns": 72221599,
+          "peak_rss_kib": 87640
+        },
+        {
+          "case": "coarse-collisions",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 225000,
+          "repetitions": 3,
+          "median_ns": 72672627,
+          "peak_rss_kib": 87760
+        },
+        {
+          "case": "coarse-collisions",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 225000,
+          "repetitions": 3,
+          "median_ns": 73019342,
+          "peak_rss_kib": 87632
+        }
+      ],
+      "candidate": [
+        {
+          "case": "coarse-collisions",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 225000,
+          "repetitions": 3,
+          "median_ns": 70682745,
+          "peak_rss_kib": 86412
+        },
+        {
+          "case": "coarse-collisions",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 225000,
+          "repetitions": 3,
+          "median_ns": 71054930,
+          "peak_rss_kib": 86588
+        },
+        {
+          "case": "coarse-collisions",
+          "scale": 75000,
+          "vertices": 150000,
+          "raw_edges": 1200000,
+          "retained_edges": 225000,
+          "repetitions": 3,
+          "median_ns": 70063327,
+          "peak_rss_kib": 86464
+        }
+      ],
+      "baseline_median_ns": 72672627,
+      "candidate_median_ns": 70682745,
+      "candidate_over_baseline_time": 0.9726185486593184,
+      "baseline_peak_rss_kib": 87640,
+      "candidate_peak_rss_kib": 86464,
+      "candidate_over_baseline_peak_rss": 0.9865814696485623
+    }
+  },
+  "hierarchy_records": {
+    "worker-firm-50000": {
+      "baseline": [
+        {
+          "case": "worker-firm",
+          "scale": 50000,
+          "vertices": 100000,
+          "edges": 150000,
+          "repetitions": 3,
+          "median_ns": 55812660,
+          "peak_rss_kib": 26228
+        },
+        {
+          "case": "worker-firm",
+          "scale": 50000,
+          "vertices": 100000,
+          "edges": 150000,
+          "repetitions": 3,
+          "median_ns": 56613440,
+          "peak_rss_kib": 26264
+        },
+        {
+          "case": "worker-firm",
+          "scale": 50000,
+          "vertices": 100000,
+          "edges": 150000,
+          "repetitions": 3,
+          "median_ns": 55538542,
+          "peak_rss_kib": 26228
+        }
+      ],
+      "candidate": [
+        {
+          "case": "worker-firm",
+          "scale": 50000,
+          "vertices": 100000,
+          "edges": 150000,
+          "repetitions": 3,
+          "median_ns": 55033361,
+          "peak_rss_kib": 27988
+        },
+        {
+          "case": "worker-firm",
+          "scale": 50000,
+          "vertices": 100000,
+          "edges": 150000,
+          "repetitions": 3,
+          "median_ns": 57677224,
+          "peak_rss_kib": 28076
+        },
+        {
+          "case": "worker-firm",
+          "scale": 50000,
+          "vertices": 100000,
+          "edges": 150000,
+          "repetitions": 3,
+          "median_ns": 57164606,
+          "peak_rss_kib": 27572
+        }
+      ],
+      "baseline_median_ns": 55812660,
+      "candidate_median_ns": 57164606,
+      "candidate_over_baseline_time": 1.0242229271996712,
+      "baseline_peak_rss_kib": 26228,
+      "candidate_peak_rss_kib": 27988,
+      "candidate_over_baseline_peak_rss": 1.0671038584718622
+    },
+    "dense-worker-firm-20000": {
+      "baseline": [
+        {
+          "case": "dense-worker-firm",
+          "scale": 20000,
+          "vertices": 40000,
+          "edges": 320000,
+          "repetitions": 3,
+          "median_ns": 127322988,
+          "peak_rss_kib": 68836
+        },
+        {
+          "case": "dense-worker-firm",
+          "scale": 20000,
+          "vertices": 40000,
+          "edges": 320000,
+          "repetitions": 3,
+          "median_ns": 119055544,
+          "peak_rss_kib": 69172
+        },
+        {
+          "case": "dense-worker-firm",
+          "scale": 20000,
+          "vertices": 40000,
+          "edges": 320000,
+          "repetitions": 3,
+          "median_ns": 125368011,
+          "peak_rss_kib": 68804
+        }
+      ],
+      "candidate": [
+        {
+          "case": "dense-worker-firm",
+          "scale": 20000,
+          "vertices": 40000,
+          "edges": 320000,
+          "repetitions": 3,
+          "median_ns": 130814336,
+          "peak_rss_kib": 66804
+        },
+        {
+          "case": "dense-worker-firm",
+          "scale": 20000,
+          "vertices": 40000,
+          "edges": 320000,
+          "repetitions": 3,
+          "median_ns": 130297096,
+          "peak_rss_kib": 66784
+        },
+        {
+          "case": "dense-worker-firm",
+          "scale": 20000,
+          "vertices": 40000,
+          "edges": 320000,
+          "repetitions": 3,
+          "median_ns": 132533555,
+          "peak_rss_kib": 73280
+        }
+      ],
+      "baseline_median_ns": 125368011,
+      "candidate_median_ns": 130814336,
+      "candidate_over_baseline_time": 1.0434427008656937,
+      "baseline_peak_rss_kib": 68836,
+      "candidate_peak_rss_kib": 66804,
+      "candidate_over_baseline_peak_rss": 0.9704805624963682
+    }
+  }
+}
