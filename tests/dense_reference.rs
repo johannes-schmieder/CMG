@@ -117,8 +117,8 @@ fn grounded_ldl_matches_independent_dense_reduced_solves() {
         rhs.push(-reduced_rhs.iter().sum::<f64>());
         let mut expected = dense_solve(reduced, reduced_rhs);
         expected.push(0.0);
-        let factor = GroundedLdl::factor(&graph, ValidationOptions::default()).unwrap();
-        let actual = factor.solve(&rhs, ValidationOptions::default()).unwrap();
+        let factor = GroundedLdl::factor(&graph).unwrap();
+        let actual = factor.solve(&rhs).unwrap();
         assert_vector_close(&actual, &expected, 1.0e-11);
     }
 }
