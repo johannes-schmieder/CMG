@@ -1,0 +1,7 @@
+{
+  "error": "RuntimeError('command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check')",
+  "experiment": "parallel-cmg-compile-probe",
+  "schema_version": 1,
+  "source_sha": "4ceacf0ac3f5610e7749f85081a2f8d5c2121fb9",
+  "status": "failure"
+}
