@@ -5,7 +5,6 @@ use crate::{CmgError, CmgHierarchy, Components, GroundedLdl};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LevelWorkspace {
-    pub(crate) x: Vec<f64>,
     pub(crate) residual: Vec<f64>,
     pub(crate) coarse_rhs: Vec<f64>,
     pub(crate) coarse_correction: Vec<f64>,
@@ -48,7 +47,6 @@ impl CmgWorkspace {
                     0
                 };
                 LevelWorkspace {
-                    x: vec![0.0; dimension],
                     residual: vec![0.0; dimension],
                     coarse_rhs: vec![0.0; coarse_dimension],
                     coarse_correction: vec![0.0; coarse_dimension],
@@ -87,7 +85,6 @@ impl CmgWorkspace {
             .iter()
             .map(|level| {
                 [
-                    level.x.len(),
                     level.residual.len(),
                     level.coarse_rhs.len(),
                     level.coarse_correction.len(),
@@ -142,7 +139,6 @@ impl CmgWorkspace {
         let last = self.levels.len().saturating_sub(1);
         for (index, (workspace, level)) in self.levels.iter().zip(hierarchy.levels()).enumerate() {
             let dimension = level.graph().vertex_count();
-            validate_length("CmgWorkspace x", dimension, workspace.x.len())?;
             validate_length("CmgWorkspace residual", dimension, workspace.residual.len())?;
             let coarse_dimension = hierarchy
                 .levels()

@@ -16,6 +16,7 @@ Retained records:
 - `.ci/performance/c-kernel-latest.json`: pinned standalone C kernel comparison.
 - `.ci/performance/cycle-wiring-latest.json`: complete iterative stationary-cycle differential result.
 - `.ci/performance/compatible-apply-latest.json`: accepted compatible-RHS stationary-core experiment.
+- `.ci/performance/inplace-level-output-latest.json`: accepted caller-output hierarchy workspace experiment.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -79,8 +80,11 @@ Ratios below one favor the new code. Backward errors changed only at floating-po
 - Completed strict-lower factors select packed-triangular or sparse row/column traversal storage by retained-byte cost.
 - Sparse terminal indices use `u32` when valid.
 - CMG matvec and residual roles share one full vector per hierarchy level.
+- Nonterminal CMG levels now iterate directly in caller-owned output, eliminating a separate solution vector and final copy at every hierarchy level.
 - PCG fresh/final residual certification reuses existing storage; per-RHS PCG workspace was reduced from eight to six fine-dimension vectors at commit `f145ac92`.
 - `GroundedLdl`, `CmgWorkspace`, and `PcgWorkspace` report retained principal heap bytes.
+
+The in-place hierarchy-output checkpoint reduced retained CMG workspace to path `0.707x` and worker–firm `0.691x`; complete PCG workspace fell to `0.860x` and `0.875x`. Same-run cycle ratios were `0.979x` and `0.975x`, and solve ratios were `0.992x` and `0.981x`, with unchanged iterations.
 
 For the original 20,000-vertex matched run, hierarchy diagnostics, iterations, and backward errors were unchanged. Relative to the frozen baseline, path CMG application and solve time fell substantially, principally because sparse terminal traversal avoided dense lower-triangle scans. Worker–firm workspace memory also declined materially.
 
@@ -147,11 +151,12 @@ This is a substantial reduction from the preceding same-run Rust/C ratios of `1.
 | 2026-08-22 | `deadcb6c` | Immutable graph nonzeros and norm bound cached |
 | 2026-08-22 | `249c2d1f` | Recursive repeat schedule aligned with official CMG; full C cycle differential passed |
 | 2026-08-22 | `6d5f4cca` | Compatible stationary core retained; solve time improved with unchanged iterations |
+| 2026-08-22 | in-place hierarchy output | Per-level solution scratch removed; C parity, iterations, residuals, timing, and memory gates passed |
 
 ## Current next action
 
-1. Run fresh three-platform and matched serial/parallel qualification on `6d5f4cca`.
+1. Qualify the in-place hierarchy-output checkpoint on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.
 2. Measure deterministic component centering in place of full recursive coarse-RHS compatibility projection, retaining it only if full-cycle parity, PCG convergence, symmetry, positivity, and real solve time improve.
-3. If recursive centering is retained, measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG.
+3. If recursive centering is retained, remove now-unneeded coarse component metadata and scratch, then measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG.
 4. Continue large setup profiling and obtain 8–32-thread evidence when a suitable runner is available.
 5. Remove obsolete one-shot staging workflows and scripts after the active qualification checkpoint is secure.

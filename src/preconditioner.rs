@@ -299,18 +299,17 @@ impl CmgPreconditioner {
 
         let mut local = workspace.take_level(level_index);
         let result = (|| {
-            local.x.fill(0.0);
+            output.fill(0.0);
             for iteration in 0..iterations {
                 if iteration == 0 {
                     for ((value, inverse_diagonal), rhs_value) in
-                        local.x.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
+                        output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
                     {
                         *value = *inverse_diagonal * *rhs_value;
                     }
                 } else {
-                    level.graph().matvec_into(&local.x, &mut local.residual)?;
-                    for (((value, inverse_diagonal), rhs_value), matrix_value) in local
-                        .x
+                    level.graph().matvec_into(output, &mut local.residual)?;
+                    for (((value, inverse_diagonal), rhs_value), matrix_value) in output
                         .iter_mut()
                         .zip(level.inverse_diagonal())
                         .zip(rhs)
@@ -320,7 +319,7 @@ impl CmgPreconditioner {
                     }
                 }
 
-                level.graph().matvec_into(&local.x, &mut local.residual)?;
+                level.graph().matvec_into(output, &mut local.residual)?;
                 for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
                     *residual = *rhs_value - *residual;
                 }
@@ -346,11 +345,10 @@ impl CmgPreconditioner {
                     child_iterations,
                     validation,
                 )?;
-                aggregation.prolong_add_into(&local.coarse_correction, &mut local.x)?;
+                aggregation.prolong_add_into(&local.coarse_correction, output)?;
 
-                level.graph().matvec_into(&local.x, &mut local.residual)?;
-                for (((value, inverse_diagonal), rhs_value), matrix_value) in local
-                    .x
+                level.graph().matvec_into(output, &mut local.residual)?;
+                for (((value, inverse_diagonal), rhs_value), matrix_value) in output
                     .iter_mut()
                     .zip(level.inverse_diagonal())
                     .zip(rhs)
@@ -359,7 +357,6 @@ impl CmgPreconditioner {
                     *value += *inverse_diagonal * (*rhs_value - *matrix_value);
                 }
             }
-            output.copy_from_slice(&local.x);
             Ok(())
         })();
         workspace.put_level(level_index, local);
