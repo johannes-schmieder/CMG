@@ -34,9 +34,9 @@ The matched benchmark workflow builds the frozen baseline and current candidate 
 | P1 Repeated overhead | COMPLETE | Cached graph lineage/components and persistent component scratch pass full CI |
 | P2 Terminal/workspace memory | COMPLETE | Factor compression and scratch aliasing pass full CI and matched numerical comparison |
 | P3 Frozen CSR | COMPLETE | CSR and edge matvec agree; measured serial routing retains compact edge kernels |
-| P4 Parallel solve kernels | IN PROGRESS | Package-owned pool and row-parallel CSR are under full-feature validation |
-| P5 Multi-RHS scheduler | IN PROGRESS | Memory-bounded concurrent serial solves are under full-feature validation |
-| P6 Parallel setup | NOT STARTED | Hierarchy diagnostics are unchanged and setup improves |
+| P4 Parallel solve kernels | COMPLETE | Package-owned pool and row-parallel CSR pass debug/release CI on Linux, macOS, and Windows |
+| P5 Multi-RHS scheduler | COMPLETE | Ordered, memory-bounded concurrent RHS solves pass debug/release CI on Linux, macOS, and Windows |
+| P6 Parallel setup | IN PROGRESS | Hierarchy diagnostics are unchanged and setup improves |
 | P7 Pinned C comparison | NOT STARTED | One-thread Rust/C kernels agree numerically and are timed equivalently |
 | P8 Large qualification | NOT STARTED | 1–32-thread scaling and memory ceilings documented |
 | P9 Advanced panel/SIMD/NUMA work | DEFERRED | Only after profiles justify complexity |
@@ -80,13 +80,16 @@ A public `CsrLaplacian` is available as a deterministic solve-oriented operator:
 
 Matched serial microbenchmarks show that duplicating undirected entries into CSR costs about 1.50x on the path case and 1.25x on the worker–firm case. Production serial solves therefore retain the compact edge-scatter kernel. CSR is reserved for parallel row ownership, where it eliminates atomics and thread-local full output vectors.
 
-### P4/P5 first checkpoint
+### P4/P5
 
 - Rayon is an optional feature; default builds remain dependency-free and serial.
 - `ParallelExecutor` owns an isolated custom pool with explicit or detected thread count.
 - Row-parallel CSR matvec keeps each row's canonical summation order fixed.
 - Concurrent repeated-RHS solves use private reusable PCG workspaces and preserve input order.
 - An explicit workspace-memory budget caps simultaneous RHS solves and rejects a budget too small for one workspace.
+- Serial and parallel batch outputs are checked bit-for-bit for solution vectors, iteration counts, and certified backward errors.
+- The repaired all-feature tree passed formatting, Clippy with warnings denied, rustdoc with warnings denied, and debug/release tests on Ubuntu, macOS, and Windows.
+- The benchmark reports actual executor threads, workspace bytes, memory-derived batch concurrency, serial/parallel batch throughput, and serial/parallel CSR matvec throughput.
 
 ## Approved parallel architecture
 
@@ -98,8 +101,8 @@ Matched serial microbenchmarks show that duplicating undirected entries into CSR
 
 ## Remaining hot spots
 
-- production solve paths still use edge-scatter matvec;
-- repeated RHSs are still sequential;
+- single-RHS production PCG still uses the compact serial edge-scatter operator;
+- parallel within-solve CMG smoothing, restriction, prolongation, and reductions are not yet wired through every hierarchy level;
 - coarse contraction allocates and sorts endpoint triples at each level;
 - forest splitting allocates temporary traversal vectors;
 - terminal setup still materializes dense temporary matrices.
@@ -115,7 +118,10 @@ Matched serial microbenchmarks show that duplicating undirected entries into CSR
 | 2026-08-22 | `a82155e8` | Matched A/B workflow and exact memory records added; full CI green |
 | 2026-08-22 | `33392c85` | First retained performance comparison recorded |
 | 2026-08-22 | `31f72e6a` / `365a3572` | CSR crossover measured; full three-platform CI green |
+| 2026-08-22 | `ffdc96de` / `3cff911e` | Optional package-owned Rayon pool, deterministic CSR matvec, and memory-bounded ordered batch solving added |
+| 2026-08-22 | `e54024e7` | Parallel scaling benchmark added |
+| 2026-08-22 | `636fa093` / `f17b377d` | Benchmark reconstruction repaired; all-feature debug/release tests passed on Ubuntu, macOS, and Windows |
 
 ## Current next action
 
-Validate CSR construction and arithmetic on all platforms, add edge-versus-CSR microbenchmarks, and decide the serial routing threshold from measured results. After that, freeze a CSR operator for every hierarchy level and begin the optional custom-thread-pool implementation.
+Collect matched 1/2/4/8-thread scaling results for CSR matvec and repeated-RHS throughput, tune the minimum parallel length and batch concurrency policy, and record memory-normalized speedups. Then begin P6 by parallelizing deterministic graph canonicalization, coarse contraction, and heavy-edge selection without changing hierarchy digests.
