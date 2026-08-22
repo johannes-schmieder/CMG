@@ -1,0 +1,163 @@
+name: Repair compact centering evaluator
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-compact-centering-evaluator.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Repair repeated patch anchors
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("scripts/compact_centering_metadata_experiment.py")
+          text = path.read_text()
+
+          old = (
+              "text = replace_once(\n"
+              "    text,\n"
+              "    '''        level_components: &[Components],\n"
+              "''',\n"
+              "    '''        finest_components: &Components,\n"
+              "        coarse_centering: &[CenteringPlan],\n"
+              "''',\n"
+              '    "workspace constructor arguments",\n'
+              ")\n"
+          )
+          new = (
+              "text = replace_once(\n"
+              "    text,\n"
+              "    '''    pub(crate) fn new(\n"
+              "        hierarchy: &CmgHierarchy,\n"
+              "        direct_terminal: Option<&GroundedLdl>,\n"
+              "        level_components: &[Components],\n"
+              "    ) -> Self {\n"
+              "''',\n"
+              "    '''    pub(crate) fn new(\n"
+              "        hierarchy: &CmgHierarchy,\n"
+              "        direct_terminal: Option<&GroundedLdl>,\n"
+              "        finest_components: &Components,\n"
+              "        coarse_centering: &[CenteringPlan],\n"
+              "    ) -> Self {\n"
+              "''',\n"
+              '    "workspace constructor arguments",\n'
+              ")\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f"constructor script anchor changed: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = (
+              "text = replace_once(\n"
+              "    text,\n"
+              "    '''        level_components: &[Components],\n"
+              "''',\n"
+              "    '''        finest_components: &Components,\n"
+              "        coarse_centering: &[CenteringPlan],\n"
+              "''',\n"
+              '    "workspace validation arguments",\n'
+              ")\n"
+          )
+          new = (
+              "text = replace_once(\n"
+              "    text,\n"
+              "    '''    pub(crate) fn validate(\n"
+              "        &self,\n"
+              "        hierarchy: &CmgHierarchy,\n"
+              "        direct_terminal: Option<&GroundedLdl>,\n"
+              "        level_components: &[Components],\n"
+              "    ) -> Result<(), CmgError> {\n"
+              "''',\n"
+              "    '''    pub(crate) fn validate(\n"
+              "        &self,\n"
+              "        hierarchy: &CmgHierarchy,\n"
+              "        direct_terminal: Option<&GroundedLdl>,\n"
+              "        finest_components: &Components,\n"
+              "        coarse_centering: &[CenteringPlan],\n"
+              "    ) -> Result<(), CmgError> {\n"
+              "''',\n"
+              '    "workspace validation arguments",\n'
+              ")\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f"validation script anchor changed: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = (
+              "text = replace_once(\n"
+              "    text,\n"
+              "    '''            &self.level_components,\n"
+              "''',\n"
+              "    '''            &self.finest_components,\n"
+              "            &self.coarse_centering,\n"
+              "''',\n"
+              '    "preconditioner workspace construction",\n'
+              ")\n"
+          )
+          new = (
+              "text = replace_once(\n"
+              "    text,\n"
+              "    '''        CmgWorkspace::new(\n"
+              "            &self.hierarchy,\n"
+              "            self.direct_terminal.as_ref(),\n"
+              "            &self.level_components,\n"
+              "        )\n"
+              "''',\n"
+              "    '''        CmgWorkspace::new(\n"
+              "            &self.hierarchy,\n"
+              "            self.direct_terminal.as_ref(),\n"
+              "            &self.finest_components,\n"
+              "            &self.coarse_centering,\n"
+              "        )\n"
+              "''',\n"
+              '    "preconditioner workspace construction",\n'
+              ")\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f"preconditioner script anchor changed: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+
+          workflow = Path(".github/workflows/evaluate-compact-centering-metadata.yml")
+          workflow_text = workflow.read_text()
+          retry_marker = "# retry after repeated-anchor repair\n"
+          if retry_marker not in workflow_text:
+              anchor = "name: Evaluate compact centering metadata\n"
+              if workflow_text.count(anchor) != 1:
+                  raise SystemExit("evaluation workflow name anchor changed")
+              workflow.write_text(workflow_text.replace(anchor, anchor + retry_marker, 1))
+
+      - name: Prove patch applies to a clean source copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/compact-script-smoke"
+          tar --exclude='.git' -cf - . | tar -xf - -C "$RUNNER_TEMP/compact-script-smoke"
+          cd "$RUNNER_TEMP/compact-script-smoke"
+          python3 -m py_compile scripts/compact_centering_metadata_experiment.py
+          python3 scripts/compact_centering_metadata_experiment.py
+
+      - name: Commit repair and retrigger evaluator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-compact-centering-evaluator.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: repair compact-centering experiment anchors'
+          git pull --rebase origin main
+          git push origin HEAD:main
