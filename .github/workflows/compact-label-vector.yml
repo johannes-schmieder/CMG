@@ -1,0 +1,298 @@
+name: Compact hierarchy label vector
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-label-vector.yml'
+      - 'scripts/compact_label_vector.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Run conditional compact-label qualification
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import re
+          import statistics
+          import subprocess
+
+          root = Path.cwd()
+          feasibility = json.loads(
+              Path('.ci/performance/compact-label-feasibility.json').read_text()
+          )
+          selected = feasibility.get('selected')
+          source_path = Path(selected['path']) if selected else None
+          baseline_source = source_path.read_text() if source_path else None
+          baseline_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+
+          def run(command, *, env=None, timeout=5400, check=True):
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  env=env,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=timeout,
+              )
+              print(completed.stdout, end='')
+              if check and completed.returncode != 0:
+                  raise RuntimeError(
+                      f"command failed ({completed.returncode}): {' '.join(command)}"
+                  )
+              return completed
+
+          def build(target):
+              env = os.environ.copy()
+              env['CARGO_TARGET_DIR'] = str(target)
+              run([
+                  'cargo', 'build', '--release',
+                  '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--bin', 'hierarchy-build',
+              ], env=env)
+              return target / 'release' / 'hierarchy-build'
+
+          def sample(binary, arguments, tag):
+              time_path = Path(f'/tmp/cmg-label-{tag}.time')
+              completed = run([
+                  '/usr/bin/time', '-v', '-o', str(time_path),
+                  str(binary), *[str(value) for value in arguments],
+              ])
+              payloads = [
+                  json.loads(line)
+                  for line in completed.stdout.splitlines()
+                  if line.strip().startswith('{')
+              ]
+              if len(payloads) != 1:
+                  raise RuntimeError(f'unexpected hierarchy output: {payloads}')
+              timing = time_path.read_text()
+              rss = re.search(
+                  r'Maximum resident set size \(kbytes\):\s*(\d+)', timing
+              )
+              if rss is None:
+                  raise RuntimeError('peak RSS missing')
+              return {
+                  'median_ns': payloads[0]['median_ns'],
+                  'peak_rss_kib': int(rss.group(1)),
+                  'metadata': payloads[0],
+              }
+
+          def compare_case(baseline, candidate, arguments, name):
+              baseline_samples = []
+              candidate_samples = []
+              for index, (label, binary) in enumerate((
+                  ('baseline', baseline),
+                  ('candidate', candidate),
+                  ('candidate', candidate),
+                  ('baseline', baseline),
+              )):
+                  observation = sample(
+                      binary, arguments, f'{name}-{label}-{index}'
+                  )
+                  (baseline_samples if label == 'baseline'
+                   else candidate_samples).append(observation)
+              baseline_ns = statistics.median(
+                  item['median_ns'] for item in baseline_samples
+              )
+              candidate_ns = statistics.median(
+                  item['median_ns'] for item in candidate_samples
+              )
+              baseline_rss = max(
+                  item['peak_rss_kib'] for item in baseline_samples
+              )
+              candidate_rss = max(
+                  item['peak_rss_kib'] for item in candidate_samples
+              )
+              return {
+                  'arguments': arguments,
+                  'baseline_median_ns': baseline_ns,
+                  'candidate_median_ns': candidate_ns,
+                  'candidate_over_baseline_time': candidate_ns / baseline_ns,
+                  'baseline_peak_rss_kib': baseline_rss,
+                  'candidate_peak_rss_kib': candidate_rss,
+                  'candidate_over_baseline_peak_rss': candidate_rss / baseline_rss,
+                  'metadata': baseline_samples[0]['metadata'],
+              }
+
+          result = {
+              'schema_version': 1,
+              'experiment': 'compact-hierarchy-label-u32',
+              'baseline_sha': baseline_sha,
+              'selected': selected,
+              'accepted': False,
+              'validation': 'not_run',
+              'decision_reason': '',
+              'cases': {},
+          }
+
+          try:
+              if not feasibility.get('feasible_for_mechanical_experiment'):
+                  result['validation'] = 'skipped'
+                  result['decision_reason'] = feasibility.get(
+                      'reason', 'feasibility gate was false'
+                  )
+              else:
+                  baseline = build(Path('/tmp/cmg-label-baseline'))
+                  run(['python', 'scripts/compact_label_vector.py'])
+                  run(['cargo', 'fmt', '--all'])
+                  run(['cargo', 'fmt', '--all', '--', '--check'])
+                  run([
+                      'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                      '--all', '--', '--check',
+                  ])
+                  run([
+                      'cargo', 'clippy', '--all-targets', '--all-features',
+                      '--', '-D', 'warnings',
+                  ])
+                  run([
+                      'cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml',
+                      '--all-targets', '--', '-D', 'warnings',
+                  ])
+                  doc_env = os.environ.copy()
+                  doc_env['RUSTDOCFLAGS'] = '-D warnings'
+                  run(['cargo', 'doc', '--no-deps'], env=doc_env)
+                  run(['cargo', 'test', '--all-targets'])
+                  run(['cargo', 'test', '--all-targets', '--release'])
+                  run(['cargo', 'build', '--release'])
+                  candidate = build(Path('/tmp/cmg-label-candidate'))
+                  result['validation'] = 'success'
+
+                  specs = [
+                      ('path-1m', ['path', 1_000_000, 1]),
+                      ('sparse-worker-firm-3m', ['worker-firm', 1_000_000, 1]),
+                      ('dense-worker-firm-3.2m', ['dense-worker-firm', 200_000, 1]),
+                  ]
+                  time_ratios = []
+                  memory_ratios = []
+                  for name, arguments in specs:
+                      comparison = compare_case(
+                          baseline, candidate, arguments, name
+                      )
+                      result['cases'][name] = comparison
+                      time_ratios.append(
+                          comparison['candidate_over_baseline_time']
+                      )
+                      memory_ratios.append(
+                          comparison['candidate_over_baseline_peak_rss']
+                      )
+
+                  geometric_time = math.exp(
+                      sum(math.log(value) for value in time_ratios)
+                      / len(time_ratios)
+                  )
+                  best_memory = min(memory_ratios)
+                  worst_memory = max(memory_ratios)
+                  result['geometric_candidate_over_baseline_time'] = geometric_time
+                  result['worst_candidate_over_baseline_time'] = max(time_ratios)
+                  result['best_candidate_over_baseline_peak_rss'] = best_memory
+                  result['worst_candidate_over_baseline_peak_rss'] = worst_memory
+                  result['acceptance_limits'] = {
+                      'geometric_time_ratio_max': 1.04,
+                      'per_case_time_ratio_max': 1.10,
+                      'at_least_one_peak_rss_ratio_max': 0.985,
+                      'worst_peak_rss_ratio_max': 1.02,
+                  }
+                  result['accepted'] = (
+                      geometric_time <= 1.04
+                      and max(time_ratios) <= 1.10
+                      and best_memory <= 0.985
+                      and worst_memory <= 1.02
+                  )
+                  result['decision_reason'] = (
+                      'full qualification passed; large-graph memory improved and setup timing met the gate'
+                      if result['accepted']
+                      else 'qualification passed but timing or large-graph peak memory missed the gate'
+                  )
+          except Exception as error:
+              result['decision_reason'] = f'experiment failed: {error}'
+              result['error'] = repr(error)
+              print(result['decision_reason'], flush=True)
+
+          if not result['accepted'] and source_path and baseline_source is not None:
+              source_path.write_text(baseline_source)
+              run(['cargo', 'fmt', '--all'], check=False)
+
+          record = Path('.ci/performance/compact-label-vector-latest.json')
+          record.parent.mkdir(parents=True, exist_ok=True)
+          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if marker not in plan:
+              raise RuntimeError('current-next-action heading missing')
+          status = (
+              'accepted' if result['accepted']
+              else ('skipped' if result['validation'] == 'skipped' else 'not retained')
+          )
+          time_ratio = result.get('geometric_candidate_over_baseline_time')
+          memory_ratio = result.get('best_candidate_over_baseline_peak_rss')
+          evidence = ''
+          if time_ratio is not None and memory_ratio is not None:
+              evidence = (
+                  f' Geometric setup ratio: {time_ratio:.3f}; best peak-RSS '
+                  f'ratio: {memory_ratio:.3f}.'
+              )
+          target = (
+              f"`{selected['struct']}.{selected['field']}`"
+              if selected else 'none'
+          )
+          checkpoint = f'''### Compact hierarchy label checkpoint — 2026-08-22
+
+- Candidate {target} was **{status}**.{evidence}
+- Qualification status: `{result['validation']}`.
+- Machine-readable evidence:
+  `.ci/performance/compact-label-vector-latest.json`.
+
+'''
+          if '### Compact hierarchy label checkpoint — 2026-08-22' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          plan_path.write_text(plan)
+
+          for staging in (
+              'scripts/compact_label_vector.py',
+              '.github/workflows/compact-label-vector.yml',
+          ):
+              Path(staging).unlink(missing_ok=True)
+          try:
+              Path('scripts').rmdir()
+          except OSError:
+              pass
+
+          run(['git', 'config', 'user.name', 'github-actions[bot]'])
+          run([
+              'git', 'config', 'user.email',
+              '41898282+github-actions[bot]@users.noreply.github.com',
+          ])
+          run(['git', 'add', '-A'])
+          message = (
+              'perf: compact hierarchy label storage'
+              if result['accepted']
+              else 'perf: record compact hierarchy label experiment'
+          )
+          run(['git', 'commit', '-m', message])
+          run(['git', 'pull', '--rebase', 'origin', 'main'])
+          run(['git', 'push', 'origin', 'HEAD:main'])
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/compact-label-vector-latest.json || true
