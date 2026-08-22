@@ -30,26 +30,10 @@ fn path_dense_matvec_and_energy_are_exact() {
 
 #[test]
 fn canonicalization_is_independent_of_input_order() {
-    let first = Laplacian::from_edges(
-        4,
-        [
-            (3, 1, 0.25),
-            (0, 2, 4.0),
-            (1, 3, 0.75),
-            (2, 0, 1.0),
-        ],
-    )
-    .unwrap();
-    let second = Laplacian::from_edges(
-        4,
-        [
-            (0, 2, 1.0),
-            (3, 1, 0.75),
-            (2, 0, 4.0),
-            (1, 3, 0.25),
-        ],
-    )
-    .unwrap();
+    let first =
+        Laplacian::from_edges(4, [(3, 1, 0.25), (0, 2, 4.0), (1, 3, 0.75), (2, 0, 1.0)]).unwrap();
+    let second =
+        Laplacian::from_edges(4, [(0, 2, 1.0), (3, 1, 0.75), (2, 0, 4.0), (1, 3, 0.25)]).unwrap();
     assert_eq!(first, second);
     assert_eq!(first.edge_count(), 2);
     assert_eq!(first.edges()[0].weight(), 5.0);

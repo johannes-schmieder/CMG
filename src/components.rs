@@ -80,11 +80,7 @@ impl Components {
     }
 
     /// Verify that a right-hand side sums to numerical zero on every component.
-    pub fn validate_rhs(
-        &self,
-        rhs: &[f64],
-        options: ValidationOptions,
-    ) -> Result<(), CmgError> {
+    pub fn validate_rhs(&self, rhs: &[f64], options: ValidationOptions) -> Result<(), CmgError> {
         let options = options.validate()?;
         if rhs.len() != self.labels.len() {
             return Err(CmgError::dimension(

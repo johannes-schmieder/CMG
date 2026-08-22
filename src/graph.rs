@@ -144,7 +144,11 @@ impl Laplacian {
     /// sparse matrix.
     #[must_use]
     pub fn matrix_nnz(&self) -> usize {
-        let diagonal_nnz = self.diagonal.iter().filter(|degree| **degree != 0.0).count();
+        let diagonal_nnz = self
+            .diagonal
+            .iter()
+            .filter(|degree| **degree != 0.0)
+            .count();
         diagonal_nnz + 2 * self.edges.len()
     }
 

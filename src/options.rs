@@ -35,10 +35,7 @@ impl ValidationOptions {
             "diagonal_dominance_tolerance",
             self.diagonal_dominance_tolerance,
         )?;
-        validate_nonnegative(
-            "compatibility_tolerance",
-            self.compatibility_tolerance,
-        )?;
+        validate_nonnegative("compatibility_tolerance", self.compatibility_tolerance)?;
         validate_nonnegative(
             "strict_dominance_tolerance",
             self.strict_dominance_tolerance,

@@ -102,11 +102,7 @@ pub enum CmgError {
 impl CmgError {
     /// Construct a dimension-mismatch error.
     #[must_use]
-    pub(crate) const fn dimension(
-        context: &'static str,
-        expected: usize,
-        actual: usize,
-    ) -> Self {
+    pub(crate) const fn dimension(context: &'static str, expected: usize, actual: usize) -> Self {
         Self::DimensionMismatch {
             context,
             expected,
@@ -129,22 +125,18 @@ impl fmt::Display for CmgError {
             Self::VertexOutOfBounds {
                 vertex,
                 vertex_count,
-            } => write!(
-                formatter,
-                "vertex {vertex} is outside 0..{vertex_count}"
-            ),
+            } => write!(formatter, "vertex {vertex} is outside 0..{vertex_count}"),
             Self::SelfLoop { vertex } => {
-                write!(formatter, "self-loop at vertex {vertex} is not a Laplacian edge")
+                write!(
+                    formatter,
+                    "self-loop at vertex {vertex} is not a Laplacian edge"
+                )
             }
             Self::InvalidEdgeWeight { u, v, weight } => write!(
                 formatter,
                 "edge ({u}, {v}) has invalid weight {weight}; weights must be finite and positive"
             ),
-            Self::NonFiniteMatrixValue {
-                row,
-                column,
-                value,
-            } => write!(
+            Self::NonFiniteMatrixValue { row, column, value } => write!(
                 formatter,
                 "matrix entry ({row}, {column}) is not finite: {value}"
             ),
