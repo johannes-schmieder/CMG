@@ -1,6 +1,6 @@
 name: Apply parallel checkpoint
 
-# Split-payload retry 3 with a persisted run marker.
+# Split-payload retry 4; source-only push.
 on:
   push:
     branches: [main]
