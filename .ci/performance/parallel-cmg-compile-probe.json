@@ -1,7 +1,7 @@
 {
-  "error": "RuntimeError('command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check')",
+  "error": "RuntimeError('command failed (1): git apply --check /tmp/parallel-cmg-plan.patch')",
   "experiment": "parallel-cmg-compile-probe",
-  "schema_version": 1,
-  "source_sha": "4ceacf0ac3f5610e7749f85081a2f8d5c2121fb9",
+  "schema_version": 2,
+  "source_sha": "a8839e5cd0638688ab6dbf8c24bcc0a74eb30d29",
   "status": "failure"
 }
