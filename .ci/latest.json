@@ -1,5 +1,7 @@
 {
-  "tested_sha": "cfd4d073b52ae2cba78dabd00d32a1a11db76ed9",
+  "tested_sha": "529c4a93c6d323ed6039f7d9ced3f74262321cf2",
+  "run_id": "32566489642",
+  "run_attempt": "1",
   "quality": "failure",
   "cross_platform_tests": "success",
   "platforms": ["ubuntu-latest", "macos-latest", "windows-latest"],
