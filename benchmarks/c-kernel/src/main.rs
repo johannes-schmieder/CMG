@@ -85,7 +85,7 @@ impl UpperSymmetric {
             .collect::<Result<_, _>>()?;
 
         let mut values = vec![0.0; total];
-        let mut columns = vec![0_c_uint; total];
+        let mut columns = vec![c_uint::default(); total];
         let mut cursor = vec![0_usize; n];
         for (row, &degree) in graph.diagonal().iter().enumerate() {
             let diagonal = row_offsets_usize[row];
