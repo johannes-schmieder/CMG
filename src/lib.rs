@@ -8,6 +8,16 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod components;
+mod error;
+mod graph;
+mod options;
+
+pub use components::Components;
+pub use error::CmgError;
+pub use graph::{Edge, Laplacian};
+pub use options::ValidationOptions;
+
 /// Return the pinned upstream CMG commit used as the behavioral reference.
 #[must_use]
 pub const fn upstream_commit() -> &'static str {
