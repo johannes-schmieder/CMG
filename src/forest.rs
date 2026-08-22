@@ -2,7 +2,7 @@
 
 use crate::{CmgError, Laplacian};
 #[cfg(feature = "parallel")]
-use crate::{CsrLaplacian, ParallelExecutor};
+use crate::{CsrLaplacian, ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 
 /// The complete diagnostic result of one CMG Steiner-group construction.
 #[derive(Debug, Clone, PartialEq)]
@@ -189,7 +189,12 @@ pub fn maximum_weight_forest_with_executor(
     graph: &Laplacian,
     executor: &ParallelExecutor,
 ) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
-    if !executor.should_parallel(graph.edge_count().saturating_mul(2)) {
+    let directed_entries = graph.edge_count().saturating_mul(2);
+    let density_floor = graph.vertex_count().saturating_mul(3);
+    if directed_entries < PARALLEL_SETUP_MIN_ITEMS
+        || directed_entries <= density_floor
+        || !executor.should_parallel(directed_entries)
+    {
         return Ok(maximum_weight_forest(graph));
     }
     let csr = CsrLaplacian::from_laplacian(graph)?;

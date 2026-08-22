@@ -2,7 +2,7 @@
 
 use crate::CmgError;
 #[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
+use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -82,7 +82,7 @@ impl Laplacian {
         I: IntoIterator<Item = (usize, usize, f64)>,
     {
         let mut raw = collect_validated_edges(vertex_count, edges)?;
-        if executor.should_parallel(raw.len()) {
+        if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
             executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
         } else {
             raw.sort_by(compare_raw_edges);

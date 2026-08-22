@@ -258,9 +258,12 @@ impl CsrLaplacian {
         let mut best_weight = 0.0;
         match &self.columns {
             ColumnIndices::Compact(columns) => {
-                for index in self.row_offsets[row]..self.row_offsets[row + 1] {
-                    let neighbor = columns[index] as usize;
-                    let weight = self.weights[index];
+                let start = self.row_offsets[row];
+                let end = self.row_offsets[row + 1];
+                for (&neighbor, &weight) in
+                    columns[start..end].iter().zip(&self.weights[start..end])
+                {
+                    let neighbor = neighbor as usize;
                     if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {
                         best_neighbor = neighbor;
                         best_weight = weight;
@@ -268,9 +271,11 @@ impl CsrLaplacian {
                 }
             }
             ColumnIndices::Native(columns) => {
-                for index in self.row_offsets[row]..self.row_offsets[row + 1] {
-                    let neighbor = columns[index];
-                    let weight = self.weights[index];
+                let start = self.row_offsets[row];
+                let end = self.row_offsets[row + 1];
+                for (&neighbor, &weight) in
+                    columns[start..end].iter().zip(&self.weights[start..end])
+                {
                     if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {
                         best_neighbor = neighbor;
                         best_weight = weight;

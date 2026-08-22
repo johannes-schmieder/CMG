@@ -130,7 +130,7 @@ impl CmgHierarchy {
         Self::build_with_kernels(
             graph,
             options,
-            |current, threshold| build_forest_grouping(current, threshold),
+            build_forest_grouping,
             |aggregation, current| aggregation.contract(current),
         )
     }

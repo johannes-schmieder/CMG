@@ -1,8 +1,8 @@
 //! Deterministic restriction, prolongation, and Galerkin graph contraction.
 
-#[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
 use crate::{CmgError, Laplacian};
+#[cfg(feature = "parallel")]
+use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -130,7 +130,9 @@ impl Aggregation {
         executor: &ParallelExecutor,
     ) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;
-        if !executor.should_parallel(graph.edge_count()) {
+        if graph.edge_count() < PARALLEL_SETUP_MIN_ITEMS
+            || !executor.should_parallel(graph.edge_count())
+        {
             return self.contract(graph);
         }
         let coarse_edges: Vec<(usize, usize, f64)> = executor.install(|| {
