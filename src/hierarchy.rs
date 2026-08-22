@@ -138,14 +138,9 @@ impl CmgHierarchy {
                 break;
             }
 
-            let grouping = build_forest_grouping(
-                &current,
-                options.low_effective_degree_threshold,
-            )?;
-            let aggregation = Aggregation::new(
-                grouping.labels().to_vec(),
-                grouping.aggregate_count(),
-            )?;
+            let grouping = build_forest_grouping(&current, options.low_effective_degree_threshold)?;
+            let aggregation =
+                Aggregation::new(grouping.labels().to_vec(), grouping.aggregate_count())?;
             let coarse_count = aggregation.coarse_dimension();
 
             if coarse_count == 1 {
@@ -159,8 +154,7 @@ impl CmgHierarchy {
                 break;
             }
 
-            cumulative_nonzeros =
-                cumulative_nonzeros.saturating_add(current.matrix_nnz());
+            cumulative_nonzeros = cumulative_nonzeros.saturating_add(current.matrix_nnz());
             if coarse_count >= n.saturating_sub(1) {
                 terminal_reason = TerminalReason::StagnatedVertexReduction;
                 levels.push(make_level(

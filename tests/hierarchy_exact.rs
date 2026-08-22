@@ -13,11 +13,7 @@ fn dense_galerkin(graph: &Laplacian, labels: &[usize], coarse_n: usize) -> Vec<V
 
 #[test]
 fn aggregation_restricts_prolongs_and_contracts_exactly() {
-    let graph = Laplacian::from_edges(
-        4,
-        [(0, 1, 1.0), (1, 2, 2.0), (2, 3, 3.0)],
-    )
-    .unwrap();
+    let graph = Laplacian::from_edges(4, [(0, 1, 1.0), (1, 2, 2.0), (2, 3, 3.0)]).unwrap();
     let aggregation = Aggregation::new(vec![0, 0, 1, 1], 2).unwrap();
     assert_eq!(aggregation.sizes(), [2, 2]);
     assert_eq!(
@@ -30,10 +26,7 @@ fn aggregation_restricts_prolongs_and_contracts_exactly() {
     );
 
     let coarse = aggregation.contract(&graph).unwrap();
-    assert_eq!(
-        coarse.to_dense(),
-        vec![vec![2.0, -2.0], vec![-2.0, 2.0]]
-    );
+    assert_eq!(coarse.to_dense(), vec![vec![2.0, -2.0], vec![-2.0, 2.0]]);
     assert_eq!(
         coarse.to_dense(),
         dense_galerkin(&graph, aggregation.labels(), 2)
@@ -45,10 +38,7 @@ fn small_graph_uses_direct_terminal() {
     let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 1.0)]).unwrap();
     let hierarchy = CmgHierarchy::build(&graph, CmgOptions::default()).unwrap();
     assert_eq!(hierarchy.levels().len(), 1);
-    assert_eq!(
-        hierarchy.report().terminal_reason(),
-        TerminalReason::Direct
-    );
+    assert_eq!(hierarchy.report().terminal_reason(), TerminalReason::Direct);
     assert!(!hierarchy.report().terminal_reason().is_iterative());
 }
 
@@ -89,8 +79,7 @@ fn equal_weight_clique_hits_upstream_vertex_stagnation_guard() {
 
 #[test]
 fn forced_multilevel_path_strictly_reduces_nonterminal_levels() {
-    let graph = Laplacian::from_edges(24, (0..23).map(|vertex| (vertex, vertex + 1, 1.0)))
-        .unwrap();
+    let graph = Laplacian::from_edges(24, (0..23).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
     let options = CmgOptions {
         direct_threshold: 2,
         ..CmgOptions::default()
@@ -107,8 +96,7 @@ fn forced_multilevel_path_strictly_reduces_nonterminal_levels() {
 
 #[test]
 fn fill_and_level_safety_guards_are_reported() {
-    let graph = Laplacian::from_edges(24, (0..23).map(|vertex| (vertex, vertex + 1, 1.0)))
-        .unwrap();
+    let graph = Laplacian::from_edges(24, (0..23).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
     let fill_options = CmgOptions {
         direct_threshold: 1,
         max_hierarchy_nnz_factor: 0.5,

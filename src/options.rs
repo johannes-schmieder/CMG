@@ -71,10 +71,7 @@ impl CmgOptions {
                 value: 0.0,
             });
         }
-        validate_positive(
-            "max_hierarchy_nnz_factor",
-            self.max_hierarchy_nnz_factor,
-        )?;
+        validate_positive("max_hierarchy_nnz_factor", self.max_hierarchy_nnz_factor)?;
         if !self.low_effective_degree_threshold.is_finite()
             || !(0.0..=1.0).contains(&self.low_effective_degree_threshold)
         {
