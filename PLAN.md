@@ -28,10 +28,10 @@ intentional interface or numerical deviations.
 - [x] deterministic edge canonicalization and duplicate aggregation;
 - [x] connected components and Laplacian null-space compatibility checks;
 - [x] exact SDDM-to-Laplacian augmentation and solution extraction;
-- [ ] maximum-weight incident-edge forest construction;
-- [ ] faithful forest diameter/conductance splitting;
-- [ ] low-effective-degree forest correction;
-- [ ] deterministic forest-component labeling;
+- [x] maximum-weight incident-edge forest construction;
+- [x] faithful forest diameter/conductance splitting;
+- [x] low-effective-degree forest correction;
+- [x] deterministic forest-component labeling;
 - [ ] exact Galerkin coarse-graph contraction;
 - [ ] upstream hierarchy terminal and stagnation rules;
 - [ ] upstream nonzero-ratio recursive repeat schedule;
@@ -82,9 +82,9 @@ stationary reference port is qualified.
 | Phase | Status | Gate |
 |---|---|---|
 | 0. Contract, provenance, CI | **complete** | Cross-platform quality/test checkpoint green |
-| 1. Graph and SDDM core | **implemented; final CI pending** | Dense assembly, energy, exact augmentation, and component tests pass |
-| 2. Forest decomposition | **in progress locally** | Golden parent/split/component tests pass |
-| 3. Coarse graphs and hierarchy | not started | Dense `R L R^T` and hierarchy-digest tests pass |
+| 1. Graph and SDDM core | **complete** | Dense assembly, energy, exact augmentation, and component tests green |
+| 2. Forest decomposition | **implemented; final quality CI pending** | Golden parent/split/component tests green on three OSes |
+| 3. Coarse graphs and hierarchy | **in progress locally** | Dense `R L R^T` and hierarchy-digest tests pass |
 | 4. Terminal LDL^T | not started | Dense-reference solution and residual tests pass |
 | 5. CMG cycle | not started | Linearity, symmetry, positivity, and recursion tests pass |
 | 6. PCG and batching | not started | Certified end-to-end small solves pass |
@@ -102,7 +102,10 @@ The current code provides:
 - component-wise compatibility validation and centering;
 - dense and sparse SDDM validation with typed errors;
 - exact extra-vertex augmentation for every positive dominance excess;
-- right-hand-side lifting and gauge-invariant SDDM solution extraction.
+- right-hand-side lifting and gauge-invariant SDDM solution extraction;
+- deterministic maximum-weight incident-edge selection with explicit tie rules;
+- a line-by-line Rust port of the pinned C forest diameter/conductance splitter;
+- upstream low-effective-degree correction and deterministic aggregate labels.
 
 The exact augmentation intentionally improves on the MATLAB wrapper's numerical
 `1e-13` classification: a small but positive row-sum excess is not discarded or
@@ -115,18 +118,20 @@ grids, barbells, lollipops, bipartite worker-firm graphs, disjoint unions, and
 isolated vertices. Tests construct compatible right-hand sides as `b = A x_star`
 and verify freshly recomputed original-system residuals.
 
-Required invariants include:
+Current exact tests include:
 
-- `x^T L x = sum_e w_e (x_u - x_v)^2`;
-- exact agreement between edge and dense assembly;
-- exact SDDM augmentation and extraction;
-- exact Galerkin contraction;
-- component-wise zero-sum residual compatibility;
-- preconditioner linearity and numerical symmetry;
-- positive quadratic form on the quotient space;
-- deterministic output under edge permutation and duplicate-edge splitting;
-- equality of individual and batched applications;
-- no hidden ridge regularization or tolerance relaxation.
+- graph dense assembly, matvec, energy, duplicate and permutation invariance;
+- disconnected components, singleton handling and RHS compatibility;
+- exact SDDM augmentation, lifting and gauge-invariant extraction;
+- heavy-edge tie behavior;
+- a pinned-C-kernel long-path forest split vector;
+- deterministic forest component labels;
+- low-effective-degree behavior on an equal-weight clique;
+- isolated-vertex forest grouping.
+
+Remaining invariants include exact Galerkin contraction, preconditioner
+linearity/symmetry/positivity, batch equality, and end-to-end residual
+certification.
 
 ## 8. Intentional differences from the MATLAB interface
 
@@ -151,11 +156,12 @@ upstream implementation unless a deviation is recorded here.
 | 2026-08-22 | Develop on `main` with checkpoint commits | Recoverability if the thread ends |
 | 2026-08-22 | Deterministic, single-threaded first | Correctness before parallel optimization |
 | 2026-08-22 | Augment every positive SDDM excess | Preserve the supplied matrix exactly |
+| 2026-08-22 | Lowest-neighbor heavy-edge tie rule | Stable behavior matching sparse index order |
 
 ## 10. Current risks and open defects
 
-- Phase-1 SDDM CI has not yet produced its final checkpoint report; earlier
-  component commits caused expected cancellation of superseded runs.
+- The formatted forest checkpoint still needs a human-authored trigger commit
+  because GitHub suppresses recursive workflow runs from its formatting bot.
 - The upstream hierarchy can stagnate on dense graphs. The Rust port will
   preserve its iterative terminal fallback and report it explicitly.
 - The terminal LDL^T implementation is intentionally simple and may be costly
@@ -168,12 +174,13 @@ upstream implementation unless a deviation is recorded here.
 | Checkpoint | Commit | CI | Notes |
 |---|---|---|---|
 | Phase 0 quality harness | `bb5d56e` | green | format, Clippy, docs, debug/release tests and builds on three OSes |
-| Graph foundation | `cfd4d073` | tests green; initial format failure fixed | deterministic graph, components, energy and dense oracle |
-| Graph rustfmt | `e1a7c309` | superseded | automatic formatting checkpoint |
-| Exact SDDM layer | `8c5f710b`–`9fa8af0b` | running | validation, augmentation, extraction, focused tests |
+| Graph foundation | `cfd4d073` | green after rustfmt | deterministic graph, components, energy and dense oracle |
+| Exact SDDM layer | `8c5f710b`–`9fa8af0b` | green | exact augmentation and focused tests on three OSes |
+| Forest decomposition | `a5b80c9b` | tests green; quality rerun triggered | heavy-edge, split kernel, low-degree correction, labels |
+| Forest rustfmt | `13a076ea` | pending | automatic formatting checkpoint |
 
 ## 12. Current next action
 
-Obtain the final phase-1 CI result, repair any Clippy/documentation defect, then
-commit the faithful heavy-edge forest and `split_forest_` port with golden small
-parent-vector tests.
+Inspect the formatted forest quality run and repair any Clippy/documentation
+finding. Then implement deterministic Galerkin contraction and hierarchy level
+construction with dense `R L R^T` equality tests.
