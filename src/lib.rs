@@ -16,6 +16,7 @@ mod graph;
 mod hierarchy;
 mod ldl;
 mod options;
+mod pcg;
 mod preconditioner;
 mod sddm;
 mod workspace;
@@ -29,7 +30,10 @@ pub use forest::{
 pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
 pub use ldl::GroundedLdl;
-pub use options::{CmgOptions, ValidationOptions};
+pub use options::{CmgOptions, PcgOptions, ValidationOptions};
+pub use pcg::{
+    PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_with_workspace,
+};
 pub use preconditioner::CmgPreconditioner;
 pub use sddm::{SddmAugmentation, SddmMatrix};
 pub use workspace::CmgWorkspace;

@@ -84,6 +84,62 @@ impl CmgOptions {
     }
 }
 
+/// Options for certified preconditioned conjugate gradients.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PcgOptions {
+    /// Relative backward-residual tolerance.
+    pub relative_tolerance: f64,
+    /// Absolute Euclidean residual tolerance.
+    pub absolute_tolerance: f64,
+    /// Maximum PCG iterations.
+    pub max_iterations: usize,
+    /// Iteration interval for a fresh original-system residual and direction
+    /// restart. Candidate convergence is always verified immediately.
+    pub residual_recompute_interval: usize,
+    /// Validation tolerances for quotient-space compatibility.
+    pub validation: ValidationOptions,
+}
+
+impl Default for PcgOptions {
+    fn default() -> Self {
+        Self {
+            relative_tolerance: 1.0e-8,
+            absolute_tolerance: 0.0,
+            max_iterations: 1_000,
+            residual_recompute_interval: 25,
+            validation: ValidationOptions::default(),
+        }
+    }
+}
+
+impl PcgOptions {
+    /// Validate all PCG options.
+    pub fn validate(self) -> Result<Self, CmgError> {
+        validate_nonnegative("relative_tolerance", self.relative_tolerance)?;
+        validate_nonnegative("absolute_tolerance", self.absolute_tolerance)?;
+        if self.relative_tolerance == 0.0 && self.absolute_tolerance == 0.0 {
+            return Err(CmgError::InvalidOption {
+                name: "pcg_tolerances",
+                value: 0.0,
+            });
+        }
+        if self.max_iterations == 0 {
+            return Err(CmgError::InvalidOption {
+                name: "max_iterations",
+                value: 0.0,
+            });
+        }
+        if self.residual_recompute_interval == 0 {
+            return Err(CmgError::InvalidOption {
+                name: "residual_recompute_interval",
+                value: 0.0,
+            });
+        }
+        self.validation.validate()?;
+        Ok(self)
+    }
+}
+
 fn validate_nonnegative(name: &'static str, value: f64) -> Result<(), CmgError> {
     if value.is_finite() && value >= 0.0 {
         Ok(())

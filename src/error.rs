@@ -102,6 +102,33 @@ pub enum CmgError {
         /// Description of the violated invariant.
         context: &'static str,
     },
+    /// PCG encountered a nonpositive or non-finite scalar.
+    PcgBreakdown {
+        /// One-based iteration number, or zero for initialization.
+        iteration: usize,
+        /// Scalar or operation that failed.
+        quantity: &'static str,
+        /// Invalid value.
+        value: f64,
+    },
+    /// PCG exhausted its iteration budget without a certified solution.
+    MaximumIterations {
+        /// Number of completed iterations.
+        iterations: usize,
+        /// Fresh original-system residual norm.
+        residual_norm: f64,
+        /// Required residual tolerance.
+        tolerance: f64,
+    },
+    /// A candidate convergence decision failed a fresh residual certificate.
+    ResidualVerificationFailed {
+        /// Iteration at which verification failed.
+        iteration: usize,
+        /// Fresh original-system residual norm.
+        residual_norm: f64,
+        /// Required residual tolerance.
+        tolerance: f64,
+    },
     /// An option was non-finite or outside its allowed range.
     InvalidOption {
         /// Option name.
@@ -191,6 +218,30 @@ impl fmt::Display for CmgError {
             Self::InvalidHierarchy { context } => {
                 write!(formatter, "invalid CMG hierarchy: {context}")
             }
+            Self::PcgBreakdown {
+                iteration,
+                quantity,
+                value,
+            } => write!(
+                formatter,
+                "PCG breakdown at iteration {iteration}: {quantity} = {value}"
+            ),
+            Self::MaximumIterations {
+                iterations,
+                residual_norm,
+                tolerance,
+            } => write!(
+                formatter,
+                "PCG did not converge in {iterations} iterations: residual {residual_norm}, tolerance {tolerance}"
+            ),
+            Self::ResidualVerificationFailed {
+                iteration,
+                residual_norm,
+                tolerance,
+            } => write!(
+                formatter,
+                "PCG residual verification failed at iteration {iteration}: residual {residual_norm}, tolerance {tolerance}"
+            ),
             Self::InvalidOption { name, value } => {
                 write!(formatter, "option {name} has invalid value {value}")
             }
