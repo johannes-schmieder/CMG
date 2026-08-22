@@ -72,13 +72,14 @@ pub fn build_forest_grouping(
     let split_parent = split_forest(&heavy_parent)?;
     let mut final_parent = split_parent.clone();
 
-    let has_low_effective_degree = graph
-        .diagonal()
-        .iter()
-        .zip(&selected_weight)
-        .any(|(degree, weight)| {
-            *degree > 0.0 && *weight / *degree < low_effective_degree_threshold
-        });
+    let has_low_effective_degree =
+        graph
+            .diagonal()
+            .iter()
+            .zip(&selected_weight)
+            .any(|(degree, weight)| {
+                *degree > 0.0 && *weight / *degree < low_effective_degree_threshold
+            });
 
     if has_low_effective_degree {
         let mut selected_incident_weight = vec![0.0; graph.vertex_count()];
@@ -239,10 +240,7 @@ pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
                 if next == current || next == previous {
                     break;
                 }
-                if !cut_mode
-                    && ancestors[current] > 2
-                    && ancestors[next] - ancestors[current] > 2
-                {
+                if !cut_mode && ancestors[current] > 2 && ancestors[next] - ancestors[current] > 2 {
                     forest[current] = current;
                     indegree[next] = indegree[next]
                         .checked_sub(1)

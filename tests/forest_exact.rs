@@ -1,5 +1,5 @@
 use cmg::{
-    build_forest_grouping, forest_components, maximum_weight_forest, split_forest, Laplacian,
+    Laplacian, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };
 
 #[test]
