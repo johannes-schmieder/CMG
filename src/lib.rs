@@ -14,6 +14,7 @@ mod error;
 mod forest;
 mod graph;
 mod hierarchy;
+mod ldl;
 mod options;
 mod sddm;
 
@@ -25,6 +26,7 @@ pub use forest::{
 };
 pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
+pub use ldl::GroundedLdl;
 pub use options::{CmgOptions, ValidationOptions};
 pub use sddm::{SddmAugmentation, SddmMatrix};
 

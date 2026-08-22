@@ -90,6 +90,13 @@ pub enum CmgError {
         /// Allowed absolute tolerance for that component.
         tolerance: f64,
     },
+    /// A grounded LDL factorization encountered a nonpositive pivot.
+    NonPositivePivot {
+        /// Original graph vertex associated with the pivot.
+        vertex: usize,
+        /// Nonpositive or non-finite pivot value.
+        value: f64,
+    },
     /// An option was non-finite or outside its allowed range.
     InvalidOption {
         /// Option name.
@@ -171,6 +178,10 @@ impl fmt::Display for CmgError {
             } => write!(
                 formatter,
                 "right-hand side is incompatible on component {component}: sum {sum}, tolerance {tolerance}"
+            ),
+            Self::NonPositivePivot { vertex, value } => write!(
+                formatter,
+                "grounded LDL factorization has nonpositive pivot at vertex {vertex}: {value}"
             ),
             Self::InvalidOption { name, value } => {
                 write!(formatter, "option {name} has invalid value {value}")
