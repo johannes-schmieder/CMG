@@ -1,0 +1,4 @@
+# The private PCG result-construction helper passes one cohesive set of
+# diagnostics. Keeping the fields explicit is clearer than hiding them behind
+# a second internal builder type.
+too-many-arguments-threshold = 8
