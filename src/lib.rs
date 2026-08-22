@@ -16,7 +16,9 @@ mod graph;
 mod hierarchy;
 mod ldl;
 mod options;
+mod preconditioner;
 mod sddm;
+mod workspace;
 
 pub use coarsen::Aggregation;
 pub use components::Components;
@@ -28,7 +30,9 @@ pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
 pub use ldl::GroundedLdl;
 pub use options::{CmgOptions, ValidationOptions};
+pub use preconditioner::CmgPreconditioner;
 pub use sddm::{SddmAugmentation, SddmMatrix};
+pub use workspace::CmgWorkspace;
 
 /// Return the pinned upstream CMG commit used as the behavioral reference.
 #[must_use]

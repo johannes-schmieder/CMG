@@ -51,30 +51,57 @@ impl Aggregation {
 
     /// Restrict by summing fine values within every aggregate.
     pub fn restrict(&self, fine: &[f64]) -> Result<Vec<f64>, CmgError> {
+        let mut coarse = vec![0.0; self.coarse_dimension()];
+        self.restrict_into(fine, &mut coarse)?;
+        Ok(coarse)
+    }
+
+    /// Restrict into caller-owned storage.
+    pub fn restrict_into(&self, fine: &[f64], coarse: &mut [f64]) -> Result<(), CmgError> {
         if fine.len() != self.fine_dimension() {
             return Err(CmgError::dimension(
-                "Aggregation::restrict",
+                "Aggregation::restrict fine",
                 self.fine_dimension(),
                 fine.len(),
             ));
         }
-        let mut coarse = vec![0.0; self.coarse_dimension()];
-        for (&value, &label) in fine.iter().zip(&self.labels) {
-            coarse[label] += value;
-        }
-        Ok(coarse)
-    }
-
-    /// Prolong by copying each coarse value to its fine aggregate members.
-    pub fn prolong(&self, coarse: &[f64]) -> Result<Vec<f64>, CmgError> {
         if coarse.len() != self.coarse_dimension() {
             return Err(CmgError::dimension(
-                "Aggregation::prolong",
+                "Aggregation::restrict coarse",
                 self.coarse_dimension(),
                 coarse.len(),
             ));
         }
-        Ok(self.labels.iter().map(|&label| coarse[label]).collect())
+        coarse.fill(0.0);
+        for (&value, &label) in fine.iter().zip(&self.labels) {
+            coarse[label] += value;
+        }
+        Ok(())
+    }
+
+    /// Prolong by copying each coarse value to its fine aggregate members.
+    pub fn prolong(&self, coarse: &[f64]) -> Result<Vec<f64>, CmgError> {
+        let mut fine = vec![0.0; self.fine_dimension()];
+        self.prolong_into(coarse, &mut fine)?;
+        Ok(fine)
+    }
+
+    /// Prolong into caller-owned storage.
+    pub fn prolong_into(&self, coarse: &[f64], fine: &mut [f64]) -> Result<(), CmgError> {
+        validate_prolong_dimensions(self, coarse, fine)?;
+        for (value, &label) in fine.iter_mut().zip(&self.labels) {
+            *value = coarse[label];
+        }
+        Ok(())
+    }
+
+    /// Add a prolonged coarse vector to a fine vector in place.
+    pub fn prolong_add_into(&self, coarse: &[f64], fine: &mut [f64]) -> Result<(), CmgError> {
+        validate_prolong_dimensions(self, coarse, fine)?;
+        for (value, &label) in fine.iter_mut().zip(&self.labels) {
+            *value += coarse[label];
+        }
+        Ok(())
     }
 
     /// Form the exact graph Laplacian `R L R^T`.
@@ -93,4 +120,26 @@ impl Aggregation {
         });
         Laplacian::from_edges(self.coarse_dimension(), coarse_edges)
     }
+}
+
+fn validate_prolong_dimensions(
+    aggregation: &Aggregation,
+    coarse: &[f64],
+    fine: &[f64],
+) -> Result<(), CmgError> {
+    if coarse.len() != aggregation.coarse_dimension() {
+        return Err(CmgError::dimension(
+            "Aggregation::prolong coarse",
+            aggregation.coarse_dimension(),
+            coarse.len(),
+        ));
+    }
+    if fine.len() != aggregation.fine_dimension() {
+        return Err(CmgError::dimension(
+            "Aggregation::prolong fine",
+            aggregation.fine_dimension(),
+            fine.len(),
+        ));
+    }
+    Ok(())
 }

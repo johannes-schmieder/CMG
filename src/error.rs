@@ -97,6 +97,11 @@ pub enum CmgError {
         /// Nonpositive or non-finite pivot value.
         value: f64,
     },
+    /// A constructed hierarchy violated an internal structural invariant.
+    InvalidHierarchy {
+        /// Description of the violated invariant.
+        context: &'static str,
+    },
     /// An option was non-finite or outside its allowed range.
     InvalidOption {
         /// Option name.
@@ -183,6 +188,9 @@ impl fmt::Display for CmgError {
                 formatter,
                 "grounded LDL factorization has nonpositive pivot at vertex {vertex}: {value}"
             ),
+            Self::InvalidHierarchy { context } => {
+                write!(formatter, "invalid CMG hierarchy: {context}")
+            }
             Self::InvalidOption { name, value } => {
                 write!(formatter, "option {name} has invalid value {value}")
             }

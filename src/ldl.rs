@@ -59,8 +59,8 @@ impl GroundedLdl {
 
         let mut lower = vec![vec![0.0; dimension]; dimension];
         let mut diagonal = vec![0.0; dimension];
-        for row in 0..dimension {
-            lower[row][row] = 1.0;
+        for (row, values) in lower.iter_mut().enumerate() {
+            values[row] = 1.0;
         }
 
         for column in 0..dimension {
@@ -157,34 +157,79 @@ impl GroundedLdl {
             ));
         }
         self.components.validate_rhs(rhs, options)?;
+        let mut solution = vec![0.0; self.vertex_count];
+        let mut forward = vec![0.0; self.active_dimension()];
+        let mut factor_solution = vec![0.0; self.active_dimension()];
+        self.solve_into_compatible(
+            rhs,
+            &mut solution,
+            &mut forward,
+            &mut factor_solution,
+        )?;
+        Ok(solution)
+    }
 
+    pub(crate) fn solve_into_compatible(
+        &self,
+        rhs: &[f64],
+        solution: &mut [f64],
+        forward: &mut [f64],
+        factor_solution: &mut [f64],
+    ) -> Result<(), CmgError> {
+        if rhs.len() != self.vertex_count {
+            return Err(CmgError::dimension(
+                "GroundedLdl::solve_into rhs",
+                self.vertex_count,
+                rhs.len(),
+            ));
+        }
+        if solution.len() != self.vertex_count {
+            return Err(CmgError::dimension(
+                "GroundedLdl::solve_into solution",
+                self.vertex_count,
+                solution.len(),
+            ));
+        }
         let dimension = self.active_dimension();
-        let mut forward = vec![0.0; dimension];
-        for row in 0..dimension {
-            let mut value = rhs[self.permutation[row]];
-            for column in 0..row {
-                value -= self.lower[row][column] * forward[column];
-            }
-            forward[row] = value;
+        if forward.len() != dimension {
+            return Err(CmgError::dimension(
+                "GroundedLdl::solve_into forward",
+                dimension,
+                forward.len(),
+            ));
+        }
+        if factor_solution.len() != dimension {
+            return Err(CmgError::dimension(
+                "GroundedLdl::solve_into factor solution",
+                dimension,
+                factor_solution.len(),
+            ));
         }
 
+        for row in 0..dimension {
+            let correction: f64 = self.lower[row][..row]
+                .iter()
+                .zip(&forward[..row])
+                .map(|(lower_value, previous)| lower_value * previous)
+                .sum();
+            forward[row] = rhs[self.permutation[row]] - correction;
+        }
         for (value, pivot) in forward.iter_mut().zip(&self.diagonal) {
             *value /= *pivot;
         }
-
-        let mut factor_solution = vec![0.0; dimension];
         for row in (0..dimension).rev() {
-            let mut value = forward[row];
-            for column in (row + 1)..dimension {
-                value -= self.lower[column][row] * factor_solution[column];
-            }
-            factor_solution[row] = value;
+            let correction: f64 = self.lower[(row + 1)..]
+                .iter()
+                .zip(&factor_solution[(row + 1)..])
+                .map(|(lower_row, later_solution)| lower_row[row] * later_solution)
+                .sum();
+            factor_solution[row] = forward[row] - correction;
         }
 
-        let mut solution = vec![0.0; self.vertex_count];
+        solution.fill(0.0);
         for (factor_index, &vertex) in self.permutation.iter().enumerate() {
             solution[vertex] = factor_solution[factor_index];
         }
-        Ok(solution)
+        Ok(())
     }
 }
