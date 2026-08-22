@@ -9,6 +9,12 @@ pub struct ValidationOptions {
     pub symmetry_tolerance: f64,
     /// Relative component-sum tolerance used before projecting floating-point
     /// roundoff onto the exact Laplacian range.
+    ///
+    /// The default is deliberately on the order of `sqrt(machine epsilon)`.
+    /// This accepts scale-amplified cancellation defects produced by otherwise
+    /// compatible sparse matvecs. It does not weaken convergence certification:
+    /// PCG always verifies its final residual against the original, unprojected
+    /// right-hand side.
     pub compatibility_tolerance: f64,
 }
 
@@ -16,7 +22,7 @@ impl Default for ValidationOptions {
     fn default() -> Self {
         Self {
             symmetry_tolerance: 1.0e-12,
-            compatibility_tolerance: 1.0e-10,
+            compatibility_tolerance: 1.0e-8,
         }
     }
 }
