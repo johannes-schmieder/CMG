@@ -1,0 +1,51 @@
+name: Apply numerical hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/apply_numeric_hardening.py'
+      - '.github/workflows/apply-numeric-hardening.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply audited multi-file patch
+        run: python3 scripts/apply_numeric_hardening.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test debug
+        run: cargo test --all-targets
+
+      - name: Test release
+        run: cargo test --all-targets --release
+
+      - name: Commit qualified patch and remove one-shot machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/apply_numeric_hardening.py
+          rm .github/workflows/apply-numeric-hardening.yml
+          rmdir scripts 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'solver: reject non-finite derived numerical values'
+          git pull --rebase origin main
+          git push origin HEAD:main
