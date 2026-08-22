@@ -56,10 +56,12 @@ impl HierarchyLevel {
         self.aggregation.as_ref()
     }
 
-    /// Return the provisional recursive repeat count.
+    /// Return the recursive repeat count.
     ///
-    /// The final level preceding a direct terminal is recalibrated after the
-    /// terminal LDL factorization is available.
+    /// A hierarchy built by [`CmgHierarchy::build`] initially carries the
+    /// nonzero-ratio estimate. When the hierarchy is owned by a complete CMG
+    /// preconditioner, the level preceding a direct terminal is recalibrated
+    /// from the grounded LDL factor exactly as in upstream CMG.
     #[must_use]
     pub const fn repeat(&self) -> usize {
         self.repeat
@@ -220,6 +222,26 @@ impl CmgHierarchy {
     #[must_use]
     pub const fn report(&self) -> &HierarchyBuildReport {
         &self.report
+    }
+
+    pub(crate) fn set_repeat(
+        &mut self,
+        level_index: usize,
+        repeat: usize,
+    ) -> Result<(), CmgError> {
+        let level = self
+            .levels
+            .get_mut(level_index)
+            .ok_or(CmgError::InvalidHierarchy {
+                context: "repeat update references a missing hierarchy level",
+            })?;
+        if level.is_terminal() || repeat == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "repeat update must target a nonterminal level with a positive count",
+            });
+        }
+        level.repeat = repeat;
+        Ok(())
     }
 }
 
