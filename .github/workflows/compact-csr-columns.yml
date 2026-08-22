@@ -1,0 +1,316 @@
+name: Compact CSR columns
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-csr-columns.yml'
+      - 'scripts/compact_csr_columns.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Run conditional compact CSR qualification
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import re
+          import statistics
+          import subprocess
+
+          root = Path.cwd()
+          feasibility = json.loads(
+              Path('.ci/performance/compact-csr-feasibility.json').read_text()
+          )
+          selected = feasibility.get('selected')
+          source_path = Path(selected['path']) if selected else None
+          baseline_source = source_path.read_text() if source_path else None
+          baseline_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+
+          def run(command, *, env=None, timeout=5400, check=True):
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  env=env,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=timeout,
+              )
+              print(completed.stdout, end='')
+              if check and completed.returncode != 0:
+                  raise RuntimeError(
+                      f"command failed ({completed.returncode}): {' '.join(command)}"
+                  )
+              return completed
+
+          def build(target):
+              env = os.environ.copy()
+              env['CARGO_TARGET_DIR'] = str(target)
+              for binary in ('hierarchy-build', 'cmg-bench'):
+                  run([
+                      'cargo', 'build', '--release',
+                      '--manifest-path', 'benchmarks/Cargo.toml',
+                      '--bin', binary,
+                  ], env=env)
+              return {
+                  name: target / 'release' / name
+                  for name in ('hierarchy-build', 'cmg-bench')
+              }
+
+          def timed(binary, arguments, tag, env=None):
+              time_path = Path(f'/tmp/cmg-csr-{tag}.time')
+              completed = run([
+                  '/usr/bin/time', '-v', '-o', str(time_path),
+                  str(binary), *[str(value) for value in arguments],
+              ], env=env)
+              timing = time_path.read_text()
+              rss = re.search(
+                  r'Maximum resident set size \(kbytes\):\s*(\d+)', timing
+              )
+              elapsed = re.search(
+                  r'Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*(.+)',
+                  timing,
+              )
+              payloads = [
+                  json.loads(line)
+                  for line in completed.stdout.splitlines()
+                  if line.strip().startswith('{')
+              ]
+              return {
+                  'peak_rss_kib': int(rss.group(1)) if rss else None,
+                  'elapsed_text': elapsed.group(1).strip() if elapsed else None,
+                  'payloads': payloads,
+                  'stdout_tail': completed.stdout[-12000:],
+              }
+
+          result = {
+              'schema_version': 1,
+              'experiment': 'compact-csr-column-indices-u32',
+              'baseline_sha': baseline_sha,
+              'selected': selected,
+              'accepted': False,
+              'validation': 'not_run',
+              'decision_reason': '',
+              'cases': {},
+          }
+
+          try:
+              if not feasibility.get('feasible_for_mechanical_experiment'):
+                  result['validation'] = 'skipped'
+                  result['decision_reason'] = feasibility.get(
+                      'reason', 'feasibility gate was false'
+                  )
+              else:
+                  baseline = build(Path('/tmp/cmg-csr-baseline'))
+                  run(['python', 'scripts/compact_csr_columns.py'])
+                  run(['cargo', 'fmt', '--all'])
+                  run(['cargo', 'fmt', '--all', '--', '--check'])
+                  run([
+                      'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                      '--all', '--', '--check',
+                  ])
+                  run([
+                      'cargo', 'clippy', '--all-targets', '--all-features',
+                      '--', '-D', 'warnings',
+                  ])
+                  run([
+                      'cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml',
+                      '--all-targets', '--', '-D', 'warnings',
+                  ])
+                  doc_env = os.environ.copy()
+                  doc_env['RUSTDOCFLAGS'] = '-D warnings'
+                  run(['cargo', 'doc', '--no-deps'], env=doc_env)
+                  run(['cargo', 'test', '--all-targets'])
+                  run(['cargo', 'test', '--all-targets', '--release'])
+                  run(['cargo', 'build', '--release'])
+                  candidate = build(Path('/tmp/cmg-csr-candidate'))
+                  result['validation'] = 'success'
+
+                  hierarchy_specs = [
+                      ('sparse-3m', ['worker-firm', 1_000_000, 1]),
+                      ('dense-3.2m', ['dense-worker-firm', 200_000, 1]),
+                  ]
+                  time_ratios = []
+                  memory_ratios = []
+                  for name, arguments in hierarchy_specs:
+                      baseline_observations = []
+                      candidate_observations = []
+                      for index, (label, binary) in enumerate((
+                          ('baseline', baseline['hierarchy-build']),
+                          ('candidate', candidate['hierarchy-build']),
+                          ('candidate', candidate['hierarchy-build']),
+                          ('baseline', baseline['hierarchy-build']),
+                      )):
+                          observation = timed(
+                              binary, arguments, f'{name}-{label}-{index}'
+                          )
+                          payloads = observation['payloads']
+                          if len(payloads) != 1:
+                              raise RuntimeError(
+                                  f'unexpected hierarchy output for {name}: {payloads}'
+                              )
+                          observation['median_ns'] = payloads[0]['median_ns']
+                          (baseline_observations if label == 'baseline'
+                           else candidate_observations).append(observation)
+                      baseline_ns = statistics.median(
+                          item['median_ns'] for item in baseline_observations
+                      )
+                      candidate_ns = statistics.median(
+                          item['median_ns'] for item in candidate_observations
+                      )
+                      baseline_rss = max(
+                          item['peak_rss_kib'] for item in baseline_observations
+                      )
+                      candidate_rss = max(
+                          item['peak_rss_kib'] for item in candidate_observations
+                      )
+                      time_ratio = candidate_ns / baseline_ns
+                      memory_ratio = candidate_rss / baseline_rss
+                      time_ratios.append(time_ratio)
+                      memory_ratios.append(memory_ratio)
+                      result['cases'][name] = {
+                          'arguments': arguments,
+                          'baseline_median_ns': baseline_ns,
+                          'candidate_median_ns': candidate_ns,
+                          'candidate_over_baseline_time': time_ratio,
+                          'baseline_peak_rss_kib': baseline_rss,
+                          'candidate_peak_rss_kib': candidate_rss,
+                          'candidate_over_baseline_peak_rss': memory_ratio,
+                      }
+
+                  # Run the existing end-to-end benchmark once per binary as a
+                  # compatibility/performance smoke without assuming its CLI.
+                  bench_env = os.environ.copy()
+                  bench_env['RAYON_NUM_THREADS'] = str(min(os.cpu_count() or 1, 4))
+                  baseline_end = timed(
+                      baseline['cmg-bench'], [], 'end-baseline', bench_env
+                  )
+                  candidate_end = timed(
+                      candidate['cmg-bench'], [], 'end-candidate', bench_env
+                  )
+                  result['end_to_end_smoke'] = {
+                      'baseline_peak_rss_kib': baseline_end['peak_rss_kib'],
+                      'candidate_peak_rss_kib': candidate_end['peak_rss_kib'],
+                      'baseline_stdout_tail': baseline_end['stdout_tail'],
+                      'candidate_stdout_tail': candidate_end['stdout_tail'],
+                  }
+
+                  geometric_time = math.exp(
+                      sum(math.log(value) for value in time_ratios)
+                      / len(time_ratios)
+                  )
+                  best_memory = min(memory_ratios)
+                  worst_memory = max(memory_ratios)
+                  result['geometric_candidate_over_baseline_time'] = geometric_time
+                  result['worst_candidate_over_baseline_time'] = max(time_ratios)
+                  result['best_candidate_over_baseline_peak_rss'] = best_memory
+                  result['worst_candidate_over_baseline_peak_rss'] = worst_memory
+                  result['acceptance_limits'] = {
+                      'geometric_time_ratio_max': 1.04,
+                      'per_case_time_ratio_max': 1.10,
+                      'at_least_one_peak_rss_ratio_max': 0.98,
+                      'worst_peak_rss_ratio_max': 1.02,
+                  }
+                  result['accepted'] = (
+                      geometric_time <= 1.04
+                      and max(time_ratios) <= 1.10
+                      and best_memory <= 0.98
+                      and worst_memory <= 1.02
+                  )
+                  result['decision_reason'] = (
+                      'full qualification passed; large-graph memory improved and setup timing met the gate'
+                      if result['accepted']
+                      else 'qualification passed but large-graph timing or memory missed the gate'
+                  )
+          except Exception as error:
+              result['decision_reason'] = f'experiment failed: {error}'
+              result['error'] = repr(error)
+              print(result['decision_reason'], flush=True)
+
+          if not result['accepted'] and source_path and baseline_source is not None:
+              source_path.write_text(baseline_source)
+              run(['cargo', 'fmt', '--all'], check=False)
+
+          record = Path('.ci/performance/compact-csr-columns-latest.json')
+          record.parent.mkdir(parents=True, exist_ok=True)
+          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if marker not in plan:
+              raise RuntimeError('current-next-action heading missing')
+          status = (
+              'accepted' if result['accepted']
+              else ('skipped' if result['validation'] == 'skipped' else 'not retained')
+          )
+          time_ratio = result.get('geometric_candidate_over_baseline_time')
+          memory_ratio = result.get('best_candidate_over_baseline_peak_rss')
+          evidence = ''
+          if time_ratio is not None and memory_ratio is not None:
+              evidence = (
+                  f' Geometric setup ratio: {time_ratio:.3f}; best peak-RSS '
+                  f'ratio: {memory_ratio:.3f}.'
+              )
+          target = (
+              f"`{selected['struct']}.{selected['field']}`"
+              if selected else 'none'
+          )
+          checkpoint = f'''### Compact CSR column checkpoint — 2026-08-22
+
+- Candidate {target} was **{status}**.{evidence}
+- Qualification status: `{result['validation']}`.
+- Machine-readable evidence:
+  `.ci/performance/compact-csr-columns-latest.json`.
+
+'''
+          if '### Compact CSR column checkpoint — 2026-08-22' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          plan_path.write_text(plan)
+
+          for staging in (
+              'scripts/compact_csr_columns.py',
+              '.github/workflows/compact-csr-columns.yml',
+          ):
+              Path(staging).unlink(missing_ok=True)
+          try:
+              Path('scripts').rmdir()
+          except OSError:
+              pass
+
+          run(['git', 'config', 'user.name', 'github-actions[bot]'])
+          run([
+              'git', 'config', 'user.email',
+              '41898282+github-actions[bot]@users.noreply.github.com',
+          ])
+          run(['git', 'add', '-A'])
+          message = (
+              'perf: compact CSR column indices'
+              if result['accepted']
+              else 'perf: record compact CSR column experiment'
+          )
+          run(['git', 'commit', '-m', message])
+          run(['git', 'pull', '--rebase', 'origin', 'main'])
+          run(['git', 'push', 'origin', 'HEAD:main'])
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/compact-csr-columns-latest.json || true
