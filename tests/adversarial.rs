@@ -34,13 +34,8 @@ fn complete(vertex_count: usize) -> Laplacian {
     Laplacian::from_edges(
         vertex_count,
         (0..vertex_count).flat_map(|left| {
-            ((left + 1)..vertex_count).map(move |right| {
-                (
-                    left,
-                    right,
-                    1.0 + 0.125 * ((left + 3 * right) % 5) as f64,
-                )
-            })
+            ((left + 1)..vertex_count)
+                .map(move |right| (left, right, 1.0 + 0.125 * ((left + 3 * right) % 5) as f64))
         }),
     )
     .unwrap()
@@ -68,11 +63,7 @@ fn lollipop(clique_size: usize, path_size: usize) -> Laplacian {
     }
     edges.push((clique_size - 1, clique_size, 0.25));
     for vertex in clique_size..(clique_size + path_size - 1) {
-        edges.push((
-            vertex,
-            vertex + 1,
-            0.75 + 0.25 * (vertex % 3) as f64,
-        ));
+        edges.push((vertex, vertex + 1, 0.75 + 0.25 * (vertex % 3) as f64));
     }
     Laplacian::from_edges(clique_size + path_size, edges).unwrap()
 }
@@ -83,11 +74,7 @@ fn worker_firm_graph(workers: usize, firms: usize) -> Laplacian {
         let first = worker % firms;
         let second = (worker + 1) % firms;
         edges.push((worker, workers + first, 1.0 + 0.25 * (worker % 4) as f64));
-        edges.push((
-            worker,
-            workers + second,
-            0.5 + 0.125 * (worker % 3) as f64,
-        ));
+        edges.push((worker, workers + second, 0.5 + 0.125 * (worker % 3) as f64));
     }
     Laplacian::from_edges(workers + firms, edges).unwrap()
 }
