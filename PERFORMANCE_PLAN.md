@@ -181,6 +181,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 | 2026-08-22 | direct terminal-factor assembly | Retained after full tests and same-host build timing |
 | 2026-08-22 | in-place edge compaction | Rejected after graph/hierarchy timing and peak-RSS gates |
 
+### Zero-copy forest-label checkpoint — 2026-08-22
+
+- Moving `ForestGrouping.labels` directly into `Aggregation` was **not retained**. Geometric setup ratio: 1.022; geometric peak-RSS ratio: 1.006.
+- Full formatting, Clippy, rustdoc, debug/release tests, and release build status:
+  `success`.
+- Machine-readable evidence:
+  `.ci/performance/forest-label-move-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
