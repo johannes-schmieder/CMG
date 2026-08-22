@@ -77,3 +77,23 @@ fn components_include_isolated_vertices_and_center_deterministically() {
     components.center_in_place(&mut values).unwrap();
     assert_eq!(values, [2.0, 0.0, -2.0, -3.0, 3.0, 0.0]);
 }
+
+#[test]
+fn projection_accepts_roundoff_but_rejects_material_nullspace_mass() {
+    let graph = Laplacian::from_edges(4, [(0, 1, 1.0), (1, 2, 1.0), (2, 3, 1.0)]).unwrap();
+    let components = Components::from_laplacian(&graph);
+    let options = ValidationOptions::default();
+
+    let mut roundoff = [1.0e9, -1.0e9, 1.0e-7, 0.0];
+    let projection_norm = components
+        .project_rhs_in_place(&mut roundoff, options)
+        .unwrap();
+    assert!(projection_norm > 0.0);
+    assert_eq!(components.sums(&roundoff).unwrap(), vec![0.0]);
+
+    let mut incompatible = [1.0, 0.0, 0.0, 0.0];
+    assert!(matches!(
+        components.project_rhs_in_place(&mut incompatible, options),
+        Err(CmgError::IncompatibleLaplacianRhs { component: 0, .. })
+    ));
+}
