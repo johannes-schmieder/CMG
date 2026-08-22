@@ -1,0 +1,214 @@
+name: Optimize compatible RHS apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/optimize-compatible-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Build and benchmark baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-baseline"
+          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cp "$CARGO_TARGET_DIR/release/cmg-c-kernel-bench" "$RUNNER_TEMP/cmg-compatible-baseline-bin"
+          mkdir -p "$RUNNER_TEMP/compatible-results"
+          for CASE in path worker-firm; do
+            "$RUNNER_TEMP/cmg-compatible-baseline-bin" \
+              --case "$CASE" --vertices 100000 --repetitions 9 \
+              --output "$RUNNER_TEMP/compatible-results/baseline-${CASE}.json"
+          done
+
+      - name: Add compatible-RHS fast path
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/preconditioner.rs')
+          text = path.read_text()
+          anchor = '''    /// Apply with explicit compatibility-validation tolerances.\n'''
+          method = '''    /// Apply a right-hand side already known to be component-compatible.\n    ///\n    /// This skips the fine-level compatibility scan and projection performed by\n    /// [`Self::apply_into`]. It is intended for Krylov solvers that validate and\n    /// project the submitted right-hand side once, then generate residuals in\n    /// the Laplacian range. Dimension and workspace checks remain enabled, and\n    /// recursive roundoff is still projected at coarse levels.\n    pub fn apply_compatible_into(\n        &self,\n        rhs: &[f64],\n        output: &mut [f64],\n        workspace: &mut CmgWorkspace,\n    ) -> Result<(), CmgError> {\n        self.apply_compatible_into_with_validation(\n            rhs,\n            output,\n            workspace,\n            ValidationOptions::default(),\n        )\n    }\n\n    /// Apply an already compatible right-hand side with explicit internal\n    /// validation tolerances.\n    pub fn apply_compatible_into_with_validation(\n        &self,\n        rhs: &[f64],\n        output: &mut [f64],\n        workspace: &mut CmgWorkspace,\n        validation: ValidationOptions,\n    ) -> Result<(), CmgError> {\n        let dimension = self.hierarchy.levels()[0].graph().vertex_count();\n        if rhs.len() != dimension {\n            return Err(CmgError::dimension(\n                "CmgPreconditioner::apply compatible rhs",\n                dimension,\n                rhs.len(),\n            ));\n        }\n        if output.len() != dimension {\n            return Err(CmgError::dimension(\n                "CmgPreconditioner::apply compatible output",\n                dimension,\n                output.len(),\n            ));\n        }\n        workspace.validate(\n            &self.hierarchy,\n            self.direct_terminal.as_ref(),\n            &self.level_components,\n        )?;\n        validation.validate()?;\n        self.apply_level(0, rhs, output, workspace, 1, validation)\n    }\n\n'''
+          if method not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('compatible method insertion anchor changed')
+              text = text.replace(anchor, method + anchor, 1)
+          path.write_text(text)
+
+          path = Path('src/pcg.rs')
+          text = path.read_text()
+          old = '''    preconditioner.apply_into_with_validation(\n        &workspace.residual,\n        &mut workspace.preconditioned,\n        &mut workspace.cmg,\n        options.validation,\n    )?;\n'''
+          new = '''    preconditioner.apply_compatible_into_with_validation(\n        &workspace.residual,\n        &mut workspace.preconditioned,\n        &mut workspace.cmg,\n        options.validation,\n    )?;\n'''
+          if text.count(old) != 2:
+              raise SystemExit(f'expected two PCG preconditioner calls, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+
+          path = Path('benchmarks/c-kernel/src/cycle.rs')
+          text = path.read_text()
+          old = 'preconditioner.apply_into('
+          new = 'preconditioner.apply_compatible_into('
+          count = text.count(old)
+          if count != 3:
+              raise SystemExit(f'expected three cycle apply calls, found {count}')
+          path.write_text(text.replace(old, new))
+
+          path = Path('tests/upstream_cycle.rs')
+          text = path.read_text()
+          old = '''    let production = preconditioner.apply(&rhs).unwrap();\n    let projected_rhs = project_rhs(\n'''
+          new = '''    let production = preconditioner.apply(&rhs).unwrap();\n    let projected_rhs = project_rhs(\n'''
+          if text.count(old) != 1:
+              raise SystemExit('upstream-cycle production anchor changed')
+          text = text.replace(old, new, 1)
+          old = '''    let reference = reference_apply(&preconditioner, 0, &projected_rhs, 1);\n    assert_vector_close(&production, &reference, 1.0e-12);\n'''
+          new = '''    let reference = reference_apply(&preconditioner, 0, &projected_rhs, 1);\n    let mut compatible_workspace = preconditioner.workspace();\n    let mut compatible = vec![0.0; graph.vertex_count()];\n    preconditioner\n        .apply_compatible_into(\n            &projected_rhs,\n            &mut compatible,\n            &mut compatible_workspace,\n        )\n        .unwrap();\n    assert_vector_close(&production, &reference, 1.0e-12);\n    assert_vector_close(&compatible, &reference, 1.0e-12);\n'''
+          if text.count(old) != 1:
+              raise SystemExit('upstream-cycle compatible assertion anchor changed')
+          path.write_text(text.replace(old, new, 1))
+
+      - name: Validate candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo check --lib --no-default-features
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+          cargo test --all-targets --all-features --release
+          RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all
+          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check
+          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets --release
+
+      - name: Build and benchmark candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compatible-candidate"
+          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cp "$CARGO_TARGET_DIR/release/cmg-c-kernel-bench" "$RUNNER_TEMP/cmg-compatible-candidate-bin"
+          for CASE in path worker-firm; do
+            "$RUNNER_TEMP/cmg-compatible-candidate-bin" \
+              --case "$CASE" --vertices 100000 --repetitions 9 \
+              --output "$RUNNER_TEMP/compatible-results/candidate-${CASE}.json"
+          done
+
+      - name: Evaluate same-run result and update plan
+        id: evaluate
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ['RUNNER_TEMP']) / 'compatible-results'
+          ratios = {}
+          records = {}
+          for case in ('path', 'worker-firm'):
+              baseline = json.loads((root / f'baseline-{case}.json').read_text())
+              candidate = json.loads((root / f'candidate-{case}.json').read_text())
+              records[case] = {'baseline': baseline, 'candidate': candidate}
+              ratios[case] = (
+                  candidate['cycle']['rust_median_ns']
+                  / baseline['cycle']['rust_median_ns']
+              )
+              if candidate['cycle']['quotient_max_scaled_error'] > 5.0e-10:
+                  raise SystemExit(f'{case}: candidate no longer agrees with pinned C')
+
+          geometric_mean = math.exp(sum(math.log(value) for value in ratios.values()) / len(ratios))
+          accepted = (
+              max(ratios.values()) <= 1.03
+              and geometric_mean <= 0.99
+              and min(ratios.values()) <= 0.97
+          )
+          tested_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          record = {
+              'schema': 1,
+              'tested_sha': tested_sha,
+              'accepted': accepted,
+              'ratios': ratios,
+              'geometric_mean_ratio': geometric_mean,
+              'records': records,
+          }
+          Path('.ci/performance/compatible-apply-latest.json').write_text(
+              json.dumps(record, indent=2) + '\n'
+          )
+          if accepted:
+              plan = Path('PERFORMANCE_PLAN.md')
+              text = plan.read_text()
+              anchor = (
+                  '- The first complete C-cycle differential test exposed a shifted '
+                  'repeat schedule in the Rust port. Official CMG applies one top-level '
+                  'cycle and uses each level\'s repeat count for its child solve; '
+                  'production Rust, the allocating oracle, and the C adapter now match '
+                  'that convention, and full-cycle quotient-space agreement is checked '
+                  'before timing.\n'
+              )
+              addition = (
+                  '- PCG now uses an explicitly compatible-RHS preconditioner path '
+                  'after its one-time boundary projection, avoiding a repeated '
+                  'fine-level compatibility scan on every Krylov iteration. Public '
+                  '`apply_into` retains full validation and projection. Same-run '
+                  f'full-cycle ratios were path `{ratios["path"]:.3f}x` and '
+                  f'worker–firm `{ratios["worker-firm"]:.3f}x`.\n'
+              )
+              if addition not in text:
+                  if text.count(anchor) != 1:
+                      raise SystemExit('performance-plan compatible anchor changed')
+                  text = text.replace(anchor, anchor + addition, 1)
+              old_hot = '- Single-RHS production PCG still uses the compact serial edge-scatter operator.\n'
+              new_hot = (
+                  '- Single-RHS production PCG still uses the compact serial '
+                  'edge-scatter operator, but no longer repeats the fine-level RHS '
+                  'projection before every preconditioner application.\n'
+              )
+              if old_hot in text:
+                  text = text.replace(old_hot, new_hot, 1)
+              log_anchor = '| 2026-08-22 | corrected recursive schedule | Full pinned-C cycle differential test found and fixed shifted repeat semantics; all debug/release tests and Rust/C cycle comparisons passed |\n'
+              log_entry = '| 2026-08-22 | compatible-RHS fast path | PCG reuses its one-time RHS projection; same-run C-cycle benchmark and full test suite passed |\n'
+              if log_entry not in text:
+                  if text.count(log_anchor) != 1:
+                      raise SystemExit('performance-plan compatible log anchor changed')
+                  text = text.replace(log_anchor, log_anchor + log_entry, 1)
+              plan.write_text(text)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'accepted={str(accepted).lower()}\n')
+
+      - name: Commit accepted optimization or retained experiment
+        shell: bash
+        env:
+          ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/optimize-compatible-apply.yml
+          rm -rf target benchmarks/c-kernel/target
+          rm -f benchmarks/c-kernel/Cargo.lock
+          if [ "$ACCEPTED" != true ]; then
+            git restore src/preconditioner.rs src/pcg.rs tests/upstream_cycle.rs benchmarks/c-kernel/src/cycle.rs PERFORMANCE_PLAN.md
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if [ "$ACCEPTED" = true ]; then
+            git commit -m 'perf: skip repeated fine-level projection in PCG'
+          else
+            git commit -m 'perf: record compatible-RHS fast-path experiment'
+          fi
+          git pull --rebase origin main
+          git push origin HEAD:main
