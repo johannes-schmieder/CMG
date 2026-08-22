@@ -29,12 +29,7 @@ impl SddmSolver {
         let validation = validation.validate()?;
         let augmentation = matrix.augment(validation)?;
         let preconditioner = CmgPreconditioner::build(augmentation.graph(), cmg_options)?;
-        let operator_norm_bound = 2.0
-            * matrix
-                .diagonal()
-                .iter()
-                .copied()
-                .fold(0.0, f64::max);
+        let operator_norm_bound = 2.0 * matrix.diagonal().iter().copied().fold(0.0, f64::max);
         Ok(Self {
             matrix,
             augmentation,
@@ -115,9 +110,7 @@ impl SddmSolver {
             options,
             &mut workspace.pcg,
         )?;
-        let solution = self
-            .augmentation
-            .extract_solution(augmented.solution())?;
+        let solution = self.augmentation.extract_solution(augmented.solution())?;
 
         self.matrix
             .matvec_into(&solution, &mut workspace.original_residual)?;
@@ -129,8 +122,7 @@ impl SddmSolver {
         let solution_norm = euclidean_norm(&solution);
         let residual_norm = euclidean_norm(&workspace.original_residual);
         let tolerance = options.absolute_tolerance
-            + options.relative_tolerance
-                * (rhs_norm + self.operator_norm_bound * solution_norm);
+            + options.relative_tolerance * (rhs_norm + self.operator_norm_bound * solution_norm);
         if residual_norm > tolerance {
             return Err(CmgError::ResidualVerificationFailed {
                 iteration: augmented.iterations(),
