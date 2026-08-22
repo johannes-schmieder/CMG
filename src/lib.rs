@@ -10,6 +10,7 @@
 
 mod coarsen;
 mod components;
+mod csr;
 mod error;
 mod forest;
 mod graph;
@@ -24,6 +25,7 @@ mod workspace;
 
 pub use coarsen::Aggregation;
 pub use components::Components;
+pub use csr::CsrLaplacian;
 pub use error::CmgError;
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,

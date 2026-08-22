@@ -2,102 +2,109 @@
 
 This document is the live recovery and decision log for the performance phase of the Rust CMG port. It is updated at every substantive checkpoint on `main`.
 
-## Baseline
+## Baselines and references
 
-- Correctness-qualified starting commit: `b65ae28a15f00925348046bb474c8133e5128cd0`
-- Benchmark-harness baseline: `b45b252f88925028e3ad9a73a3f75eeab05f6754`
-- Pinned upstream CMG reference: `19752fc102f8cae8e34f66457bfaccb1aaa60375`
-- Baseline implementation: deterministic, single-threaded, canonical edge-list Laplacians, dense grounded terminal LDL, sequential repeated-RHS solves.
-- Performance claims at baseline: none beyond algorithmic equivalence and small-problem correctness.
+- Correctness baseline: `b65ae28a15f00925348046bb474c8133e5128cd0`
+- Frozen benchmark harness and numerical baseline: `b45b252f88925028e3ad9a73a3f75eeab05f6754`
+- Pinned official CMG source: `19752fc102f8cae8e34f66457bfaccb1aaa60375`
+
+The matched benchmark workflow builds the frozen baseline and current candidate with the same Rust toolchain, runs deterministic inputs, uploads raw JSON, and retains the combined record at `.ci/performance/latest.json`. Hosted-runner timings are directional; large-scale and 32-core claims require a larger or self-hosted runner.
 
 ## Goals
 
-1. Reduce total setup and solve time without weakening residual certification.
+1. Reduce setup and solve time without weakening original-system residual certification.
 2. Scale useful work across machines with 1–32 or more logical CPUs.
-3. Keep memory predictable on graphs with very large vertex and edge counts.
-4. Preserve deterministic hierarchy construction and reproducible results.
-5. Support both one very large RHS solve and many RHSs sharing one hierarchy.
-6. Compare optimized Rust hot kernels with the pinned official C kernels where a standalone comparison is possible.
+3. Keep hierarchy and workspace memory predictable on very large graphs.
+4. Preserve deterministic hierarchy construction and reproducible reductions.
+5. Support both one very large solve and many RHSs sharing one hierarchy.
+6. Compare optimized Rust hot kernels with pinned official C kernels where standalone comparison is possible.
 
-## Non-negotiable numerical rules
+## Numerical rules
 
-- The original graph system remains the source of convergence certification.
 - No hidden ridge, tolerance relaxation, graph mutation, or silent solver substitution.
-- Parallel execution must preserve a fixed reduction structure where practical.
 - Every optimization must pass debug and release tests on Linux, macOS, and Windows.
-- Benchmark results are accepted only when the numerical result and hierarchy diagnostics remain valid.
+- Benchmark timing is accepted only when hierarchy diagnostics, iteration counts, and certified results remain valid.
+- Parallel kernels will use row/gather ownership rather than atomics or full output copies per thread.
 
-## Measurement protocol
+## Phase status
 
-The benchmark driver reports input generation, graph construction, hierarchy construction, one CMG application, certified PCG solves, iteration counts, backward error, hierarchy structure, and retained storage. The workflow builds the frozen benchmark baseline and current candidate with the same toolchain and runs both on the same deterministic inputs. It persists the combined record at `.ci/performance/latest.json` and uploads the raw results.
+| Phase | Status | Gate |
+|---|---|---|
+| P0 Measurement | COMPLETE | Matched baseline/candidate JSON is retained after every substantive push |
+| P1 Repeated overhead | COMPLETE | Cached graph lineage/components and persistent component scratch pass full CI |
+| P2 Terminal/workspace memory | COMPLETE | Factor compression and scratch aliasing pass full CI and matched numerical comparison |
+| P3 Frozen CSR | IN VALIDATION | CSR and edge matvec agree on exact graph families; serial crossover is measured |
+| P4 Parallel solve kernels | NOT STARTED | Certified results agree across thread counts |
+| P5 Multi-RHS scheduler | NOT STARTED | Throughput scales within explicit memory budgets |
+| P6 Parallel setup | NOT STARTED | Hierarchy diagnostics are unchanged and setup improves |
+| P7 Pinned C comparison | NOT STARTED | One-thread Rust/C kernels agree numerically and are timed equivalently |
+| P8 Large qualification | NOT STARTED | 1–32-thread scaling and memory ceilings documented |
+| P9 Advanced panel/SIMD/NUMA work | DEFERRED | Only after profiles justify complexity |
 
-Hosted-runner timings are directional evidence rather than stable regression thresholds. Large-scale and 32-core claims require a larger or self-hosted runner.
+## Completed changes
 
-Graph families include paths, grids, bottleneck graphs, heavy-tailed bipartite worker–firm graphs, duplicate edges, heterogeneous weights, and deterministic synthetic random graphs. Target sizes range from 10,000-edge CI smoke tests through 10-million-edge dedicated runs. Shared-hierarchy workloads use 1, 4, 8, 32, and 128 right-hand sides. Thread counts are 1, 2, 4, 8, 16, 32, and higher where hardware permits.
+### P1
 
-## Phases
+- A private lineage token makes the normal cloned-graph compatibility check constant-time while preserving structural fallback for independently rebuilt equal graphs.
+- PCG reuses finest-level component metadata owned by the preconditioner.
+- Component projection and centering use persistent scratch in PCG and at every CMG level.
+- Workspaces expose retained principal heap-byte counts.
 
-| Phase | Status | Scope | Gate |
-|---|---|---|---|
-| P0 Measurement | COMPLETE | Matched benchmark driver, workflow, frozen baseline, retained result, memory reports | Candidate/baseline JSON produced on identical inputs |
-| P1 Remove repeated overhead | COMPLETE | Cache components and graph identity; remove recurring component allocations | Same solutions and iterations on all platforms |
-| P2 Terminal and workspace memory | COMPLETE | Compress terminal traversal; alias same-level matvec/residual scratch; exact byte reports | All debug/release platform tests pass |
-| P3 Frozen CSR operator | NEXT | Deterministic row representation and grouped aggregate/component membership | Serial CSR correctness and measured crossover policy |
-| P4 Parallel solve kernels | NOT STARTED | Package-owned thread pool; parallel matvec, vector updates, restriction, prolongation, reductions | Equivalent certified answers across thread counts |
-| P5 Multi-RHS scheduler | NOT STARTED | Memory-aware concurrency across independent solves | Throughput scaling without uncontrolled memory growth |
-| P6 Parallel setup | NOT STARTED | Parallel canonicalization, contraction, sorting, and heavy-edge selection | Preserved hierarchy diagnostics and faster setup |
-| P7 Pinned C comparison | NOT STARTED | Standalone C microkernels and recursive apply harness | Numerically matched one-thread comparisons |
-| P8 Large qualification | NOT STARTED | 1–32-thread scaling, large worker–firm graphs, memory ceilings | Documented production recommendations |
-| P9 Advanced optimization | DEFERRED | Panel RHS kernels, explicit SIMD, NUMA tuning, alternative CG variants | Only after profiles justify complexity |
+### P2
 
-## Approved architecture
+- Terminal factorization arithmetic, pivots, ordering, and repeat-count denominator remain unchanged.
+- Completed strict-lower factors select packed-triangular or sparse row/column traversal storage by retained-byte cost.
+- Sparse terminal indices use `u32`; dimensions that do not fit use packed storage.
+- One full vector per hierarchy level was removed by aliasing matvec and residual roles.
+- `GroundedLdl`, `CmgWorkspace`, and `PcgWorkspace` report retained bytes.
 
-- Rayon will be optional, with a retained serial build.
-- Parallel execution will use a package-owned custom thread pool.
-- Build-time canonical edges and solve-time deterministic CSR will be separate representations.
-- Parallel kernels will use gather form rather than atomics or thread-local full output vectors.
-- Scheduling across RHSs and within a solve will respect an explicit memory budget.
-- Compact 32-bit internal vertex indices may be used when dimensions permit.
-- Pinned upstream C sources may be vendored only under benchmark/test infrastructure with attribution.
+The first matched 20,000-vertex run preserved hierarchy levels, PCG iterations, and backward errors exactly. Relative to the frozen baseline:
 
-## Implemented performance changes
+| Case | Hierarchy build | CMG apply | Solve per RHS |
+|---|---:|---:|---:|
+| Path | 1.003x | 0.234x | 0.310x |
+| Worker–firm | 0.980x | 0.992x | 0.982x |
 
-### P1: repeated-solve overhead
+Ratios below one favor the candidate. The path gain comes primarily from sparse terminal traversal. Worker–firm performance is approximately neutral while CMG workspace bytes decline from the baseline estimate of 1,007,440 to an exact 652,128, and PCG workspace bytes decline from 2,287,440 to 1,932,184. The path CMG workspace is 878,656 bytes versus a 1,285,160-byte baseline estimate.
 
-- `Laplacian::clone` preserves a private lineage token, making the normal preconditioner/graph compatibility check constant-time. Independently rebuilt equal graphs retain the structural fallback.
-- PCG reuses the finest `Components` object owned by the preconditioner instead of rebuilding union-find state for every RHS.
-- Component projection and centering use persistent scratch in `PcgWorkspace` and at every CMG hierarchy level.
-- Workspace types expose retained principal heap-byte counts for future memory-aware scheduling.
+### P3 design
 
-### P2: terminal and hierarchy scratch
+A public `CsrLaplacian` is being added as a deterministic solve-oriented operator:
 
-- The trusted dense terminal factorization, ordering, pivots, and repeat-count denominator remain unchanged.
-- After factorization, the strict lower factor is frozen into either packed-triangular storage or a sparse row/column traversal representation, selected by retained-byte cost.
-- Sparse terminal indices use `u32` when selected; the packed fallback covers dimensions outside that range.
-- Forward and backward substitution no longer scan a nested dense `Vec<Vec<f64>>` containing structural zeros when sparse storage is smaller.
-- Each nonterminal CMG level aliases the matvec and residual roles through one vector, removing one full vector per hierarchy level.
-- `GroundedLdl::byte_len`, `CmgWorkspace::byte_len`, and `PcgWorkspace::byte_len` provide direct memory accounting.
-- Commit `daa677b95f0bf23310e941846f5e3b105274597e` passed debug and release tests on Ubuntu, macOS, and Windows. Its only quality failure was pre-format source; `fd8db573a7a5d4c5f9b0dde4fc2a7d103499b6db` contains the formatter output.
+- each edge is stored in both endpoint rows;
+- ordinary dimensions use four-byte neighbor indices;
+- canonical edge ordering yields ascending neighbors within every row;
+- each row owns one output entry, enabling later parallel matvec without atomics;
+- the row kernel sums edge contributions `w * (x_i - x_j)` to stay close to the existing arithmetic;
+- the canonical edge graph remains the build/provenance representation during crossover measurement.
 
-## Remaining observed hot spots
+## Approved parallel architecture
 
-- edge-scatter matvec prevents efficient parallel row ownership;
-- batch solving remains sequential;
-- coarse contraction repeatedly allocates and sorts endpoint triples;
-- forest splitting contains recurring temporary-vector allocation;
-- terminal factorization itself still materializes dense temporary matrices during setup.
+- Rayon will be optional and the serial build will remain supported.
+- A package-owned custom thread pool will enforce explicit thread counts.
+- Parallel reductions will use deterministic fixed chunks and fixed-order combination.
+- Across-RHS and within-solve parallelism will be selected under a workspace memory budget.
+- Pinned upstream C sources may be vendored only in benchmark/test infrastructure with attribution.
+
+## Remaining hot spots
+
+- production solve paths still use edge-scatter matvec;
+- repeated RHSs are still sequential;
+- coarse contraction allocates and sorts endpoint triples at each level;
+- forest splitting allocates temporary traversal vectors;
+- terminal setup still materializes dense temporary matrices.
 
 ## Checkpoint log
 
-| Date | Commit | Result | Next action |
-|---|---|---|---|
-| 2026-08-22 | `b65ae28a15f00925348046bb474c8133e5128cd0` | Correctness-qualified baseline identified | Commit measurement infrastructure |
-| 2026-08-22 | `cc9d641d9e4d227196389eb59144e762d3caa926` | Benchmark driver, live plan, and performance workflow added | Cross-platform qualification |
-| 2026-08-22 | `b45b252f88925028e3ad9a73a3f75eeab05f6754` | Benchmark source formatted and built on all three platforms | Remove repeated solve setup |
-| 2026-08-22 | `703ddc2e809f5c92f8a6acbec79b0b7b31a763f0` | Graph lineage and cached components passed full CI | Remove component allocations |
-| 2026-08-22 | `a6b339fdb86f137d3ad75891922f9ad1fd3f8d3c` | Reusable component scratch passed all platform tests | Compress terminal and workspace storage |
-| 2026-08-22 | `daa677b95f0bf23310e941846f5e3b105274597e` | P2 passed debug/release tests on all platforms; formatted in `fd8db573` | Persist matched A/B timing and begin CSR |
+| Date | Commit | Result |
+|---|---|---|
+| 2026-08-22 | `cc9d641d` / `b45b252f` | Measurement infrastructure added and formatted |
+| 2026-08-22 | `703ddc2e` | Graph lineage and cached components passed full CI |
+| 2026-08-22 | `a6b339fd` / `8022b568` | Persistent component scratch passed all platform tests |
+| 2026-08-22 | `daa677b9` / `fd8db573` | Terminal compression and CMG scratch aliasing passed all platform tests |
+| 2026-08-22 | `a82155e8` | Matched A/B workflow and exact memory records added; full CI green |
+| 2026-08-22 | `33392c85` | First retained performance comparison recorded |
 
 ## Current next action
 
-Run and retain the first matched baseline/candidate comparison. Then implement a serial deterministic CSR operator, first as a measured alternative that coexists with canonical edges. Add exact edge-versus-CSR matvec tests and a storage/crossover report before routing production CMG levels through CSR.
+Validate CSR construction and arithmetic on all platforms, add edge-versus-CSR microbenchmarks, and decide the serial routing threshold from measured results. After that, freeze a CSR operator for every hierarchy level and begin the optional custom-thread-pool implementation.
