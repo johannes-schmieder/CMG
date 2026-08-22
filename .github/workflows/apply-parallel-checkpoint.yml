@@ -1,11 +1,15 @@
 name: Apply parallel checkpoint
 
-# Split-payload retry 2.
+# Split-payload retry 3 with a persisted run marker.
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/apply-parallel-checkpoint.yml'
+
+concurrency:
+  group: apply-parallel-checkpoint
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -19,6 +23,19 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Record run identity
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          mkdir -p .ci
+          printf '{\n  "run_id": "%s",\n  "head_sha": "%s",\n  "status": "running"\n}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" > .ci/apply-parallel-run.json
+          git add .ci/apply-parallel-run.json
+          git commit -m 'dev: record parallel checkpoint run [skip ci]'
+          git push origin HEAD:main
 
       - name: Apply, format, test, and checkpoint
         shell: bash
@@ -56,19 +73,22 @@ jobs:
 
           if [ "$APPLY_STATUS" -ne 0 ] || [ "$FORMAT_STATUS" -ne 0 ] || [ "$SERIAL_STATUS" -ne 0 ] || [ "$PARALLEL_STATUS" -ne 0 ]; then
             git reset --hard HEAD
+            git pull --rebase origin main
             mkdir -p .ci
             {
               printf 'apply=%s format=%s serial=%s parallel=%s\n\n' \
                 "$APPLY_STATUS" "$FORMAT_STATUS" "$SERIAL_STATUS" "$PARALLEL_STATUS"
               tail -n 400 /tmp/parallel-checkpoint.log
             } > .ci/apply-parallel-failure.log
-            git add .ci/apply-parallel-failure.log
+            printf '{\n  "run_id": "%s",\n  "head_sha": "%s",\n  "status": "failure"\n}\n' \
+              "$GITHUB_RUN_ID" "$GITHUB_SHA" > .ci/apply-parallel-run.json
+            git add .ci/apply-parallel-failure.log .ci/apply-parallel-run.json
             git commit -m 'dev: record parallel checkpoint failure [skip ci]'
             git push origin HEAD:main
             exit 1
           fi
 
-          rm -f .ci/apply-parallel-failure.log
+          rm -f .ci/apply-parallel-failure.log .ci/apply-parallel-run.json
           git add -A
           git commit -m 'perf: add package-owned parallel batch execution'
           for ATTEMPT in 1 2 3; do
