@@ -34,65 +34,101 @@ jobs:
           cargo --version
           cc --version
 
-      - name: Format, lint, and test isolated crate
+      - name: Validate isolated comparison crate
+        id: validate
         shell: bash
         run: |
-          set -euo pipefail
-          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check
-          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
-          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml
-          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --release
-          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          set +e
+          mkdir -p .ci/performance/c-kernel
+          {
+            cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check &&
+            cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings &&
+            cargo test --manifest-path benchmarks/c-kernel/Cargo.toml &&
+            cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --release &&
+            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          } > .ci/performance/c-kernel/validation.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Compare pinned C and Rust matvec kernels
+        id: benchmark
+        if: ${{ steps.validate.outputs.status == '0' }}
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p .ci/performance/c-kernel
-          for CASE in path worker-firm; do
-            cargo run --quiet --release \
-              --manifest-path benchmarks/c-kernel/Cargo.toml -- \
-              --case "$CASE" \
-              --vertices 100000 \
-              --repetitions 7 \
-              --output ".ci/performance/c-kernel/${CASE}.json"
-          done
+          set +e
+          {
+            for CASE in path worker-firm; do
+              cargo run --quiet --release \
+                --manifest-path benchmarks/c-kernel/Cargo.toml -- \
+                --case "$CASE" \
+                --vertices 100000 \
+                --repetitions 7 \
+                --output ".ci/performance/c-kernel/${CASE}.json" || exit $?
+            done
+          } > .ci/performance/c-kernel/benchmark.log 2>&1
+          STATUS=$?
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Build retained comparison record
+        if: ${{ always() }}
         shell: python
+        env:
+          VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
+          BENCHMARK_STATUS: ${{ steps.benchmark.outputs.status }}
         run: |
           import json
           import os
           from pathlib import Path
 
+          directory = Path('.ci/performance/c-kernel')
+          directory.mkdir(parents=True, exist_ok=True)
+
+          def read_json(name):
+              path = directory / name
+              return json.loads(path.read_text()) if path.exists() else None
+
+          def tail(name, lines=160):
+              path = directory / name
+              if not path.exists():
+                  return []
+              return path.read_text(errors='replace').splitlines()[-lines:]
+
+          validation = os.environ.get('VALIDATION_STATUS') or 'not-run'
+          benchmark = os.environ.get('BENCHMARK_STATUS') or 'not-run'
           record = {
-              "schema": 1,
-              "tested_sha": os.environ["CMG_BENCH_COMMIT"],
-              "upstream_commit": "19752fc102f8cae8e34f66457bfaccb1aaa60375",
-              "runner": "ubuntu-latest",
-              "results": {
-                  "path": json.loads(Path(".ci/performance/c-kernel/path.json").read_text()),
-                  "worker_firm": json.loads(
-                      Path(".ci/performance/c-kernel/worker-firm.json").read_text()
-                  ),
+              'schema': 2,
+              'tested_sha': os.environ['CMG_BENCH_COMMIT'],
+              'upstream_commit': '19752fc102f8cae8e34f66457bfaccb1aaa60375',
+              'runner': 'ubuntu-latest',
+              'validation_status': validation,
+              'benchmark_status': benchmark,
+              'success': validation == '0' and benchmark == '0',
+              'results': {
+                  'path': read_json('path.json'),
+                  'worker_firm': read_json('worker-firm.json'),
               },
+              'validation_log_tail': tail('validation.log'),
+              'benchmark_log_tail': tail('benchmark.log'),
           }
-          Path(".ci/performance/c-kernel-latest.json").write_text(
-              json.dumps(record, indent=2) + "\n"
+          Path('.ci/performance/c-kernel-latest.json').write_text(
+              json.dumps(record, indent=2) + '\n'
           )
 
-      - name: Upload raw comparison
+      - name: Upload raw comparison and diagnostics
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: c-kernel-${{ github.sha }}
           path: |
-            .ci/performance/c-kernel/*.json
+            .ci/performance/c-kernel/*
             .ci/performance/c-kernel-latest.json
           if-no-files-found: error
           retention-days: 14
 
       - name: Retain comparison on main
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ always() && github.event_name == 'push' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -104,3 +140,13 @@ jobs:
           git commit -m 'perf: record pinned C kernel comparison [skip ci]'
           git pull --rebase origin main
           git push origin HEAD:main
+
+      - name: Enforce comparison success
+        if: ${{ always() }}
+        shell: bash
+        env:
+          VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
+          BENCHMARK_STATUS: ${{ steps.benchmark.outputs.status }}
+        run: |
+          test "$VALIDATION_STATUS" = 0
+          test "$BENCHMARK_STATUS" = 0
