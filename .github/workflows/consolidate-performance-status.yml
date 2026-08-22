@@ -1,0 +1,154 @@
+name: Consolidate performance status
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/consolidate-performance-status.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Generate recovery-oriented status
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import subprocess
+
+          root = Path.cwd()
+          current_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+
+          records = sorted(Path('.ci/performance').glob('*.json'))
+          decisions = []
+          qualifications = []
+          for record in records:
+              try:
+                  data = json.loads(record.read_text())
+              except Exception as error:
+                  decisions.append((record.as_posix(), 'unreadable', str(error)))
+                  continue
+              experiment = (
+                  data.get('experiment')
+                  or data.get('benchmark')
+                  or record.stem
+              )
+              if 'accepted' in data:
+                  state = 'accepted' if data['accepted'] else 'not retained'
+                  reason = data.get('decision_reason', '')
+                  decisions.append((record.as_posix(), state, reason))
+              else:
+                  qualification = (
+                      data.get('qualification')
+                      or data.get('status')
+                      or 'recorded'
+                  )
+                  qualifications.append(
+                      (record.as_posix(), experiment, str(qualification))
+                  )
+
+          latest = {}
+          latest_path = Path('.ci/latest.json')
+          if latest_path.exists():
+              try:
+                  latest = json.loads(latest_path.read_text())
+              except Exception:
+                  latest = {'parse_error': True}
+
+          workflows = sorted(
+              path.as_posix()
+              for path in Path('.github/workflows').glob('*.yml')
+          )
+          scripts = sorted(
+              path.as_posix()
+              for path in Path('scripts').glob('*')
+              if path.is_file()
+          ) if Path('scripts').exists() else []
+
+          lines = [
+              '# CMG performance status',
+              '',
+              'This file is generated from repository evidence so optimization work can',
+              'resume without relying on a chat transcript.',
+              '',
+              f'- Current source SHA at generation: `{current_sha}`',
+              f'- CI marker tested SHA: `{latest.get("tested_sha", "not recorded")}`',
+              f'- CI quality status: `{latest.get("quality", "not recorded")}`',
+              f'- CI cross-platform status: `{latest.get("cross_platform_tests", "not recorded")}`',
+              '',
+              '## Benchmark-gated source decisions',
+              '',
+              '| Evidence | Decision | Reason |',
+              '|---|---|---|',
+          ]
+          for path, state, reason in decisions:
+              clean_reason = ' '.join(str(reason).split()).replace('|', '\\|')
+              lines.append(f'| `{path}` | **{state}** | {clean_reason} |')
+          if not decisions:
+              lines.append('| — | — | No decision records found |')
+
+          lines.extend([
+              '',
+              '## Qualification and baseline records',
+              '',
+              '| Evidence | Benchmark | Status |',
+              '|---|---|---|',
+          ])
+          for path, experiment, status in qualifications:
+              lines.append(
+                  f'| `{path}` | `{experiment}` | `{status}` |'
+              )
+          if not qualifications:
+              lines.append('| — | — | No qualification records found |')
+
+          lines.extend([
+              '',
+              '## Current workflow and staging inventory',
+              '',
+              '### Workflows',
+              '',
+          ])
+          lines.extend(f'- `{path}`' for path in workflows)
+          if not workflows:
+              lines.append('- None')
+          lines.extend(['', '### Staging scripts', ''])
+          lines.extend(f'- `{path}`' for path in scripts)
+          if not scripts:
+              lines.append('- None')
+
+          lines.extend([
+              '',
+              '## Recovery rule',
+              '',
+              'Before another production source mutation, read the corresponding JSON',
+              'decision record, verify that no one-shot workflow for that experiment is',
+              'still active, and create a new baseline/candidate gate. Do not infer that',
+              'a candidate was retained merely because its staging commit exists.',
+              '',
+          ])
+
+          Path('PERFORMANCE_STATUS.md').write_text('\n'.join(lines))
+          Path('.github/workflows/consolidate-performance-status.yml').unlink()
+
+      - name: Commit consolidated checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: consolidate performance recovery status'
+          git pull --rebase origin main
+          git push origin HEAD:main
