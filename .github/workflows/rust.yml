@@ -43,8 +43,17 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+      - name: Benchmark format
+        run: cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Benchmark Clippy
+        run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+
+      - name: Benchmark release build
+        run: cargo build --manifest-path benchmarks/Cargo.toml --all-targets --release
 
       - name: Documentation
         env:
