@@ -19,6 +19,7 @@ mod options;
 mod pcg;
 mod preconditioner;
 mod sddm;
+mod sddm_solver;
 mod workspace;
 
 pub use coarsen::Aggregation;
@@ -34,6 +35,7 @@ pub use options::{CmgOptions, PcgOptions, ValidationOptions};
 pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_with_workspace};
 pub use preconditioner::CmgPreconditioner;
 pub use sddm::{SddmAugmentation, SddmMatrix};
+pub use sddm_solver::{SddmResult, SddmSolver, SddmWorkspace, solve_sddm};
 pub use workspace::CmgWorkspace;
 
 /// Return the pinned upstream CMG commit used as the behavioral reference.
