@@ -1,4 +1,6 @@
-use cmg::{Aggregation, CmgHierarchy, CmgOptions, Laplacian, TerminalReason};
+use cmg::{
+    Aggregation, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian, TerminalReason,
+};
 
 fn dense_galerkin(graph: &Laplacian, labels: &[usize], coarse_n: usize) -> Vec<Vec<f64>> {
     let fine = graph.to_dense();
@@ -92,6 +94,38 @@ fn forced_multilevel_path_strictly_reduces_nonterminal_levels() {
     for level in &hierarchy.levels()[..hierarchy.levels().len() - 1] {
         assert!(level.repeat() >= 1);
     }
+}
+
+#[test]
+fn direct_terminal_repeat_uses_unit_lower_factor_nonzeros() {
+    let graph =
+        Laplacian::from_edges(96, (0..95).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
+    let preconditioner = CmgPreconditioner::build(
+        &graph,
+        CmgOptions {
+            direct_threshold: 20,
+            ..CmgOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        preconditioner.hierarchy().report().terminal_reason(),
+        TerminalReason::Direct
+    );
+    let levels = preconditioner.hierarchy().levels();
+    assert!(levels.len() >= 2);
+    let penultimate = levels.len() - 2;
+    let fine_nonzeros = levels[penultimate].graph().matrix_nnz();
+    let lower_factor_nonzeros = preconditioner
+        .terminal_factor()
+        .unwrap()
+        .factor_nonzeros()
+        .max(1);
+    let expected = (fine_nonzeros / lower_factor_nonzeros)
+        .saturating_sub(1)
+        .max(1);
+    assert_eq!(preconditioner.repeat_counts()[penultimate], expected);
+    assert_eq!(levels[penultimate].repeat(), expected);
 }
 
 #[test]
