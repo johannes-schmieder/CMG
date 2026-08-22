@@ -21,10 +21,7 @@ pub struct CmgWorkspace {
 }
 
 impl CmgWorkspace {
-    pub(crate) fn new(
-        hierarchy: &CmgHierarchy,
-        direct_terminal: Option<&GroundedLdl>,
-    ) -> Self {
+    pub(crate) fn new(hierarchy: &CmgHierarchy, direct_terminal: Option<&GroundedLdl>) -> Self {
         let dimensions: Vec<usize> = hierarchy
             .levels()
             .iter()
@@ -132,11 +129,7 @@ impl CmgWorkspace {
     }
 }
 
-fn validate_length(
-    context: &'static str,
-    expected: usize,
-    actual: usize,
-) -> Result<(), CmgError> {
+fn validate_length(context: &'static str, expected: usize, actual: usize) -> Result<(), CmgError> {
     if expected == actual {
         Ok(())
     } else {

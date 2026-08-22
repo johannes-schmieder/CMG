@@ -157,21 +157,17 @@ impl CmgPreconditioner {
                 workspace.put_level(level_index, local);
                 return result;
             }
-            for ((value, inverse_diagonal), rhs_value) in output
-                .iter_mut()
-                .zip(level.inverse_diagonal())
-                .zip(rhs)
+            for ((value, inverse_diagonal), rhs_value) in
+                output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
             {
                 *value = *inverse_diagonal * *rhs_value;
             }
             return Ok(());
         }
 
-        let aggregation = level
-            .aggregation()
-            .ok_or(CmgError::InvalidHierarchy {
-                context: "nonterminal level has no aggregation",
-            })?;
+        let aggregation = level.aggregation().ok_or(CmgError::InvalidHierarchy {
+            context: "nonterminal level has no aggregation",
+        })?;
         let repeat = self.repeat_counts[level_index];
         if repeat == 0 {
             return Err(CmgError::InvalidHierarchy {
@@ -184,11 +180,8 @@ impl CmgPreconditioner {
             local.x.fill(0.0);
             for iteration in 0..repeat {
                 if iteration == 0 {
-                    for ((value, inverse_diagonal), rhs_value) in local
-                        .x
-                        .iter_mut()
-                        .zip(level.inverse_diagonal())
-                        .zip(rhs)
+                    for ((value, inverse_diagonal), rhs_value) in
+                        local.x.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
                     {
                         *value = *inverse_diagonal * *rhs_value;
                     }

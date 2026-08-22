@@ -160,12 +160,7 @@ impl GroundedLdl {
         let mut solution = vec![0.0; self.vertex_count];
         let mut forward = vec![0.0; self.active_dimension()];
         let mut factor_solution = vec![0.0; self.active_dimension()];
-        self.solve_into_compatible(
-            rhs,
-            &mut solution,
-            &mut forward,
-            &mut factor_solution,
-        )?;
+        self.solve_into_compatible(rhs, &mut solution, &mut forward, &mut factor_solution)?;
         Ok(solution)
     }
 
