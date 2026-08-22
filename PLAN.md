@@ -34,11 +34,11 @@ intentional interface or numerical deviations.
 - [x] deterministic forest-component labeling;
 - [x] exact Galerkin coarse-graph contraction;
 - [x] upstream hierarchy terminal and stagnation rules;
-- [ ] final upstream nonzero-ratio recursive repeat schedule, including the
+- [x] final upstream nonzero-ratio recursive repeat schedule, including the
       direct-terminal factor nonzero count;
 - [x] grounded degree-ordered LDL^T terminal solver;
-- [ ] stationary recursive CMG cycle with damped Jacobi smoothing;
-- [ ] reusable immutable hierarchy and caller-owned workspaces;
+- [x] stationary recursive CMG cycle with damped Jacobi smoothing;
+- [x] reusable immutable hierarchy and caller-owned workspaces;
 - [ ] PCG with fresh original-system residual certification;
 - [ ] repeated-right-hand-side API;
 - [ ] exact and adversarial small-problem qualification on Linux, macOS, and
@@ -87,13 +87,13 @@ stationary reference port is qualified.
 | 1. Graph and SDDM core | **complete** | Dense assembly, energy, exact augmentation, and component tests green |
 | 2. Forest decomposition | **complete** | Golden parent/split/component tests and quality gates green |
 | 3. Coarse graphs and hierarchy | **complete** | Dense `R L R^T`, stop-rule, hierarchy, Clippy, and docs gates green |
-| 4. Terminal LDL^T | **implemented; formatted quality CI running** | Connected/disconnected direct solves and fresh residual tests green on three OSes |
-| 5. CMG cycle | **in progress locally** | Linearity, symmetry, positivity, and recursion tests pass |
-| 6. PCG and batching | not started | Certified end-to-end small solves pass |
+| 4. Terminal LDL^T | **implemented; final combined quality CI running** | Connected/disconnected direct solves and fresh residual tests green |
+| 5. CMG cycle | **implemented; final combined quality CI running** | Linearity, symmetry, positivity, direct/iterative/recursive tests green on three OSes |
+| 6. PCG and batching | **in progress locally** | Certified end-to-end small solves pass |
 | 7. Adversarial qualification | not started | Debug/release suites pass on all CI platforms |
 | 8. Completion audit and docs | not started | Every upstream production routine is covered |
 
-## 6. Implemented foundation
+## 6. Implemented numerical path
 
 The current code provides:
 
@@ -112,11 +112,12 @@ The current code provides:
 - exact edge-based construction of `R L R^T`;
 - direct, full-contraction, vertex-stagnation, fill-stagnation, and maximum-level
   terminals with explicit diagnostics;
-- provisional nonzero-ratio repeat counts for ordinary coarse levels;
 - one deterministic highest-index anchor per connected component;
 - static grounded-row nonzero ordering and no-pivot LDL^T factorization;
-- reusable terminal factors, factor-nonzero diagnostics, compatibility checks,
-  and gauge-explicit direct solves.
+- exact factor-nonzero calibration of the final recursive repeat count;
+- stationary damped-Jacobi pre/post smoothing, residual restriction, recursive
+  coarse correction, and prolongation;
+- immutable preconditioners and reusable caller-owned per-level work arrays.
 
 The exact augmentation intentionally improves on the MATLAB wrapper's numerical
 `1e-13` classification: a small but positive row-sum excess is not discarded or
@@ -129,7 +130,7 @@ grids, barbells, lollipops, bipartite worker-firm graphs, disjoint unions, and
 isolated vertices. Tests construct compatible right-hand sides as `b = A x_star`
 and verify freshly recomputed original-system residuals.
 
-Current exact tests include:
+Current exact/property tests include:
 
 - graph dense assembly, matvec, energy, duplicate and permutation invariance;
 - disconnected components, singleton handling and RHS compatibility;
@@ -139,13 +140,17 @@ Current exact tests include:
 - restriction/prolongation and dense-oracle Galerkin equality;
 - every hierarchy terminal reason, strict level reduction, and repeat bounds;
 - weighted-path direct factor values and fresh residuals;
-- static-degree ordering on a star;
-- independent grounding and direct solves for disconnected components and
-  isolated vertices;
-- known-solution gauge recovery and incompatible-RHS rejection.
+- static-degree ordering on a star and disconnected direct solves;
+- exact direct-terminal preconditioner behavior;
+- upstream iterative-terminal damped-Jacobi behavior;
+- factor-based repeat calibration before a direct terminal;
+- forced-multilevel linearity, numerical symmetry, positive action, and
+  deterministic workspace reuse;
+- incompatible-right-hand-side rejection at public boundaries.
 
-Remaining invariants include preconditioner linearity/symmetry/positivity,
-workspace reuse, batch equality, and end-to-end residual certification.
+Remaining tests cover certified PCG, batched right-hand sides, SDDM end-to-end
+solves, more graph families, extreme weights, and independent dense-oracle
+comparison.
 
 ## 8. Intentional differences from the MATLAB interface
 
@@ -155,7 +160,7 @@ workspace reuse, batch equality, and end-to-end residual certification.
 - Tie-breaking and aggregation order are explicitly deterministic.
 - Every positive SDDM dominance excess is augmented exactly, including values
   below the MATLAB wrapper's numerical strict-dominance threshold.
-- Rust exposes hierarchy diagnostics and certified PCG results directly.
+- Rust exposes hierarchy diagnostics and certified solve results directly.
 - A configurable maximum-level guard is added as a hard safety limit.
 - The direct terminal grounds one vertex per component rather than assuming a
   connected graph with one final coordinate.
@@ -176,19 +181,19 @@ upstream implementation unless a deviation is recorded here.
 | 2026-08-22 | Lowest-neighbor heavy-edge tie rule | Stable behavior matching sparse index order |
 | 2026-08-22 | Ground the highest-index vertex per component | Deterministic disconnected extension of the upstream final-coordinate gauge |
 | 2026-08-22 | Dense storage for the first terminal factor | Auditability first; terminal size is bounded by the direct threshold |
+| 2026-08-22 | Reusable level workspaces via take/restore | Avoid application-time allocation without unsafe aliasing |
 
 ## 10. Current risks and open defects
 
-- The formatted LDL checkpoint needs the full quality rerun triggered by this
-  plan update because GitHub suppresses recursive runs from formatting-bot
-  commits.
-- The final repeat count before a direct terminal must use the terminal LDL
-  factor nonzero count, as in upstream, rather than the provisional coarse graph
-  count.
+- The formatted stationary-cycle checkpoint needs the full quality rerun
+  triggered by this plan update because GitHub suppresses recursive workflow
+  runs from formatting-bot commits.
 - Dense LDL setup is cubic and should eventually be replaced or supplemented by
   sparse storage for unusually dense terminal levels; correctness comes first.
 - The upstream hierarchy can stagnate on dense graphs. The Rust port preserves
   its iterative terminal fallback and reports it explicitly.
+- PCG breakdown, nonconvergence, and residual-verification errors are not yet
+  implemented.
 - Local Rust compilation is unavailable in the agent container, so every Rust
   checkpoint is validated through GitHub Actions.
 
@@ -201,13 +206,13 @@ upstream implementation unless a deviation is recorded here.
 | Exact SDDM layer | `8c5f710b`–`9fa8af0b` | green | exact augmentation and focused tests on three OSes |
 | Forest decomposition | `a5b80c9b`–`f5fc26d3` | green | heavy-edge, split kernel, low-degree correction, labels |
 | Hierarchy construction | `0403d435`–`5b0a399b` | green | exact Galerkin contraction and all terminal guards |
-| Terminal LDL^T | `5abf4ed6` | tests green; initial format failure fixed | component grounding, degree ordering, factor and solve tests |
-| Terminal rustfmt | `512cc091` | full quality rerun triggered | formatted source checkpoint |
+| Terminal LDL^T | `5abf4ed6` | tests green; Clippy repair included next | component grounding, degree ordering, factor and solve tests |
+| Stationary cycle | `c6b50ea0` | all tests green; initial format failure fixed | repeat calibration, recursion and reusable workspace |
+| Stationary-cycle rustfmt | `931eaa1f` | full quality rerun triggered | formatted source checkpoint |
 
 ## 12. Current next action
 
-Integrate the terminal factor nonzero count into the final repeat schedule and
-implement the exact stationary recursive cycle with caller-owned reusable
-workspaces. Qualify direct, iterative-terminal, and forced-multilevel paths for
-linearity, numerical symmetry, and positive action on compatible right-hand
-sides.
+Implement certified quotient-space PCG with explicit breakdown and
+nonconvergence errors, fresh original-system residual verification, reusable
+solver workspace, batched right-hand sides, and an SDDM wrapper using the exact
+extra-vertex map.
