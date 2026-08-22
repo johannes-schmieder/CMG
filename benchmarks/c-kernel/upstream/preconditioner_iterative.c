@@ -166,5 +166,5 @@ void cmg_reference_apply_iterative(cmg_reference_level *levels,
     if (level_count == 0) {
         return;
     }
-    apply_level(levels, b, 0, levels[0].repeat, x);
+    apply_level(levels, b, 0, 1, x);
 }

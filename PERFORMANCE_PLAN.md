@@ -38,7 +38,7 @@ The matched benchmark workflow builds the frozen baseline and current candidate 
 | P4 Parallel solve kernels | COMPLETE | Package-owned pool and row-parallel CSR pass debug/release CI on Linux, macOS, and Windows |
 | P5 Multi-RHS scheduler | COMPLETE | Ordered, memory-bounded concurrent RHS solves pass debug/release CI on Linux, macOS, and Windows |
 | P6 Parallel setup | IN PROGRESS | Hierarchy diagnostics are unchanged and setup improves |
-| P7 Pinned C comparison | IN PROGRESS | `sspmv`, restriction, and prolongation agree and are timed; recursive-cycle comparison remains |
+| P7 Pinned C comparison | COMPLETE | `sspmv`, restriction, prolongation, and the complete stationary recursive cycle agree and are timed |
 | P8 Large qualification | PARTIAL | 1–4-thread hosted scaling is retained; 8–32-thread and large-memory qualification remain |
 | P9 Advanced panel/SIMD/NUMA work | DEFERRED | Only after profiles justify complexity |
 
@@ -103,6 +103,7 @@ On a four-logical-CPU hosted runner with 50,000 vertices and eight RHSs, retaine
 - The isolated benchmark crate compiles the pinned official C sparse-matvec, restriction, and prolongation loops without MATLAB. The C code is benchmark-only and is never linked into the production library.
 - C-result retention now rejects cancelled or superseded workflow runs so stale evidence cannot replace results from newer benchmark source.
 - A raw-pointer candidate for removing aggregation label bounds checks was rejected before timing because the production crate forbids unsafe code; the validated safe loops remain in place.
+- The first complete C-cycle differential test exposed a shifted repeat schedule in the Rust port. Official CMG applies one top-level cycle and uses each level's repeat count for its child solve; production Rust, the allocating oracle, and the C adapter now match that convention, and full-cycle quotient-space agreement is checked before timing.
 
 At 100,000 vertices on an Ubuntu hosted runner, all Rust/C comparisons passed before timing:
 
@@ -155,7 +156,8 @@ Ratios below one favor Rust. The projection results indicate that arithmetic is 
 | 2026-08-22 | `31530bcf` / `090048bb` | Pinned C `sspmv` comparison passed and retained; Rust was faster on both hosted-runner cases |
 | 2026-08-22 | `32a49022` / `f536b336` | Pinned C restriction/prolongation comparison passed; outputs were exact and timings retained |
 | 2026-08-22 | `7b3aafda` | C benchmark retention was hardened against cancelled and superseded runs |
+| 2026-08-22 | corrected recursive schedule | Full pinned-C cycle differential test found and fixed shifted repeat semantics; all debug/release tests and Rust/C cycle comparisons passed |
 
 ## Current next action
 
-Repair and complete the pinned-C stationary recursive-cycle benchmark, then benchmark the six-vector PCG workspace against the frozen baseline. Continue the single-RHS PCG/CMG audit only with safe deterministic kernels. Large 8–32-thread qualification remains dependent on a larger or self-hosted runner.
+Re-run matched serial and parallel performance benchmarks under the corrected upstream repeat schedule, including the six-vector PCG workspace. Then continue the single-RHS PCG/CMG audit only with safe deterministic kernels. Large 8–32-thread qualification remains dependent on a larger or self-hosted runner.

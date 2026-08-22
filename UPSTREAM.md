@@ -45,6 +45,7 @@ index zero rather than index one.
 - hierarchy cumulative-nonzero guard `5 * nnz(A_initial)`;
 - stagnation when the coarse graph has at least `n - 1` vertices;
 - repeat count `max(floor(nnz(A_fine) / nnz(A_coarse) - 1), 1)`;
+- the public preconditioner applies one top-level stationary cycle; a level's repeat count controls the recursive solve at its child level;
 - direct Laplacian solve grounds the final coordinate;
 - strictly dominant SDDM matrices are augmented with one extra vertex.
 

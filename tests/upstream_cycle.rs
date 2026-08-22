@@ -20,6 +20,7 @@ fn reference_apply(
     preconditioner: &CmgPreconditioner,
     level_index: usize,
     rhs: &[f64],
+    iterations: usize,
 ) -> Vec<f64> {
     let level = &preconditioner.hierarchy().levels()[level_index];
     if let Some(reason) = level.terminal_reason() {
@@ -40,7 +41,7 @@ fn reference_apply(
     let graph = level.graph();
     let aggregation = level.aggregation().unwrap();
     let mut solution = vec![0.0; rhs.len()];
-    for _ in 0..preconditioner.repeat_counts()[level_index] {
+    for _ in 0..iterations {
         let mut residual = graph.matvec(&solution).unwrap();
         for (value, rhs_value) in residual.iter_mut().zip(rhs) {
             *value = *rhs_value - *value;
@@ -59,7 +60,12 @@ fn reference_apply(
         }
         let coarse_graph = preconditioner.hierarchy().levels()[level_index + 1].graph();
         let coarse_rhs = project_rhs(coarse_graph, &aggregation.restrict(&residual).unwrap(), 1.0);
-        let coarse_solution = reference_apply(preconditioner, level_index + 1, &coarse_rhs);
+        let coarse_solution = reference_apply(
+            preconditioner,
+            level_index + 1,
+            &coarse_rhs,
+            preconditioner.repeat_counts()[level_index],
+        );
         aggregation
             .prolong_add_into(&coarse_solution, &mut solution)
             .unwrap();
@@ -111,7 +117,7 @@ fn compare(graph: Laplacian) {
         &rhs,
         ValidationOptions::default().compatibility_tolerance,
     );
-    let reference = reference_apply(&preconditioner, 0, &projected_rhs);
+    let reference = reference_apply(&preconditioner, 0, &projected_rhs, 1);
     assert_vector_close(&production, &reference, 1.0e-12);
 }
 

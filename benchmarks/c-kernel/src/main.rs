@@ -1,3 +1,4 @@
+mod cycle;
 mod projection;
 
 use cmg::Laplacian;
@@ -184,11 +185,12 @@ fn main() -> Result<(), AnyError> {
     let rust_edges_per_second = edge_visits * 1.0e9 / rust_median_ns as f64;
     let c_edges_per_second = edge_visits * 1.0e9 / c_median_ns as f64;
     let projection = projection::benchmark(&config.case, graph.vertex_count(), config.repetitions)?;
+    let cycle = cycle::benchmark(&config.case, graph.vertex_count(), config.repetitions)?;
 
     let json = format!(
         concat!(
             "{{\n",
-            "  \"schema\": 2,\n",
+            "  \"schema\": 3,\n",
             "  \"source_commit\": \"{}\",\n",
             "  \"upstream_commit\": \"{}\",\n",
             "  \"case\": \"{}\",\n",
@@ -203,7 +205,8 @@ fn main() -> Result<(), AnyError> {
             "  \"c_edges_per_second\": {:.17e},\n",
             "  \"max_abs_error\": {:.17e},\n",
             "  \"max_scaled_error\": {:.17e},\n",
-            "  \"projection\": {}\n",
+            "  \"projection\": {},\n",
+            "  \"cycle\": {}\n",
             "}}\n"
         ),
         SOURCE_COMMIT,
@@ -221,6 +224,7 @@ fn main() -> Result<(), AnyError> {
         max_abs_error,
         max_scaled_error,
         projection.to_json(),
+        cycle.to_json(),
     );
 
     if let Some(path) = config.output {

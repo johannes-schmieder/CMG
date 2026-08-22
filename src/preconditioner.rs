@@ -175,7 +175,7 @@ impl CmgPreconditioner {
             );
             workspace.put_component(0, component_workspace);
             projection?;
-            self.apply_level(0, &projected_rhs, output, workspace, validation)
+            self.apply_level(0, &projected_rhs, output, workspace, 1, validation)
         })();
         workspace.put_projected_rhs(projected_rhs);
         result
@@ -187,6 +187,7 @@ impl CmgPreconditioner {
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
+        iterations: usize,
         validation: ValidationOptions,
     ) -> Result<(), CmgError> {
         let level = &self.hierarchy.levels()[level_index];
@@ -226,17 +227,22 @@ impl CmgPreconditioner {
         let aggregation = level.aggregation().ok_or(CmgError::InvalidHierarchy {
             context: "nonterminal level has no aggregation",
         })?;
-        let repeat = self.repeat_counts[level_index];
-        if repeat == 0 {
+        if iterations == 0 {
             return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero recursive repeats",
+                context: "nonterminal level has zero stationary iterations",
+            });
+        }
+        let child_iterations = self.repeat_counts[level_index];
+        if child_iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero child recursive repeats",
             });
         }
 
         let mut local = workspace.take_level(level_index);
         let result = (|| {
             local.x.fill(0.0);
-            for iteration in 0..repeat {
+            for iteration in 0..iterations {
                 if iteration == 0 {
                     for ((value, inverse_diagonal), rhs_value) in
                         local.x.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
@@ -279,6 +285,7 @@ impl CmgPreconditioner {
                     &local.coarse_rhs,
                     &mut local.coarse_correction,
                     workspace,
+                    child_iterations,
                     validation,
                 )?;
                 aggregation.prolong_add_into(&local.coarse_correction, &mut local.x)?;

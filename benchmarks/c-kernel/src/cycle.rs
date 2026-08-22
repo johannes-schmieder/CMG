@@ -116,10 +116,9 @@ struct ReferenceHierarchy {
 impl ReferenceHierarchy {
     fn from_preconditioner(preconditioner: &CmgPreconditioner) -> Result<Self, AnyError> {
         if preconditioner.terminal_factor().is_some() {
-            return Err(io::Error::other(
-                "recursive C comparison requires an iterative terminal",
-            )
-            .into());
+            return Err(
+                io::Error::other("recursive C comparison requires an iterative terminal").into(),
+            );
         }
         let hierarchy_levels = preconditioner.hierarchy().levels();
         if hierarchy_levels.len() < 2 {
@@ -263,7 +262,7 @@ pub(crate) fn benchmark(
     requested_dimension: usize,
     repetitions: usize,
 ) -> Result<CycleBenchmark, AnyError> {
-    let dimension = requested_dimension.min(CYCLE_DIMENSION_LIMIT).max(128);
+    let dimension = requested_dimension.clamp(128, CYCLE_DIMENSION_LIMIT);
     let (graph, rhs) = make_problem(case, dimension)?;
     let preconditioner = CmgPreconditioner::build(
         &graph,
