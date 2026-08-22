@@ -222,6 +222,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/hierarchy-allocation-probe.json`.
 
+### Exact-allocation graph buffer checkpoint — 2026-08-22
+
+- The compact in-place graph-construction buffer was requalified with the
+  benchmark-only exact hierarchy allocation tracker and was **not retained**. Graph time/RSS: 0.868/0.861; hierarchy time/exact peak allocation: 0.947/1.013.
+- Process peak RSS remains recorded as supporting evidence; the hard memory
+  gate uses exact additional live requested bytes during hierarchy setup.
+- Qualification status: `success`.
+- Machine-readable evidence:
+  `.ci/performance/compact-edge-build-buffer-exact-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
