@@ -1,0 +1,167 @@
+name: Parallel performance benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'PERFORMANCE_PLAN.md'
+      - '.github/workflows/parallel-performance.yml'
+  workflow_dispatch:
+    inputs:
+      vertices:
+        description: Synthetic graph vertex count
+        required: false
+        default: '50000'
+      rhs:
+        description: Number of right-hand sides
+        required: false
+        default: '8'
+      repetitions:
+        description: Timing repetitions
+        required: false
+        default: '3'
+
+concurrency:
+  group: parallel-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    env:
+      TESTED_SHA: ${{ github.sha }}
+      RUN_ID: ${{ github.run_id }}
+      VERTICES: ${{ github.event.inputs.vertices || '50000' }}
+      RHS: ${{ github.event.inputs.rhs || '8' }}
+      REPETITIONS: ${{ github.event.inputs.repetitions || '3' }}
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          path: candidate
+
+      - name: Record machine
+        shell: bash
+        run: |
+          uname -a
+          lscpu || true
+          free -h || true
+          rustc --version
+          cargo --version
+
+      - name: Build parallel benchmark
+        shell: bash
+        run: |
+          cd candidate
+          CMG_BENCH_COMMIT="$TESTED_SHA" \
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-parallel" \
+            cargo build --release --features parallel --bin cmg-parallel-bench
+
+      - name: Run thread scaling
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          AVAILABLE=$(nproc)
+          THREADS="1"
+          if [ "$AVAILABLE" -ge 2 ]; then THREADS="$THREADS 2"; fi
+          if [ "$AVAILABLE" -ge 4 ]; then THREADS="$THREADS 4"; fi
+          if [ "$AVAILABLE" -ge 8 ]; then THREADS="$THREADS 8"; fi
+          for CASE in path worker-firm; do
+            for T in $THREADS; do
+              "$GITHUB_WORKSPACE/target-parallel/release/cmg-parallel-bench" \
+                --case "$CASE" \
+                --vertices "$VERTICES" \
+                --rhs "$RHS" \
+                --repetitions "$REPETITIONS" \
+                --threads "$T" \
+                --output "results/${CASE}-${T}.json"
+            done
+          done
+
+      - name: Build scaling record
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          records = {}
+          for path in sorted(Path('results').glob('*.json')):
+              record = json.loads(path.read_text())
+              records[path.stem] = record
+
+          output = {
+              'schema': 1,
+              'tested_sha': os.environ['TESTED_SHA'],
+              'run_id': os.environ['RUN_ID'],
+              'vertices': int(os.environ['VERTICES']),
+              'rhs': int(os.environ['RHS']),
+              'repetitions': int(os.environ['REPETITIONS']),
+              'records': records,
+          }
+          Path('results/parallel-latest.json').write_text(json.dumps(output, indent=2) + '\n')
+          PY
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path('results/parallel-latest.json').read_text())
+          print('## CMG parallel performance checkpoint')
+          print()
+          print(f"Candidate: `{data['tested_sha']}`")
+          print()
+          print('| Case | Threads | Graph build | Setup | CSR matvec | Batch |')
+          print('|---|---:|---:|---:|---:|---:|')
+          for name, record in data['records'].items():
+              print(
+                  f"| {record['case']} | {record['executor_threads']} | "
+                  f"{record['graph_build_speedup']:.3f}x | "
+                  f"{record['setup_speedup']:.3f}x | "
+                  f"{record['csr_matvec_speedup']:.3f}x | "
+                  f"{record['batch_speedup']:.3f}x |"
+              )
+          print()
+          print('Speedups above 1.0 favor the parallel path. Hosted-runner timings are directional.')
+          PY
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmg-parallel-performance-${{ github.sha }}
+          path: results/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist latest scaling record
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C candidate config user.name 'github-actions[bot]'
+          git -C candidate config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for ATTEMPT in 1 2 3 4 5; do
+            git -C candidate fetch origin main
+            git -C candidate reset --hard origin/main
+            mkdir -p candidate/.ci/performance
+            cp results/parallel-latest.json candidate/.ci/performance/parallel-latest.json
+            git -C candidate add .ci/performance/parallel-latest.json
+            if git -C candidate diff --cached --quiet; then
+              exit 0
+            fi
+            git -C candidate commit -m 'perf: record parallel scaling [skip ci]'
+            if git -C candidate push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1

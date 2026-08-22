@@ -49,29 +49,78 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or(1);
 
     let raw_edges = generate_edges(&config.case, config.vertices)?;
-    let graph = Laplacian::from_edges(config.vertices, raw_edges.iter().copied())?;
-    let preconditioner = CmgPreconditioner::build(
-        &graph,
-        CmgOptions {
-            direct_threshold: config.direct_threshold,
-            ..CmgOptions::default()
-        },
-    )?;
-    let right_hand_sides = make_right_hand_sides(&graph, config.rhs_count)?;
-    let pcg_options = PcgOptions::default();
-    let workspace_bytes = PcgWorkspace::new(&preconditioner).byte_len();
     let executor = ParallelExecutor::new(ParallelOptions {
         threads: config.threads,
         min_parallel_len: 1,
         workspace_memory_budget_bytes: config.memory_budget_bytes,
         ..ParallelOptions::default()
     })?;
+    let cmg_options = CmgOptions {
+        direct_threshold: config.direct_threshold,
+        ..CmgOptions::default()
+    };
+
+    let graph = Laplacian::from_edges(config.vertices, raw_edges.iter().copied())?;
+    let parallel_graph = Laplacian::from_edges_with_executor(
+        config.vertices,
+        raw_edges.iter().copied(),
+        &executor,
+    )?;
+    if graph != parallel_graph {
+        return Err(io::Error::other("parallel graph construction changed the canonical graph").into());
+    }
+
+    let mut serial_graph_build_ns = Vec::with_capacity(config.repetitions);
+    let mut parallel_graph_build_ns = Vec::with_capacity(config.repetitions);
+    for repetition in 0..config.repetitions {
+        if repetition % 2 == 0 {
+            serial_graph_build_ns.push(time_serial_graph_build(config.vertices, &raw_edges)?);
+            parallel_graph_build_ns.push(time_parallel_graph_build(
+                config.vertices,
+                &raw_edges,
+                &executor,
+            )?);
+        } else {
+            parallel_graph_build_ns.push(time_parallel_graph_build(
+                config.vertices,
+                &raw_edges,
+                &executor,
+            )?);
+            serial_graph_build_ns.push(time_serial_graph_build(config.vertices, &raw_edges)?);
+        }
+    }
+
+    let preconditioner = CmgPreconditioner::build(&graph, cmg_options)?;
+    let parallel_preconditioner =
+        CmgPreconditioner::build_with_executor(&graph, cmg_options, &executor)?;
+    if preconditioner != parallel_preconditioner {
+        return Err(io::Error::other("parallel setup changed the CMG preconditioner").into());
+    }
+
+    let mut serial_setup_ns = Vec::with_capacity(config.repetitions);
+    let mut parallel_setup_ns = Vec::with_capacity(config.repetitions);
+    for repetition in 0..config.repetitions {
+        if repetition % 2 == 0 {
+            serial_setup_ns.push(time_serial_setup(&graph, cmg_options)?);
+            parallel_setup_ns.push(time_parallel_setup(&graph, cmg_options, &executor)?);
+        } else {
+            parallel_setup_ns.push(time_parallel_setup(&graph, cmg_options, &executor)?);
+            serial_setup_ns.push(time_serial_setup(&graph, cmg_options)?);
+        }
+    }
+
+    let right_hand_sides = make_right_hand_sides(&graph, config.rhs_count)?;
+    let pcg_options = PcgOptions::default();
+    let workspace_bytes = PcgWorkspace::new(&preconditioner).byte_len();
+    if workspace_bytes != PcgWorkspace::new(&parallel_preconditioner).byte_len() {
+        return Err(io::Error::other("parallel setup changed workspace storage").into());
+    }
     let batch_concurrency = executor.batch_concurrency(workspace_bytes, right_hand_sides.len())?;
 
     let serial_warmup = solve_pcg_batch(&graph, &preconditioner, &right_hand_sides, pcg_options)?;
     let parallel_warmup = solve_pcg_batch_with_executor(
         &graph,
-        &preconditioner,
+        &parallel_preconditioner,
         &right_hand_sides,
         pcg_options,
         &executor,
@@ -93,7 +142,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?);
             let (elapsed, results) = time_parallel_batch(
                 &graph,
-                &preconditioner,
+                &parallel_preconditioner,
                 &right_hand_sides,
                 pcg_options,
                 &executor,
@@ -103,7 +152,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         } else {
             let (elapsed, results) = time_parallel_batch(
                 &graph,
-                &preconditioner,
+                &parallel_preconditioner,
                 &right_hand_sides,
                 pcg_options,
                 &executor,
@@ -169,6 +218,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let serial_graph_build_median_ns = median(&mut serial_graph_build_ns);
+    let parallel_graph_build_median_ns = median(&mut parallel_graph_build_ns);
+    let serial_setup_median_ns = median(&mut serial_setup_ns);
+    let parallel_setup_median_ns = median(&mut parallel_setup_ns);
     let serial_batch_median_ns = median(&mut serial_batch_ns);
     let parallel_batch_median_ns = median(&mut parallel_batch_ns);
     let serial_csr_median_ns = median(&mut serial_csr_ns);
@@ -182,7 +235,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let json = format!(
         concat!(
             "{{\n",
-            "  \"schema\": 1,\n",
+            "  \"schema\": 2,\n",
             "  \"source_commit\": \"{}\",\n",
             "  \"case\": \"{}\",\n",
             "  \"logical_cpus\": {},\n",
@@ -194,6 +247,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  \"workspace_bytes\": {},\n",
             "  \"workspace_memory_budget_bytes\": {},\n",
             "  \"batch_concurrency\": {},\n",
+            "  \"serial_graph_build_median_ns\": {},\n",
+            "  \"parallel_graph_build_median_ns\": {},\n",
+            "  \"graph_build_speedup\": {:.17e},\n",
+            "  \"serial_setup_median_ns\": {},\n",
+            "  \"parallel_setup_median_ns\": {},\n",
+            "  \"setup_speedup\": {:.17e},\n",
             "  \"serial_batch_median_ns\": {},\n",
             "  \"parallel_batch_median_ns\": {},\n",
             "  \"batch_speedup\": {:.17e},\n",
@@ -218,6 +277,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         workspace_bytes,
         json_optional_usize(config.memory_budget_bytes),
         batch_concurrency,
+        serial_graph_build_median_ns,
+        parallel_graph_build_median_ns,
+        serial_graph_build_median_ns as f64 / parallel_graph_build_median_ns as f64,
+        serial_setup_median_ns,
+        parallel_setup_median_ns,
+        serial_setup_median_ns as f64 / parallel_setup_median_ns as f64,
         serial_batch_median_ns,
         parallel_batch_median_ns,
         serial_batch_median_ns as f64 / parallel_batch_median_ns as f64,
@@ -236,6 +301,49 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     print!("{json}");
     Ok(())
+}
+
+fn time_serial_graph_build(
+    vertex_count: usize,
+    raw_edges: &[(usize, usize, f64)],
+) -> Result<u128, cmg::CmgError> {
+    let start = Instant::now();
+    let graph = Laplacian::from_edges(vertex_count, raw_edges.iter().copied())?;
+    black_box(&graph);
+    Ok(start.elapsed().as_nanos())
+}
+
+fn time_parallel_graph_build(
+    vertex_count: usize,
+    raw_edges: &[(usize, usize, f64)],
+    executor: &ParallelExecutor,
+) -> Result<u128, cmg::CmgError> {
+    let start = Instant::now();
+    let graph =
+        Laplacian::from_edges_with_executor(vertex_count, raw_edges.iter().copied(), executor)?;
+    black_box(&graph);
+    Ok(start.elapsed().as_nanos())
+}
+
+fn time_serial_setup(
+    graph: &Laplacian,
+    options: CmgOptions,
+) -> Result<u128, cmg::CmgError> {
+    let start = Instant::now();
+    let preconditioner = CmgPreconditioner::build(graph, options)?;
+    black_box(&preconditioner);
+    Ok(start.elapsed().as_nanos())
+}
+
+fn time_parallel_setup(
+    graph: &Laplacian,
+    options: CmgOptions,
+    executor: &ParallelExecutor,
+) -> Result<u128, cmg::CmgError> {
+    let start = Instant::now();
+    let preconditioner = CmgPreconditioner::build_with_executor(graph, options, executor)?;
+    black_box(&preconditioner);
+    Ok(start.elapsed().as_nanos())
 }
 
 fn time_serial_batch(
