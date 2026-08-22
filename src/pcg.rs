@@ -167,7 +167,7 @@ pub fn solve_pcg_with_workspace(
 ) -> Result<PcgResult, CmgError> {
     let options = options.validate()?;
     let dimension = graph.vertex_count();
-    if preconditioner.hierarchy().levels()[0].graph() != graph {
+    if !preconditioner.matches_graph(graph) {
         return Err(CmgError::InvalidHierarchy {
             context: "PCG graph differs from the preconditioner's finest graph",
         });
@@ -177,7 +177,7 @@ pub fn solve_pcg_with_workspace(
     }
     workspace.validate(dimension)?;
 
-    let components = Components::from_laplacian(graph);
+    let components: &Components = preconditioner.finest_components();
     workspace.projected_rhs.copy_from_slice(rhs);
     let rhs_projection_norm =
         components.project_rhs_in_place(&mut workspace.projected_rhs, options.validation)?;

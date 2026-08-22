@@ -78,6 +78,15 @@ impl CmgPreconditioner {
         self.direct_terminal.as_ref()
     }
 
+    pub(crate) fn matches_graph(&self, graph: &Laplacian) -> bool {
+        let finest = self.hierarchy.levels()[0].graph();
+        finest.shares_lineage(graph) || finest == graph
+    }
+
+    pub(crate) fn finest_components(&self) -> &Components {
+        &self.level_components[0]
+    }
+
     /// Allocate reusable storage compatible with this preconditioner.
     #[must_use]
     pub fn workspace(&self) -> CmgWorkspace {

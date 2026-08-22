@@ -1,6 +1,7 @@
 //! Canonical weighted graph-Laplacian representation.
 
 use crate::CmgError;
+use std::sync::Arc;
 
 /// A canonical undirected weighted edge with `u < v` and positive weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,11 +32,20 @@ impl Edge {
 }
 
 /// A deterministic edge-list representation of a weighted graph Laplacian.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Laplacian {
     vertex_count: usize,
     edges: Vec<Edge>,
     diagonal: Vec<f64>,
+    lineage: Arc<()>,
+}
+
+impl PartialEq for Laplacian {
+    fn eq(&self, other: &Self) -> bool {
+        self.vertex_count == other.vertex_count
+            && self.edges == other.edges
+            && self.diagonal == other.diagonal
+    }
 }
 
 impl Laplacian {
@@ -113,6 +123,7 @@ impl Laplacian {
             vertex_count,
             edges: canonical,
             diagonal,
+            lineage: Arc::new(()),
         })
     }
 
@@ -156,6 +167,10 @@ impl Laplacian {
     #[must_use]
     pub fn operator_norm_bound(&self) -> f64 {
         2.0 * self.diagonal.iter().copied().fold(0.0, f64::max)
+    }
+
+    pub(crate) fn shares_lineage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.lineage, &other.lineage)
     }
 
     /// Compute `output = L * input` without allocating.
@@ -242,4 +257,20 @@ where
 pub(crate) fn close(left: f64, right: f64, tolerance: f64) -> bool {
     let scale = 1.0_f64.max(left.abs()).max(right.abs());
     (left - right).abs() <= tolerance * scale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Laplacian;
+
+    #[test]
+    fn clones_share_lineage_but_independent_equal_graphs_do_not() {
+        let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 2.0)]).unwrap();
+        let clone = graph.clone();
+        let rebuilt = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 2.0)]).unwrap();
+
+        assert!(graph.shares_lineage(&clone));
+        assert!(!graph.shares_lineage(&rebuilt));
+        assert_eq!(graph, rebuilt);
+    }
 }

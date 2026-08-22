@@ -65,8 +65,8 @@ Thread counts: 1, 2, 4, 8, 16, 32, and higher where hardware permits.
 
 | Phase | Status | Scope | Gate |
 |---|---|---|---|
-| P0 Measurement | IN PROGRESS | Benchmark driver, performance workflow, baseline record, memory estimates | Baseline compiles, tests, and emits machine-readable output |
-| P1 Remove repeated overhead | NOT STARTED | Cache components and graph identity; remove per-solve reconstruction and recurring allocations | Same solutions and iterations; serial repeated-RHS improvement |
+| P0 Measurement | COMPLETE | Benchmark driver, performance workflow, baseline record, memory estimates | Benchmark binary builds on all supported platforms and emits machine-readable output |
+| P1 Remove repeated overhead | IN PROGRESS | Cache components and graph identity; remove per-solve reconstruction and recurring allocations | Same solutions and iterations; serial repeated-RHS improvement |
 | P2 Terminal and workspace memory | NOT STARTED | Compress terminal traversal; alias safe scratch arrays; expose byte estimates | Lower apply time and workspace bytes |
 | P3 Frozen CSR operator | NOT STARTED | Deterministic row representation and grouped aggregate/component membership | Serial CSR correctness and measured crossover policy |
 | P4 Parallel solve kernels | NOT STARTED | Package-owned thread pool; parallel matvec, vector updates, restriction, prolongation, reductions | Equivalent certified answers across thread counts |
@@ -96,6 +96,8 @@ The baseline repeats avoidable work in repeated solves:
 - component projection and centering allocations;
 - sequential batch processing.
 
+The first P1 checkpoint adds a graph-lineage token preserved by `Laplacian::clone`. A solve using the same graph lineage now performs a constant-time identity check; a separately reconstructed but structurally equal graph retains the compatibility fallback. PCG also reuses the component metadata already stored in the preconditioner rather than rebuilding union-find state for every RHS.
+
 The baseline edge-scatter matvec is compact and effective serially but is not an appropriate multicore kernel because two endpoints are updated for each edge. The primary parallel representation will therefore use deterministic row-wise CSR.
 
 The terminal dimension is bounded by the configured direct threshold, but the baseline stores and traverses a dense lower factor. The initial terminal optimization will keep the trusted dense factorization and compress the completed factor for repeated triangular solves.
@@ -105,7 +107,9 @@ The terminal dimension is bounded by the configured direct threshold, but the ba
 | Date | Commit | Result | Next action |
 |---|---|---|---|
 | 2026-08-22 | `b65ae28a15f00925348046bb474c8133e5128cd0` | Correctness-qualified baseline identified | Commit measurement-only infrastructure |
+| 2026-08-22 | `cc9d641d9e4d227196389eb59144e762d3caa926` | Benchmark driver, live plan, and performance workflow added | Format and cross-platform qualification |
+| 2026-08-22 | `b45b252f88925028e3ad9a73a3f75eeab05f6754` | Benchmark source formatted; debug/release tests built the benchmark on Linux, macOS, and Windows | Remove repeated graph and component setup |
 
 ## Current next action
 
-Commit and validate P0 without changing numerical solver behavior. Once baseline artifacts are available, begin P1 by caching finest-level component metadata and replacing full structural graph comparison with a constant-time preconditioner identity check.
+Complete P1 by adding reusable component scratch arrays to CMG and PCG workspaces, then benchmark repeated right-hand sides against the pinned baseline.
