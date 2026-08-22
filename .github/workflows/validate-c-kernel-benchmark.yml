@@ -1,0 +1,128 @@
+name: Validate pinned C kernel benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/validate-c-kernel-benchmark.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Format, test, lint, and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
+          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+
+      - name: Run matched Rust and C kernels
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/performance/c-kernel
+          for CASE in path worker-firm; do
+            CMG_BENCH_COMMIT="$TESTED_SHA" cargo run --quiet --release \
+              --manifest-path benchmarks/c-kernel/Cargo.toml -- \
+              --case "$CASE" --vertices 100000 --repetitions 5 \
+              --output ".ci/performance/c-kernel/${CASE}.json"
+          done
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          record = {
+              "schema": 1,
+              "tested_sha": os.environ["TESTED_SHA"],
+              "upstream_commit": "19752fc102f8cae8e34f66457bfaccb1aaa60375",
+              "results": {
+                  "path": json.loads(Path('.ci/performance/c-kernel/path.json').read_text()),
+                  "worker_firm": json.loads(Path('.ci/performance/c-kernel/worker-firm.json').read_text()),
+              },
+          }
+          Path('.ci/performance/c-kernel-latest.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+
+      - name: Update live performance plan
+        shell: python
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path('.ci/performance/c-kernel-latest.json').read_text())
+          path_ratio = result['results']['path']['rust_over_c']
+          worker_ratio = result['results']['worker_firm']['rust_over_c']
+          path_error = result['results']['path']['max_scaled_error']
+          worker_error = result['results']['worker_firm']['max_scaled_error']
+
+          plan = Path('PERFORMANCE_PLAN.md')
+          text = plan.read_text()
+          text = text.replace(
+              '| P7 Pinned C comparison | NOT STARTED | One-thread Rust/C kernels agree numerically and are timed equivalently |',
+              '| P7 Pinned C comparison | IN PROGRESS | Pinned `sspmv` agrees numerically and is timed equivalently; recursive-cycle comparison remains |',
+          )
+          text = text.replace(
+              '- forest splitting allocates temporary traversal vectors;\n',
+              '- forest splitting is serial, but its traversal vectors are now reused rather than repeatedly allocated;\n',
+          )
+
+          marker = '## Approved parallel architecture\n'
+          section = f'''### P6/P7 continuation\n\n- Parallel setup kernels use a conservative 65,536-item floor. Heavy-edge selection also remains on the compact serial edge scan for sparse graphs where temporary CSR construction cannot amortize.\n- Forest splitting reuses traversal buffers instead of allocating two vectors for every leaf walk.\n- An isolated crate now compiles the pinned official C `sspmv` arithmetic loop without MATLAB and compares it with the Rust edge-list Laplacian matvec on identical 100,000-vertex graphs. The C code is benchmark-only and is not linked into the production library.\n- On this hosted runner, Rust/C median time ratios were {path_ratio:.3f}x for the path and {worker_ratio:.3f}x for the worker-firm graph; ratios below one favor Rust. Maximum scaled numerical differences were {path_error:.3e} and {worker_error:.3e}. These timings are directional, not a substitute for dedicated large-machine qualification.\n\n'''
+          if '### P6/P7 continuation\n' not in text:
+              if marker not in text:
+                  raise SystemExit('performance-plan architecture marker changed')
+              text = text.replace(marker, section + marker)
+
+          checkpoint = (
+              f"| 2026-08-22 | `3d76eb01` / `7e3ab0df` / `fdf5b1de` / "
+              f"`{os.environ['TESTED_SHA'][:8]}` | Parallel setup routing, forest scratch reuse, "
+              "and the pinned C matvec comparison were validated |\n"
+          )
+          log_anchor = '| 2026-08-22 | `636fa093` / `f17b377d` | Benchmark reconstruction repaired; all-feature debug/release tests passed on Ubuntu, macOS, and Windows |\n'
+          if checkpoint not in text:
+              if log_anchor not in text:
+                  raise SystemExit('performance-plan checkpoint marker changed')
+              text = text.replace(log_anchor, log_anchor + checkpoint)
+
+          heading = '## Current next action\n\n'
+          if heading not in text:
+              raise SystemExit('performance-plan next-action heading changed')
+          prefix, _ = text.split(heading, 1)
+          text = prefix + heading + (
+              'Extend the standalone pinned-C harness to restriction/prolongation and the recursive '
+              'preconditioner application, then run larger setup and repeated-RHS workloads. '
+              'Within-solve parallel CMG/PCG remains a separate measured decision because '
+              'across-RHS scheduling already scales without duplicating immutable hierarchy storage.\n'
+          )
+          plan.write_text(text)
+
+      - name: Commit validated comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/validate-c-kernel-benchmark.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: benchmark Rust matvec against pinned C kernel'
+          git pull --rebase origin main
+          git push origin HEAD:main
