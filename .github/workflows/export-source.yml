@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Archive source
         shell: bash
@@ -31,11 +33,12 @@ jobs:
       - name: Record export run
         shell: bash
         run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
           mkdir -p .ci
           printf '{\n  "run_id": "%s",\n  "head_sha": "%s",\n  "artifact_name": "cmg-source-%s"\n}\n' \
             "$GITHUB_RUN_ID" "$GITHUB_SHA" "$GITHUB_SHA" > .ci/source-export.json
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add .ci/source-export.json
           git commit -m 'dev: record source export [skip ci]'
           git push
