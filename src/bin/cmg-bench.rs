@@ -1,5 +1,6 @@
 use cmg::{
-    CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace, solve_pcg_with_workspace,
+    CmgOptions, CmgPreconditioner, CsrLaplacian, Laplacian, PcgOptions, PcgWorkspace,
+    solve_pcg_with_workspace,
 };
 use std::env;
 use std::error::Error;
@@ -10,6 +11,7 @@ use std::mem::size_of_val;
 use std::time::Instant;
 
 const BENCHMARK_BASELINE_COMMIT: &str = "b45b252f88925028e3ad9a73a3f75eeab05f6754";
+const TARGET_MATVEC_EDGE_VISITS: usize = 20_000_000;
 const SOURCE_COMMIT: &str = match option_env!("CMG_BENCH_COMMIT") {
     Some(value) => value,
     None => "unknown",
@@ -126,6 +128,60 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let mut csr_build_ns = Vec::with_capacity(config.repetitions);
+    let mut csr = None;
+    for _ in 0..config.repetitions {
+        let start = Instant::now();
+        let candidate = CsrLaplacian::from_laplacian(&graph)?;
+        csr_build_ns.push(start.elapsed().as_nanos());
+        csr = Some(candidate);
+    }
+    let csr = csr.ok_or_else(|| invalid_input("no CSR operator was constructed"))?;
+    let kernel_input: Vec<f64> = (0..graph.vertex_count())
+        .map(|vertex| {
+            let code = vertex.wrapping_mul(65_537).wrapping_add(19) % 4_093;
+            (code as f64 - 2_046.0) / 257.0
+        })
+        .collect();
+    let mut edge_output = vec![0.0; graph.vertex_count()];
+    let mut csr_output = vec![0.0; graph.vertex_count()];
+    graph.matvec_into(&kernel_input, &mut edge_output)?;
+    csr.matvec_into(&kernel_input, &mut csr_output)?;
+    validate_matvec_agreement(&edge_output, &csr_output)?;
+
+    let matvec_loops = (TARGET_MATVEC_EDGE_VISITS / graph.edge_count().max(1)).clamp(8, 2_000);
+    let mut edge_matvec_ns = Vec::with_capacity(config.repetitions);
+    let mut csr_matvec_ns = Vec::with_capacity(config.repetitions);
+    for repetition in 0..config.repetitions {
+        if repetition % 2 == 0 {
+            edge_matvec_ns.push(time_edge_matvec(
+                &graph,
+                &kernel_input,
+                &mut edge_output,
+                matvec_loops,
+            )?);
+            csr_matvec_ns.push(time_csr_matvec(
+                &csr,
+                &kernel_input,
+                &mut csr_output,
+                matvec_loops,
+            )?);
+        } else {
+            csr_matvec_ns.push(time_csr_matvec(
+                &csr,
+                &kernel_input,
+                &mut csr_output,
+                matvec_loops,
+            )?);
+            edge_matvec_ns.push(time_edge_matvec(
+                &graph,
+                &kernel_input,
+                &mut edge_output,
+                matvec_loops,
+            )?);
+        }
+    }
+
     let report = preconditioner.hierarchy().report();
     let graph_bytes = size_of_val(graph.edges()) + size_of_val(graph.diagonal());
     let hierarchy_core_bytes: usize = preconditioner
@@ -149,11 +205,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let preconditioner_apply_median_ns = median(&mut apply_ns);
     let solve_batch_median_ns = median(&mut solve_batch_ns);
     let solve_per_rhs_median_ns = solve_batch_median_ns / config.rhs_count as u128;
+    let csr_build_median_ns = median(&mut csr_build_ns);
+    let edge_matvec_median_ns = median(&mut edge_matvec_ns);
+    let csr_matvec_median_ns = median(&mut csr_matvec_ns);
+    let csr_over_edge_matvec = csr_matvec_median_ns as f64 / edge_matvec_median_ns as f64;
 
     let json = format!(
         concat!(
             "{{\n",
-            "  \"schema\": 2,\n",
+            "  \"schema\": 3,\n",
             "  \"source_commit\": \"{}\",\n",
             "  \"benchmark_baseline_commit\": \"{}\",\n",
             "  \"case\": \"{}\",\n",
@@ -170,7 +230,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  \"preconditioner_apply_median_ns\": {},\n",
             "  \"solve_batch_median_ns\": {},\n",
             "  \"solve_per_rhs_median_ns\": {},\n",
+            "  \"csr_build_median_ns\": {},\n",
+            "  \"matvec_loops\": {},\n",
+            "  \"edge_matvec_median_ns\": {},\n",
+            "  \"csr_matvec_median_ns\": {},\n",
+            "  \"csr_over_edge_matvec\": {:.17e},\n",
             "  \"graph_core_bytes\": {},\n",
+            "  \"csr_bytes\": {},\n",
+            "  \"csr_uses_compact_indices\": {},\n",
             "  \"hierarchy_core_bytes\": {},\n",
             "  \"terminal_factor_bytes\": {},\n",
             "  \"cmg_workspace_bytes\": {},\n",
@@ -198,7 +265,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         preconditioner_apply_median_ns,
         solve_batch_median_ns,
         solve_per_rhs_median_ns,
+        csr_build_median_ns,
+        matvec_loops,
+        edge_matvec_median_ns,
+        csr_matvec_median_ns,
+        csr_over_edge_matvec,
         graph_bytes,
+        csr.byte_len(),
+        csr.uses_compact_indices(),
         hierarchy_core_bytes,
         terminal_factor_bytes,
         cmg_workspace_bytes,
@@ -214,6 +288,46 @@ fn main() -> Result<(), Box<dyn Error>> {
         fs::write(path, &json)?;
     }
     print!("{json}");
+    Ok(())
+}
+
+fn time_edge_matvec(
+    graph: &Laplacian,
+    input: &[f64],
+    output: &mut [f64],
+    loops: usize,
+) -> Result<u128, cmg::CmgError> {
+    let start = Instant::now();
+    for _ in 0..loops {
+        graph.matvec_into(input, output)?;
+        black_box(&*output);
+    }
+    Ok(start.elapsed().as_nanos() / loops as u128)
+}
+
+fn time_csr_matvec(
+    graph: &CsrLaplacian,
+    input: &[f64],
+    output: &mut [f64],
+    loops: usize,
+) -> Result<u128, cmg::CmgError> {
+    let start = Instant::now();
+    for _ in 0..loops {
+        graph.matvec_into(input, output)?;
+        black_box(&*output);
+    }
+    Ok(start.elapsed().as_nanos() / loops as u128)
+}
+
+fn validate_matvec_agreement(left: &[f64], right: &[f64]) -> Result<(), io::Error> {
+    for (index, (left_value, right_value)) in left.iter().zip(right).enumerate() {
+        let scale = 1.0_f64.max(left_value.abs()).max(right_value.abs());
+        if (left_value - right_value).abs() > 4.0e-15 * scale {
+            return Err(io::Error::other(format!(
+                "edge and CSR matvec differ at {index}: {left_value} versus {right_value}"
+            )));
+        }
+    }
     Ok(())
 }
 
