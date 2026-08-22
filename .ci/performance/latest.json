@@ -1,0 +1,221 @@
+{
+  "schema": 1,
+  "tested_sha": "a82155e87803700d79f9681799150a2679502e19",
+  "baseline_ref": "b45b252f88925028e3ad9a73a3f75eeab05f6754",
+  "run_id": "32578037903",
+  "vertices": 20000,
+  "rhs": 4,
+  "repetitions": 3,
+  "results": {
+    "path": {
+      "baseline": {
+        "schema": 1,
+        "baseline_commit": "b65ae28a15f00925348046bb474c8133e5128cd0",
+        "case": "path",
+        "logical_cpus": 4,
+        "vertices": 20000,
+        "canonical_edges": 19999,
+        "raw_edges": 19999,
+        "rhs_count": 4,
+        "repetitions": 3,
+        "direct_threshold": 700,
+        "generation_ns": 170816,
+        "graph_build_median_ns": 570114,
+        "hierarchy_build_median_ns": 42118539,
+        "preconditioner_apply_median_ns": 3065275,
+        "solve_batch_median_ns": 207844805,
+        "solve_per_rhs_median_ns": 51961201,
+        "graph_core_bytes": 639976,
+        "hierarchy_core_bytes": 1285064,
+        "cmg_workspace_estimated_bytes": 1285160,
+        "pcg_workspace_estimated_bytes": 2565160,
+        "terminal_reason": "Direct",
+        "level_vertices": [
+          20000,
+          7871,
+          3613,
+          645
+        ],
+        "level_matrix_nonzeros": [
+          59998,
+          23611,
+          10837,
+          1933
+        ],
+        "iterations": [
+          15,
+          15,
+          15,
+          15
+        ],
+        "backward_errors": [
+          7.46753833846178e-09,
+          7.351431445174436e-09,
+          7.533899289248588e-09,
+          7.615836586811839e-09
+        ]
+      },
+      "candidate": {
+        "schema": 2,
+        "source_commit": "a82155e87803700d79f9681799150a2679502e19",
+        "benchmark_baseline_commit": "b45b252f88925028e3ad9a73a3f75eeab05f6754",
+        "case": "path",
+        "logical_cpus": 4,
+        "vertices": 20000,
+        "canonical_edges": 19999,
+        "raw_edges": 19999,
+        "rhs_count": 4,
+        "repetitions": 3,
+        "direct_threshold": 700,
+        "generation_ns": 160771,
+        "graph_build_median_ns": 544426,
+        "hierarchy_build_median_ns": 42250186,
+        "preconditioner_apply_median_ns": 716855,
+        "solve_batch_median_ns": 64511317,
+        "solve_per_rhs_median_ns": 16127829,
+        "graph_core_bytes": 639976,
+        "hierarchy_core_bytes": 1285064,
+        "terminal_factor_bytes": 41232,
+        "cmg_workspace_bytes": 878656,
+        "pcg_workspace_bytes": 2158712,
+        "terminal_reason": "Direct",
+        "level_vertices": [
+          20000,
+          7871,
+          3613,
+          645
+        ],
+        "level_matrix_nonzeros": [
+          59998,
+          23611,
+          10837,
+          1933
+        ],
+        "iterations": [
+          15,
+          15,
+          15,
+          15
+        ],
+        "backward_errors": [
+          7.46753833846178e-09,
+          7.351431445174436e-09,
+          7.533899289248588e-09,
+          7.615836586811839e-09
+        ]
+      },
+      "candidate_over_baseline": {
+        "graph_build_median_ns": 0.9549423448643605,
+        "hierarchy_build_median_ns": 1.0031256307347223,
+        "preconditioner_apply_median_ns": 0.23386319335133063,
+        "solve_batch_median_ns": 0.31038214787230306,
+        "solve_per_rhs_median_ns": 0.31038214455435703
+      }
+    },
+    "worker_firm": {
+      "baseline": {
+        "schema": 1,
+        "baseline_commit": "b65ae28a15f00925348046bb474c8133e5128cd0",
+        "case": "worker-firm",
+        "logical_cpus": 4,
+        "vertices": 20000,
+        "canonical_edges": 34286,
+        "raw_edges": 34286,
+        "rhs_count": 4,
+        "repetitions": 3,
+        "direct_threshold": 700,
+        "generation_ns": 363134,
+        "graph_build_median_ns": 1798336,
+        "hierarchy_build_median_ns": 12293159,
+        "preconditioner_apply_median_ns": 1746619,
+        "solve_batch_median_ns": 87217686,
+        "solve_per_rhs_median_ns": 21804421,
+        "graph_core_bytes": 982864,
+        "hierarchy_core_bytes": 1545448,
+        "cmg_workspace_estimated_bytes": 1007440,
+        "pcg_workspace_estimated_bytes": 2287440,
+        "terminal_reason": "Direct",
+        "level_vertices": [
+          20000,
+          3630,
+          1183,
+          373
+        ],
+        "level_matrix_nonzeros": [
+          88572,
+          16818,
+          9015,
+          5987
+        ],
+        "iterations": [
+          10,
+          10,
+          10,
+          10
+        ],
+        "backward_errors": [
+          6.789181129394911e-09,
+          6.611004285143087e-09,
+          6.890723548273922e-09,
+          7.352774056435979e-09
+        ]
+      },
+      "candidate": {
+        "schema": 2,
+        "source_commit": "a82155e87803700d79f9681799150a2679502e19",
+        "benchmark_baseline_commit": "b45b252f88925028e3ad9a73a3f75eeab05f6754",
+        "case": "worker-firm",
+        "logical_cpus": 4,
+        "vertices": 20000,
+        "canonical_edges": 34286,
+        "raw_edges": 34286,
+        "rhs_count": 4,
+        "repetitions": 3,
+        "direct_threshold": 700,
+        "generation_ns": 315623,
+        "graph_build_median_ns": 1748741,
+        "hierarchy_build_median_ns": 12047651,
+        "preconditioner_apply_median_ns": 1733479,
+        "solve_batch_median_ns": 85606080,
+        "solve_per_rhs_median_ns": 21401520,
+        "graph_core_bytes": 982864,
+        "hierarchy_core_bytes": 1545448,
+        "terminal_factor_bytes": 561000,
+        "cmg_workspace_bytes": 652128,
+        "pcg_workspace_bytes": 1932184,
+        "terminal_reason": "Direct",
+        "level_vertices": [
+          20000,
+          3630,
+          1183,
+          373
+        ],
+        "level_matrix_nonzeros": [
+          88572,
+          16818,
+          9015,
+          5987
+        ],
+        "iterations": [
+          10,
+          10,
+          10,
+          10
+        ],
+        "backward_errors": [
+          6.789181129394911e-09,
+          6.611004285143087e-09,
+          6.890723548273922e-09,
+          7.352774056435979e-09
+        ]
+      },
+      "candidate_over_baseline": {
+        "graph_build_median_ns": 0.9724217276415531,
+        "hierarchy_build_median_ns": 0.9800288924921576,
+        "preconditioner_apply_median_ns": 0.9924768939305023,
+        "solve_batch_median_ns": 0.981522027539231,
+        "solve_per_rhs_median_ns": 0.9815220500466396
+      }
+    }
+  }
+}
