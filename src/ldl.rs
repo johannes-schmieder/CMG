@@ -80,9 +80,7 @@ impl GroundedLdl {
             for row in (column + 1)..dimension {
                 let mut value = matrix[row][column];
                 for previous in 0..column {
-                    value -= lower[row][previous]
-                        * lower[column][previous]
-                        * diagonal[previous];
+                    value -= lower[row][previous] * lower[column][previous] * diagonal[previous];
                 }
                 lower[row][column] = value / pivot;
             }
