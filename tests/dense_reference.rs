@@ -20,19 +20,25 @@ fn dense_solve(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
         matrix.swap(pivot_column, pivot_row);
         rhs.swap(pivot_column, pivot_row);
         let pivot = matrix[pivot_column][pivot_column];
+        let pivot_tail = matrix[pivot_column][(pivot_column + 1)..].to_vec();
         for row in (pivot_column + 1)..n {
             let multiplier = matrix[row][pivot_column] / pivot;
             matrix[row][pivot_column] = 0.0;
-            for column in (pivot_column + 1)..n {
-                matrix[row][column] -= multiplier * matrix[pivot_column][column];
+            for (entry, pivot_entry) in matrix[row][(pivot_column + 1)..]
+                .iter_mut()
+                .zip(&pivot_tail)
+            {
+                *entry -= multiplier * *pivot_entry;
             }
             rhs[row] -= multiplier * rhs[pivot_column];
         }
     }
     let mut solution = vec![0.0; n];
     for row in (0..n).rev() {
-        let tail: f64 = ((row + 1)..n)
-            .map(|column| matrix[row][column] * solution[column])
+        let tail: f64 = matrix[row][(row + 1)..]
+            .iter()
+            .zip(&solution[(row + 1)..])
+            .map(|(coefficient, value)| coefficient * value)
             .sum();
         solution[row] = (rhs[row] - tail) / matrix[row][row];
     }
