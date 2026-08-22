@@ -39,8 +39,8 @@ intentional interface or numerical deviations.
 - [x] grounded degree-ordered LDL^T terminal solver;
 - [x] stationary recursive CMG cycle with damped Jacobi smoothing;
 - [x] reusable immutable hierarchy and caller-owned workspaces;
-- [ ] PCG with fresh original-system residual certification;
-- [ ] repeated-right-hand-side API;
+- [x] PCG with fresh original-system residual certification;
+- [x] repeated-right-hand-side API;
 - [ ] exact and adversarial small-problem qualification on Linux, macOS, and
       Windows.
 
@@ -58,10 +58,10 @@ src/
   coarsen.rs          Restriction, prolongation, and Galerkin contraction
   hierarchy.rs        Hierarchy construction, stops, repeats, diagnostics
   ldl.rs              Component-grounded terminal LDL^T
-  workspace.rs        Reusable application workspaces
+  workspace.rs        Reusable preconditioner workspaces
   preconditioner.rs   Stationary recursive CMG cycle
   pcg.rs              Certified PCG and batched solves
-  diagnostics.rs      Build/apply/solve reports
+  sddm_solver.rs      End-to-end SDDM solve wrapper
 
 tests/
   graph_exact.rs
@@ -71,6 +71,7 @@ tests/
   ldl_small.rs
   preconditioner_properties.rs
   solve_small.rs
+  sddm_solve.rs
   adversarial.rs
   determinism.rs
 ```
@@ -87,10 +88,10 @@ stationary reference port is qualified.
 | 1. Graph and SDDM core | **complete** | Dense assembly, energy, exact augmentation, and component tests green |
 | 2. Forest decomposition | **complete** | Golden parent/split/component tests and quality gates green |
 | 3. Coarse graphs and hierarchy | **complete** | Dense `R L R^T`, stop-rule, hierarchy, Clippy, and docs gates green |
-| 4. Terminal LDL^T | **implemented; final combined quality CI running** | Connected/disconnected direct solves and fresh residual tests green |
-| 5. CMG cycle | **implemented; final combined quality CI running** | Linearity, symmetry, positivity, direct/iterative/recursive tests green on three OSes |
-| 6. PCG and batching | **in progress locally** | Certified end-to-end small solves pass |
-| 7. Adversarial qualification | not started | Debug/release suites pass on all CI platforms |
+| 4. Terminal LDL^T | **complete** | Connected/disconnected direct solves and fresh residual tests green |
+| 5. CMG cycle | **complete** | Linearity, symmetry, positivity, recursion, Clippy, and docs gates green |
+| 6. PCG and batching | **implemented; formatted quality CI running** | Debug/release tests and builds green on all three operating systems |
+| 7. Adversarial qualification | **in progress locally** | SDDM wrapper and expanded graph/weight suite green |
 | 8. Completion audit and docs | not started | Every upstream production routine is covered |
 
 ## 6. Implemented numerical path
@@ -117,7 +118,13 @@ The current code provides:
 - exact factor-nonzero calibration of the final recursive repeat count;
 - stationary damped-Jacobi pre/post smoothing, residual restriction, recursive
   coarse correction, and prolongation;
-- immutable preconditioners and reusable caller-owned per-level work arrays.
+- immutable preconditioners and reusable caller-owned per-level work arrays;
+- quotient-space PCG with explicit breakdown and iteration-limit errors;
+- periodic residual replacement and immediate fresh residual verification at
+  candidate convergence;
+- reported relative residual, backward error, tolerance, iterations, and
+  restart counts;
+- reusable PCG workspaces and sequential batched right-hand-side solves.
 
 The exact augmentation intentionally improves on the MATLAB wrapper's numerical
 `1e-13` classification: a small but positive row-sum excess is not discarded or
@@ -141,16 +148,20 @@ Current exact/property tests include:
 - every hierarchy terminal reason, strict level reduction, and repeat bounds;
 - weighted-path direct factor values and fresh residuals;
 - static-degree ordering on a star and disconnected direct solves;
-- exact direct-terminal preconditioner behavior;
-- upstream iterative-terminal damped-Jacobi behavior;
+- exact direct-terminal and upstream iterative-terminal preconditioner behavior;
 - factor-based repeat calibration before a direct terminal;
 - forced-multilevel linearity, numerical symmetry, positive action, and
   deterministic workspace reuse;
-- incompatible-right-hand-side rejection at public boundaries.
+- exact one-iteration PCG with a direct preconditioner;
+- zero-right-hand-side handling and quotient-space centering;
+- forced-multilevel PCG with a fresh original-system certificate;
+- disconnected PCG systems and explicit compatibility failures;
+- batched/individual equality and reusable solver workspaces;
+- explicit iteration-budget/nonconvergence errors.
 
-Remaining tests cover certified PCG, batched right-hand sides, SDDM end-to-end
-solves, more graph families, extreme weights, and independent dense-oracle
-comparison.
+Remaining tests cover the end-to-end SDDM wrapper, more graph families, extreme
+weights, scale invariance, independent dense-oracle comparisons, and expanded
+input-order determinism.
 
 ## 8. Intentional differences from the MATLAB interface
 
@@ -164,6 +175,8 @@ comparison.
 - A configurable maximum-level guard is added as a hard safety limit.
 - The direct terminal grounds one vertex per component rather than assuming a
   connected graph with one final coordinate.
+- PCG periodically replaces its recursive residual and always verifies
+  convergence against a fresh original-system residual.
 
 The hierarchy constants and stationary cycle remain faithful to the pinned
 upstream implementation unless a deviation is recorded here.
@@ -182,18 +195,19 @@ upstream implementation unless a deviation is recorded here.
 | 2026-08-22 | Ground the highest-index vertex per component | Deterministic disconnected extension of the upstream final-coordinate gauge |
 | 2026-08-22 | Dense storage for the first terminal factor | Auditability first; terminal size is bounded by the direct threshold |
 | 2026-08-22 | Reusable level workspaces via take/restore | Avoid application-time allocation without unsafe aliasing |
+| 2026-08-22 | Fresh residual certification and periodic restarts | Prevent false convergence from recursively accumulated residual drift |
 
 ## 10. Current risks and open defects
 
-- The formatted stationary-cycle checkpoint needs the full quality rerun
-  triggered by this plan update because GitHub suppresses recursive workflow
-  runs from formatting-bot commits.
+- The formatted PCG checkpoint needs the full quality rerun triggered by this
+  plan update because GitHub suppresses recursive workflow runs from
+  formatting-bot commits.
 - Dense LDL setup is cubic and should eventually be replaced or supplemented by
   sparse storage for unusually dense terminal levels; correctness comes first.
 - The upstream hierarchy can stagnate on dense graphs. The Rust port preserves
   its iterative terminal fallback and reports it explicitly.
-- PCG breakdown, nonconvergence, and residual-verification errors are not yet
-  implemented.
+- The SDDM lift/extract primitives exist, but the end-to-end reusable SDDM solver
+  and original-SDDM residual certificate are not yet implemented.
 - Local Rust compilation is unavailable in the agent container, so every Rust
   checkpoint is validated through GitHub Actions.
 
@@ -206,13 +220,14 @@ upstream implementation unless a deviation is recorded here.
 | Exact SDDM layer | `8c5f710b`–`9fa8af0b` | green | exact augmentation and focused tests on three OSes |
 | Forest decomposition | `a5b80c9b`–`f5fc26d3` | green | heavy-edge, split kernel, low-degree correction, labels |
 | Hierarchy construction | `0403d435`–`5b0a399b` | green | exact Galerkin contraction and all terminal guards |
-| Terminal LDL^T | `5abf4ed6` | tests green; Clippy repair included next | component grounding, degree ordering, factor and solve tests |
-| Stationary cycle | `c6b50ea0` | all tests green; initial format failure fixed | repeat calibration, recursion and reusable workspace |
-| Stationary-cycle rustfmt | `931eaa1f` | full quality rerun triggered | formatted source checkpoint |
+| Terminal LDL^T and stationary cycle | `5abf4ed6`–`2184ff5d` | green | factorization, repeat calibration, recursion, workspaces |
+| Certified PCG and batching | `62224219` | all tests green; initial format failure fixed | certificates, diagnostics, batches, explicit errors |
+| PCG rustfmt | `9262e7a5` | full quality rerun triggered | formatted source checkpoint |
 
 ## 12. Current next action
 
-Implement certified quotient-space PCG with explicit breakdown and
-nonconvergence errors, fresh original-system residual verification, reusable
-solver workspace, batched right-hand sides, and an SDDM wrapper using the exact
-extra-vertex map.
+Complete and qualify an end-to-end reusable SDDM solver that builds CMG on the
+exact augmented Laplacian, lifts each right-hand side, extracts the original
+solution, and independently certifies the residual in the original SDDM system.
+Then expand adversarial and determinism tests across the required graph families
+and weight regimes.
