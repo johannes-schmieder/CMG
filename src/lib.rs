@@ -12,6 +12,7 @@ mod coarsen;
 mod components;
 mod csr;
 mod error;
+mod execution;
 mod forest;
 mod graph;
 mod hierarchy;
@@ -27,6 +28,9 @@ pub use coarsen::Aggregation;
 pub use components::Components;
 pub use csr::CsrLaplacian;
 pub use error::CmgError;
+#[cfg(feature = "parallel")]
+pub use execution::ParallelExecutor;
+pub use execution::ParallelOptions;
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };
@@ -35,6 +39,8 @@ pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, Terminal
 pub use ldl::GroundedLdl;
 pub use options::{CmgOptions, PcgOptions, ValidationOptions};
 pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_with_workspace};
+#[cfg(feature = "parallel")]
+pub use pcg::{solve_pcg_batch_parallel, solve_pcg_batch_with_executor};
 pub use preconditioner::CmgPreconditioner;
 pub use sddm::{SddmAugmentation, SddmMatrix};
 pub use sddm_solver::{SddmResult, SddmSolver, SddmWorkspace, solve_sddm};

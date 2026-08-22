@@ -10,6 +10,11 @@ readme = "README.md"
 keywords = ["laplacian", "multigrid", "preconditioner", "pcg", "sparse"]
 categories = ["algorithms", "mathematics", "science"]
 
+[features]
+default = []
+parallel = ["dep:rayon"]
+
 [dependencies]
+rayon = { version = "1.12", optional = true }
 
 [dev-dependencies]

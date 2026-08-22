@@ -1,6 +1,10 @@
 //! Deterministic row-oriented Laplacian storage for solve kernels.
 
+#[cfg(feature = "parallel")]
+use crate::ParallelExecutor;
 use crate::{CmgError, Laplacian};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, PartialEq)]
 enum ColumnIndices {
@@ -146,20 +150,7 @@ impl CsrLaplacian {
 
     /// Compute `output = L * input` without allocating.
     pub fn matvec_into(&self, input: &[f64], output: &mut [f64]) -> Result<(), CmgError> {
-        if input.len() != self.vertex_count {
-            return Err(CmgError::dimension(
-                "CsrLaplacian::matvec input",
-                self.vertex_count,
-                input.len(),
-            ));
-        }
-        if output.len() != self.vertex_count {
-            return Err(CmgError::dimension(
-                "CsrLaplacian::matvec output",
-                self.vertex_count,
-                output.len(),
-            ));
-        }
+        self.validate_matvec_dimensions(input, output)?;
 
         match &self.columns {
             ColumnIndices::Compact(columns) => {
@@ -182,6 +173,77 @@ impl CsrLaplacian {
                     output[row] = sum;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Compute `output = L * input` using the supplied package-owned pool.
+    ///
+    /// Every row is evaluated in its canonical neighbor order, so the
+    /// arithmetic for an individual row is independent of worker scheduling.
+    /// Small problems and one-thread executors use the serial row kernel.
+    #[cfg(feature = "parallel")]
+    pub fn matvec_into_parallel(
+        &self,
+        input: &[f64],
+        output: &mut [f64],
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
+        self.validate_matvec_dimensions(input, output)?;
+        if !executor.should_parallel(self.vertex_count) {
+            return self.matvec_into(input, output);
+        }
+
+        let rows_per_chunk = executor.work_chunk_len(self.vertex_count);
+        executor.install(|| match &self.columns {
+            ColumnIndices::Compact(columns) => output
+                .par_chunks_mut(rows_per_chunk)
+                .enumerate()
+                .for_each(|(chunk_index, chunk)| {
+                    let first_row = chunk_index * rows_per_chunk;
+                    for (offset, value) in chunk.iter_mut().enumerate() {
+                        let row = first_row + offset;
+                        let center = input[row];
+                        let mut sum = 0.0;
+                        for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                            sum += self.weights[index] * (center - input[columns[index] as usize]);
+                        }
+                        *value = sum;
+                    }
+                }),
+            ColumnIndices::Native(columns) => output
+                .par_chunks_mut(rows_per_chunk)
+                .enumerate()
+                .for_each(|(chunk_index, chunk)| {
+                    let first_row = chunk_index * rows_per_chunk;
+                    for (offset, value) in chunk.iter_mut().enumerate() {
+                        let row = first_row + offset;
+                        let center = input[row];
+                        let mut sum = 0.0;
+                        for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                            sum += self.weights[index] * (center - input[columns[index]]);
+                        }
+                        *value = sum;
+                    }
+                }),
+        });
+        Ok(())
+    }
+
+    fn validate_matvec_dimensions(&self, input: &[f64], output: &[f64]) -> Result<(), CmgError> {
+        if input.len() != self.vertex_count {
+            return Err(CmgError::dimension(
+                "CsrLaplacian::matvec input",
+                self.vertex_count,
+                input.len(),
+            ));
+        }
+        if output.len() != self.vertex_count {
+            return Err(CmgError::dimension(
+                "CsrLaplacian::matvec output",
+                self.vertex_count,
+                output.len(),
+            ));
         }
         Ok(())
     }
@@ -260,5 +322,33 @@ mod tests {
         let csr = CsrLaplacian::from_laplacian(&graph).unwrap();
         assert!(csr.uses_compact_indices());
         assert!(csr.byte_len() >= (graph.vertex_count() + 1) * core::mem::size_of::<usize>());
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn parallel_row_matvec_is_bitwise_equal_to_serial_row_matvec() {
+        use crate::{ParallelExecutor, ParallelOptions};
+
+        let graph = Laplacian::from_edges(
+            20_000,
+            (0..19_999).map(|vertex| (vertex, vertex + 1, 0.5 + (vertex % 31) as f64 / 17.0)),
+        )
+        .unwrap();
+        let csr = CsrLaplacian::from_laplacian(&graph).unwrap();
+        let input: Vec<f64> = (0..graph.vertex_count())
+            .map(|vertex| ((vertex * 37) % 101) as f64 - 50.0)
+            .collect();
+        let mut serial = vec![0.0; graph.vertex_count()];
+        let mut parallel = vec![0.0; graph.vertex_count()];
+        csr.matvec_into(&input, &mut serial).unwrap();
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 4,
+            min_parallel_len: 1,
+            ..ParallelOptions::default()
+        })
+        .unwrap();
+        csr.matvec_into_parallel(&input, &mut parallel, &executor)
+            .unwrap();
+        assert_eq!(serial, parallel);
     }
 }

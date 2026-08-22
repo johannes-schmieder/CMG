@@ -3,6 +3,10 @@
 use crate::components::ComponentWorkspace;
 use crate::graph::compensated_sum;
 use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, PcgOptions};
+#[cfg(feature = "parallel")]
+use crate::{ParallelExecutor, ParallelOptions};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 /// Reusable vectors for repeated PCG solves with one preconditioner.
 #[derive(Debug, Clone)]
@@ -385,6 +389,75 @@ pub fn solve_pcg_batch(
         .iter()
         .map(|rhs| solve_pcg_with_workspace(graph, preconditioner, rhs, options, &mut workspace))
         .collect()
+}
+
+/// Solve independent right-hand sides concurrently in a package-owned pool.
+///
+/// Every RHS uses the unchanged certified serial PCG algorithm and a private
+/// reusable workspace. The executor's workspace-memory budget limits the
+/// number of simultaneous solves. Results retain input order.
+#[cfg(feature = "parallel")]
+pub fn solve_pcg_batch_with_executor(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    right_hand_sides: &[Vec<f64>],
+    options: PcgOptions,
+    executor: &ParallelExecutor,
+) -> Result<Vec<PcgResult>, CmgError> {
+    if right_hand_sides.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !preconditioner.matches_graph(graph) {
+        return Err(CmgError::InvalidHierarchy {
+            context: "parallel PCG graph differs from the preconditioner's finest graph",
+        });
+    }
+    for rhs in right_hand_sides {
+        if rhs.len() != graph.vertex_count() {
+            return Err(CmgError::dimension(
+                "solve_pcg_batch_parallel rhs",
+                graph.vertex_count(),
+                rhs.len(),
+            ));
+        }
+    }
+
+    let first_workspace = PcgWorkspace::new(preconditioner);
+    let concurrency =
+        executor.batch_concurrency(first_workspace.byte_len(), right_hand_sides.len())?;
+    let mut workspaces = Vec::with_capacity(concurrency);
+    workspaces.push(first_workspace);
+    workspaces.extend((1..concurrency).map(|_| PcgWorkspace::new(preconditioner)));
+
+    let mut results = Vec::with_capacity(right_hand_sides.len());
+    for rhs_chunk in right_hand_sides.chunks(concurrency) {
+        let chunk_results: Vec<Result<PcgResult, CmgError>> = executor.install(|| {
+            workspaces[..rhs_chunk.len()]
+                .par_iter_mut()
+                .zip(rhs_chunk.par_iter())
+                .map(|(workspace, rhs)| {
+                    solve_pcg_with_workspace(graph, preconditioner, rhs, options, workspace)
+                })
+                .collect()
+        });
+        for result in chunk_results {
+            results.push(result?);
+        }
+    }
+    Ok(results)
+}
+
+/// Construct a package-owned pool and solve a batch of independent systems.
+#[cfg(feature = "parallel")]
+pub fn solve_pcg_batch_parallel(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    right_hand_sides: &[Vec<f64>],
+    options: PcgOptions,
+    parallel: ParallelOptions,
+) -> Result<Vec<PcgResult>, CmgError> {
+    let executor = ParallelExecutor::new(parallel)?;
+    solve_pcg_batch_with_executor(graph, preconditioner, right_hand_sides, options, &executor)
 }
 
 fn make_result(

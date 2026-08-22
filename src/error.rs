@@ -129,6 +129,18 @@ pub enum CmgError {
         /// Required residual tolerance.
         tolerance: f64,
     },
+    /// A package-owned parallel runtime could not be constructed.
+    ParallelRuntime {
+        /// Runtime-construction diagnostic.
+        message: String,
+    },
+    /// A requested workspace-memory budget cannot hold one required workspace.
+    MemoryBudgetExceeded {
+        /// Minimum required workspace bytes.
+        required_bytes: usize,
+        /// Configured workspace-memory budget.
+        budget_bytes: usize,
+    },
     /// An option was non-finite or outside its allowed range.
     InvalidOption {
         /// Option name.
@@ -241,6 +253,19 @@ impl fmt::Display for CmgError {
             } => write!(
                 formatter,
                 "PCG residual verification failed at iteration {iteration}: residual {residual_norm}, tolerance {tolerance}"
+            ),
+            Self::ParallelRuntime { message } => {
+                write!(
+                    formatter,
+                    "could not construct CMG parallel runtime: {message}"
+                )
+            }
+            Self::MemoryBudgetExceeded {
+                required_bytes,
+                budget_bytes,
+            } => write!(
+                formatter,
+                "workspace memory budget {budget_bytes} bytes is below the required {required_bytes} bytes"
             ),
             Self::InvalidOption { name, value } => {
                 write!(formatter, "option {name} has invalid value {value}")

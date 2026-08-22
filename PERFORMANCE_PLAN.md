@@ -33,9 +33,9 @@ The matched benchmark workflow builds the frozen baseline and current candidate 
 | P0 Measurement | COMPLETE | Matched baseline/candidate JSON is retained after every substantive push |
 | P1 Repeated overhead | COMPLETE | Cached graph lineage/components and persistent component scratch pass full CI |
 | P2 Terminal/workspace memory | COMPLETE | Factor compression and scratch aliasing pass full CI and matched numerical comparison |
-| P3 Frozen CSR | IN VALIDATION | CSR and edge matvec agree on exact graph families; serial crossover is measured |
-| P4 Parallel solve kernels | NOT STARTED | Certified results agree across thread counts |
-| P5 Multi-RHS scheduler | NOT STARTED | Throughput scales within explicit memory budgets |
+| P3 Frozen CSR | COMPLETE | CSR and edge matvec agree; measured serial routing retains compact edge kernels |
+| P4 Parallel solve kernels | IN PROGRESS | Package-owned pool and row-parallel CSR are under full-feature validation |
+| P5 Multi-RHS scheduler | IN PROGRESS | Memory-bounded concurrent serial solves are under full-feature validation |
 | P6 Parallel setup | NOT STARTED | Hierarchy diagnostics are unchanged and setup improves |
 | P7 Pinned C comparison | NOT STARTED | One-thread Rust/C kernels agree numerically and are timed equivalently |
 | P8 Large qualification | NOT STARTED | 1–32-thread scaling and memory ceilings documented |
@@ -67,16 +67,26 @@ The first matched 20,000-vertex run preserved hierarchy levels, PCG iterations, 
 
 Ratios below one favor the candidate. The path gain comes primarily from sparse terminal traversal. Worker–firm performance is approximately neutral while CMG workspace bytes decline from the baseline estimate of 1,007,440 to an exact 652,128, and PCG workspace bytes decline from 2,287,440 to 1,932,184. The path CMG workspace is 878,656 bytes versus a 1,285,160-byte baseline estimate.
 
-### P3 design
+### P3
 
-A public `CsrLaplacian` is being added as a deterministic solve-oriented operator:
+A public `CsrLaplacian` is available as a deterministic solve-oriented operator:
 
 - each edge is stored in both endpoint rows;
 - ordinary dimensions use four-byte neighbor indices;
 - canonical edge ordering yields ascending neighbors within every row;
 - each row owns one output entry, enabling later parallel matvec without atomics;
 - the row kernel sums edge contributions `w * (x_i - x_j)` to stay close to the existing arithmetic;
-- the canonical edge graph remains the build/provenance representation during crossover measurement.
+- the canonical edge graph remains the build/provenance and fastest serial representation.
+
+Matched serial microbenchmarks show that duplicating undirected entries into CSR costs about 1.50x on the path case and 1.25x on the worker–firm case. Production serial solves therefore retain the compact edge-scatter kernel. CSR is reserved for parallel row ownership, where it eliminates atomics and thread-local full output vectors.
+
+### P4/P5 first checkpoint
+
+- Rayon is an optional feature; default builds remain dependency-free and serial.
+- `ParallelExecutor` owns an isolated custom pool with explicit or detected thread count.
+- Row-parallel CSR matvec keeps each row's canonical summation order fixed.
+- Concurrent repeated-RHS solves use private reusable PCG workspaces and preserve input order.
+- An explicit workspace-memory budget caps simultaneous RHS solves and rejects a budget too small for one workspace.
 
 ## Approved parallel architecture
 
@@ -104,6 +114,7 @@ A public `CsrLaplacian` is being added as a deterministic solve-oriented operato
 | 2026-08-22 | `daa677b9` / `fd8db573` | Terminal compression and CMG scratch aliasing passed all platform tests |
 | 2026-08-22 | `a82155e8` | Matched A/B workflow and exact memory records added; full CI green |
 | 2026-08-22 | `33392c85` | First retained performance comparison recorded |
+| 2026-08-22 | `31f72e6a` / `365a3572` | CSR crossover measured; full three-platform CI green |
 
 ## Current next action
 
