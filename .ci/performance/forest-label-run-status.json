@@ -1,0 +1,46 @@
+{
+  "runs": [
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-22T22:21:19Z",
+      "event": "push",
+      "head_sha": "97f85004c844d85427d000d6e2700bf31ab4e802",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32602199420",
+      "id": 32602199420,
+      "jobs_url": "https://api.github.com/repos/johannes-schmieder/CMG/actions/runs/32602199420/jobs",
+      "run_attempt": 1,
+      "run_number": 3,
+      "status": "completed",
+      "updated_at": "2026-08-22T22:21:19Z"
+    },
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-22T22:02:55Z",
+      "event": "push",
+      "head_sha": "46e7e2c68761a2a66d3f6246f878df2731b68484",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32601342614",
+      "id": 32601342614,
+      "jobs_url": "https://api.github.com/repos/johannes-schmieder/CMG/actions/runs/32601342614/jobs",
+      "run_attempt": 1,
+      "run_number": 2,
+      "status": "completed",
+      "updated_at": "2026-08-22T22:02:55Z"
+    },
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-22T21:54:42Z",
+      "event": "push",
+      "head_sha": "f41cf22304a390868c195543a6a425d001cc2705",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32600946698",
+      "id": 32600946698,
+      "jobs_url": "https://api.github.com/repos/johannes-schmieder/CMG/actions/runs/32600946698/jobs",
+      "run_attempt": 1,
+      "run_number": 1,
+      "status": "completed",
+      "updated_at": "2026-08-22T21:54:42Z"
+    }
+  ],
+  "schema_version": 1,
+  "total_count": 3,
+  "workflow": "forest-label-move.yml"
+}
