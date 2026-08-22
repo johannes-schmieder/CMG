@@ -19,6 +19,7 @@ Retained records:
 - `.ci/performance/inplace-level-output-latest.json`: accepted caller-output hierarchy workspace experiment.
 - `.ci/performance/recursive-centering-latest.json`: accepted internal coarse-residual centering experiment.
 - `.ci/performance/compact-centering-metadata-latest.json`: accepted coarse-centering metadata experiment.
+- `.ci/performance/prevalidated-pcg-apply-latest.json`: rejected prevalidated PCG apply experiment.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -144,6 +145,7 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Unsafe unchecked aggregation loops were rejected because the crate globally forbids unsafe production code; safe kernels were retained.
 - Duplicating native and compact aggregation labels is not accepted without an end-to-end memory and speed win.
+- Skipping public-compatible apply checks inside PCG was benchmarked and rejected because it did not produce a stable end-to-end solve improvement; the fully checked path remains.
 - Pipelined CG, K-cycles, aggressive SIMD, NUMA pinning, and panel Krylov methods remain deferred until ordinary stationary CMG is allocation-free and profiles identify a remaining bottleneck.
 
 ## Checkpoint log
@@ -170,7 +172,7 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ## Current next action
 
-1. Measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG.
-2. Continue large setup profiling, especially coarse contraction allocation and sorting.
+1. Continue large setup profiling, especially coarse contraction allocation and sorting.
+2. Qualify the direct-terminal build benchmark and evaluate eliminating one dense factor-construction buffer.
 3. Obtain 8–32-thread and high-memory evidence when a suitable runner is available.
 4. Remove remaining obsolete one-shot workflows and staging scripts after the active checkpoint is secure.
