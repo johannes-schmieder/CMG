@@ -60,10 +60,7 @@ impl CmgWorkspace {
             })
             .collect();
         debug_assert_eq!(level_components.len(), dimensions.len());
-        let component_workspaces = level_components
-            .iter()
-            .map(Components::workspace)
-            .collect();
+        let component_workspaces = level_components.iter().map(Components::workspace).collect();
         Self {
             levels,
             component_workspaces,

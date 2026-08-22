@@ -235,10 +235,8 @@ pub fn solve_pcg_with_workspace(
         &mut workspace.cmg,
         options.validation,
     )?;
-    components.center_in_place_with_workspace(
-        &mut workspace.preconditioned,
-        &mut workspace.component,
-    )?;
+    components
+        .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)?;
     let mut rho = dot(&workspace.residual, &workspace.preconditioned);
     validate_positive_pcg(0, "r^T M r", rho)?;
     workspace
@@ -265,10 +263,8 @@ pub fn solve_pcg_with_workspace(
             *solution += alpha * *direction;
             *residual -= alpha * *matrix_direction;
         }
-        components.center_in_place_with_workspace(
-            &mut workspace.solution,
-            &mut workspace.component,
-        )?;
+        components
+            .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
 
         let solution_norm = euclidean_norm(&workspace.solution);
         last_tolerance = allowed_residual(

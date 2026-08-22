@@ -187,8 +187,7 @@ impl Components {
         self.validate_component_sums(&workspace.sums, &workspace.scales, options)?;
 
         for component in 0..self.count() {
-            workspace.means[component] =
-                workspace.sums[component] / self.sizes[component] as f64;
+            workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
         }
         for (value, label) in rhs.iter_mut().zip(&self.labels) {
             *value -= workspace.means[*label];
@@ -259,8 +258,7 @@ impl Components {
             &mut workspace.corrections,
         )?;
         for component in 0..self.count() {
-            workspace.means[component] =
-                workspace.sums[component] / self.sizes[component] as f64;
+            workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
         }
         for (value, label) in values.iter_mut().zip(&self.labels) {
             *value -= workspace.means[*label];
