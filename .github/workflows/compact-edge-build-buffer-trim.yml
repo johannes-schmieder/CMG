@@ -1,0 +1,33 @@
+name: Trimmed compact graph-build buffer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-edge-build-buffer-trim.yml'
+      - 'scripts/compact_edge_build_buffer_trim.py'
+      - 'scripts/compact_edge_build_buffer_trim_gate.py'
+
+concurrency:
+  group: cmg-compact-edge-build-buffer-trim
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify trimmed compact graph buffer
+        run: python scripts/compact_edge_build_buffer_trim_gate.py
+
+      - name: Show retained result
+        if: always()
+        run: git show origin/main:.ci/performance/compact-edge-build-buffer-trim-latest.json || true
