@@ -93,8 +93,7 @@ fn sddm_duplicate_aggregation_is_order_invariant() {
 
 #[test]
 fn repeated_workspace_and_batch_order_do_not_change_answers() {
-    let graph = Laplacian::from_edges(20, (0..19).map(|index| (index, index + 1, 1.0)))
-        .unwrap();
+    let graph = Laplacian::from_edges(20, (0..19).map(|index| (index, index + 1, 1.0))).unwrap();
     let preconditioner = CmgPreconditioner::build(
         &graph,
         CmgOptions {
