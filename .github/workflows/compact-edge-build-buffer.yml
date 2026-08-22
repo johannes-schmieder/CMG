@@ -1,0 +1,33 @@
+name: Compact graph-build buffer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-edge-build-buffer.yml'
+      - 'scripts/compact_edge_build_buffer.py'
+      - 'scripts/compact_edge_build_buffer_gate.py'
+
+concurrency:
+  group: cmg-compact-edge-build-buffer
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify compact graph-build buffer
+        run: python scripts/compact_edge_build_buffer_gate.py
+
+      - name: Show retained result
+        if: always()
+        run: git show origin/main:.ci/performance/compact-edge-build-buffer-latest.json || true
