@@ -1,0 +1,106 @@
+name: Pinned C kernel comparison
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'benchmarks/c-kernel/**'
+      - '.github/workflows/c-kernel.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: c-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    env:
+      CMG_BENCH_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cc --version
+
+      - name: Format, lint, and test isolated crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check
+          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+
+      - name: Compare pinned C and Rust matvec kernels
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/performance/c-kernel
+          for CASE in path worker-firm; do
+            cargo run --quiet --release \
+              --manifest-path benchmarks/c-kernel/Cargo.toml -- \
+              --case "$CASE" \
+              --vertices 100000 \
+              --repetitions 7 \
+              --output ".ci/performance/c-kernel/${CASE}.json"
+          done
+
+      - name: Build retained comparison record
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          record = {
+              "schema": 1,
+              "tested_sha": os.environ["CMG_BENCH_COMMIT"],
+              "upstream_commit": "19752fc102f8cae8e34f66457bfaccb1aaa60375",
+              "runner": "ubuntu-latest",
+              "results": {
+                  "path": json.loads(Path(".ci/performance/c-kernel/path.json").read_text()),
+                  "worker_firm": json.loads(
+                      Path(".ci/performance/c-kernel/worker-firm.json").read_text()
+                  ),
+              },
+          }
+          Path(".ci/performance/c-kernel-latest.json").write_text(
+              json.dumps(record, indent=2) + "\n"
+          )
+
+      - name: Upload raw comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-kernel-${{ github.sha }}
+          path: |
+            .ci/performance/c-kernel/*.json
+            .ci/performance/c-kernel-latest.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain comparison on main
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f benchmarks/c-kernel/Cargo.lock
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ci/performance/c-kernel-latest.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'perf: record pinned C kernel comparison [skip ci]'
+          git pull --rebase origin main
+          git push origin HEAD:main
