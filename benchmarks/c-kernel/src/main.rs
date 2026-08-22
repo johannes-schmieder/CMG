@@ -231,7 +231,7 @@ fn time_rust(
 ) -> Result<u128, Box<dyn Error>> {
     let start = Instant::now();
     for _ in 0..loops {
-        graph.matvec_into(black_box(input), black_box(output))?;
+        graph.matvec_into(black_box(input), black_box(&mut *output))?;
     }
     Ok(start.elapsed().as_nanos())
 }
@@ -239,7 +239,7 @@ fn time_rust(
 fn time_c(matrix: &UpperSymmetric, input: &[f64], output: &mut [f64], loops: usize) -> u128 {
     let start = Instant::now();
     for _ in 0..loops {
-        matrix.matvec_into(black_box(input), black_box(output));
+        matrix.matvec_into(black_box(input), black_box(&mut *output));
     }
     start.elapsed().as_nanos()
 }
