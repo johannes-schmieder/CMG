@@ -23,11 +23,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Archive source snapshot
+      - name: Repair reconstructed benchmark in workspace
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/bin/cmg-parallel-bench.rs')
+          text = path.read_text()
+          replacements = {
+              "parse_usize(next_value(&mut arguments, \"--vertices\")?, 'vertices')?":
+                  "parse_usize(next_value(&mut arguments, \"--vertices\")?, \"vertices\")?",
+              "parse_usize(next_value(&mut arguments, \"--rhs\")?, 'r')?":
+                  "parse_usize(next_value(&mut arguments, \"--rhs\")?, \"rhs\")?",
+              "invalid_input('vertices must be at least 2')":
+                  "invalid_input(\"vertices must be at least 2\")",
+              "fn json_usize_array(values: &mut [usize])":
+                  "fn json_usize_array(values: &[usize])",
+              "collect::<Vec_>>()":
+                  "collect::<Vec<_>>()",
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one occurrence of {old!r}, found {count}')
+              text = text.replace(old, new)
+          path.write_text(text)
+
+      - name: Format repaired workspace
+        run: cargo fmt --all
+
+      - name: Archive repaired source snapshot
         shell: bash
         run: tar --exclude='.git' -czf /tmp/cmg-current-source.tar.gz .
 
-      - name: Upload source snapshot
+      - name: Upload repaired source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: cmg-source-${{ github.sha }}
