@@ -50,6 +50,44 @@ text = text.replace(
     "tolerances for recursive coarse-level roundoff handling.",
     "tolerances for public validation; recursive coarse residuals are centered.",
 )
+text = replace_once(
+    text,
+    "        self.apply_level(0, rhs, output, workspace, 1, validation)\n",
+    "        self.apply_level(0, rhs, output, workspace, 1)\n",
+    "compatible top-level apply",
+)
+text = replace_once(
+    text,
+    "            self.apply_level(0, &projected_rhs, output, workspace, 1, validation)\n",
+    "            self.apply_level(0, &projected_rhs, output, workspace, 1)\n",
+    "validated top-level apply",
+)
+text = replace_once(
+    text,
+    '''        workspace: &mut CmgWorkspace,
+        iterations: usize,
+        validation: ValidationOptions,
+    ) -> Result<(), CmgError> {
+''',
+    '''        workspace: &mut CmgWorkspace,
+        iterations: usize,
+    ) -> Result<(), CmgError> {
+''',
+    "recursive apply signature",
+)
+text = replace_once(
+    text,
+    '''                    workspace,
+                    child_iterations,
+                    validation,
+                )?;
+''',
+    '''                    workspace,
+                    child_iterations,
+                )?;
+''',
+    "recursive apply invocation",
+)
 preconditioner.write_text(text)
 
 upstream_test = Path("tests/upstream_cycle.rs")
