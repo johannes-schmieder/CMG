@@ -1,0 +1,154 @@
+name: Record hierarchy build baseline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/record-hierarchy-build-baseline.yml'
+      - 'benchmarks/src/bin/hierarchy-build.rs'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate and build benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check
+          cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+          cargo build --release --manifest-path benchmarks/Cargo.toml --bin hierarchy-build
+
+      - name: Run hierarchy cases and record memory
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import re
+          import subprocess
+
+          root = Path.cwd()
+          binary = root / 'benchmarks/target/release/hierarchy-build'
+          if not binary.exists():
+              binary = root / 'target/release/hierarchy-build'
+          if not binary.exists():
+              raise SystemExit('hierarchy-build binary not found')
+
+          cases = [
+              ('path', 100_000, 3),
+              ('grid', 256, 3),
+              ('worker-firm', 50_000, 3),
+              ('dense-worker-firm', 20_000, 3),
+          ]
+          records = []
+          for case, scale, repetitions in cases:
+              output_path = Path(f'/tmp/{case}.jsonl')
+              time_path = Path(f'/tmp/{case}.time')
+              command = [
+                  '/usr/bin/time', '-v', '-o', str(time_path),
+                  str(binary), case, str(scale), str(repetitions),
+              ]
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  check=True,
+              )
+              print(completed.stdout, end='')
+              output_path.write_text(completed.stdout)
+              payloads = [
+                  json.loads(line)
+                  for line in completed.stdout.splitlines()
+                  if line.strip().startswith('{')
+              ]
+              if len(payloads) != 1:
+                  raise SystemExit(f'unexpected output for {case}: {payloads}')
+              timing = time_path.read_text()
+              match = re.search(
+                  r'Maximum resident set size \(kbytes\):\s*(\d+)', timing
+              )
+              if match is None:
+                  raise SystemExit(f'peak RSS not found for {case}')
+              payload = payloads[0]
+              payload['peak_rss_kib'] = int(match.group(1))
+              records.append(payload)
+
+          rustc = subprocess.check_output(['rustc', '--version'], text=True).strip()
+          cargo = subprocess.check_output(['cargo', '--version'], text=True).strip()
+          commit = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+          cpu_count = os.cpu_count()
+          meminfo = Path('/proc/meminfo').read_text()
+          mem_match = re.search(r'^MemTotal:\s*(\d+)\s+kB$', meminfo, re.MULTILINE)
+          result = {
+              'schema_version': 1,
+              'benchmark': 'hierarchy-build-baseline',
+              'commit': commit,
+              'runner': {
+                  'platform': platform.platform(),
+                  'logical_cpus': cpu_count,
+                  'mem_total_kib': int(mem_match.group(1)) if mem_match else None,
+                  'rustc': rustc,
+                  'cargo': cargo,
+              },
+              'cases': records,
+          }
+          destination = Path('.ci/performance/hierarchy-build-baseline.json')
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+      - name: Update live plan and remove one-shot workflow
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('PERFORMANCE_PLAN.md')
+          text = path.read_text()
+          marker = '## Current next action\n'
+          if marker not in text:
+              raise SystemExit('current-next-action heading not found')
+          checkpoint = '''### Hierarchy-build baseline checkpoint — 2026-08-22
+
+- A permanent scalable setup benchmark now covers large path, grid, sparse
+  worker–firm, and denser worker–firm topologies.
+- The baseline excludes input graph construction and records median hierarchy
+  build time plus peak process RSS on the same runner.
+- Machine-readable evidence: `.ci/performance/hierarchy-build-baseline.json`.
+
+'''
+          if '### Hierarchy-build baseline checkpoint — 2026-08-22' not in text:
+              text = text.replace(marker, checkpoint + marker, 1)
+          path.write_text(text)
+          Path('.github/workflows/record-hierarchy-build-baseline.yml').unlink()
+
+      - name: Commit baseline checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'bench: record hierarchy-build baseline'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Show baseline
+        if: always()
+        shell: bash
+        run: cat .ci/performance/hierarchy-build-baseline.json || true
