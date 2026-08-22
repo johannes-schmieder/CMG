@@ -189,6 +189,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/forest-label-move-latest.json`.
 
+### Compact edge endpoint checkpoint — 2026-08-22
+
+- Storing retained edge endpoints as checked `u32` values while preserving
+  the public `usize` API was **retained**. Geometric time ratio: 0.989; geometric peak-RSS ratio: 0.893; best peak-RSS ratio: 0.751.
+- The candidate uses a typed error for endpoints above `u32::MAX` and
+  includes a permanent 16-byte `Edge` layout invariant when retained.
+- Qualification status: `success`.
+- Machine-readable evidence:
+  `.ci/performance/compact-edge-endpoints-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.

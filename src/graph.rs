@@ -10,8 +10,8 @@ use std::sync::Arc;
 /// A canonical undirected weighted edge with `u < v` and positive weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edge {
-    u: usize,
-    v: usize,
+    u: u32,
+    v: u32,
     weight: f64,
 }
 
@@ -19,13 +19,13 @@ impl Edge {
     /// Return the lower-numbered endpoint.
     #[must_use]
     pub const fn u(self) -> usize {
-        self.u
+        self.u as usize
     }
 
     /// Return the higher-numbered endpoint.
     #[must_use]
     pub const fn v(self) -> usize {
-        self.v
+        self.v as usize
     }
 
     /// Return the strictly positive edge weight.
@@ -111,13 +111,17 @@ impl Laplacian {
             if !weight.is_finite() || weight <= 0.0 {
                 return Err(CmgError::InvalidEdgeWeight { u, v, weight });
             }
-            canonical.push(Edge { u, v, weight });
+            canonical.push(Edge {
+                u: u as u32,
+                v: v as u32,
+                weight,
+            });
         }
 
         let mut diagonal = vec![0.0; vertex_count];
         for edge in &canonical {
-            diagonal[edge.u] += edge.weight;
-            diagonal[edge.v] += edge.weight;
+            diagonal[edge.u()] += edge.weight;
+            diagonal[edge.v()] += edge.weight;
         }
 
         let diagonal_nnz = diagonal.iter().filter(|degree| **degree != 0.0).count();
@@ -193,9 +197,9 @@ impl Laplacian {
         }
         output.fill(0.0);
         for edge in &self.edges {
-            let difference = edge.weight * (input[edge.u] - input[edge.v]);
-            output[edge.u] += difference;
-            output[edge.v] -= difference;
+            let difference = edge.weight * (input[edge.u()] - input[edge.v()]);
+            output[edge.u()] += difference;
+            output[edge.v()] -= difference;
         }
         Ok(())
     }
@@ -217,7 +221,7 @@ impl Laplacian {
             ));
         }
         Ok(compensated_sum(self.edges.iter().map(|edge| {
-            let difference = input[edge.u] - input[edge.v];
+            let difference = input[edge.u()] - input[edge.v()];
             edge.weight * difference * difference
         })))
     }
@@ -229,10 +233,10 @@ impl Laplacian {
     pub fn to_dense(&self) -> Vec<Vec<f64>> {
         let mut dense = vec![vec![0.0; self.vertex_count]; self.vertex_count];
         for edge in &self.edges {
-            dense[edge.u][edge.u] += edge.weight;
-            dense[edge.v][edge.v] += edge.weight;
-            dense[edge.u][edge.v] -= edge.weight;
-            dense[edge.v][edge.u] -= edge.weight;
+            dense[edge.u()][edge.u()] += edge.weight;
+            dense[edge.v()][edge.v()] += edge.weight;
+            dense[edge.u()][edge.v()] -= edge.weight;
+            dense[edge.v()][edge.u()] -= edge.weight;
         }
         dense
     }
@@ -258,6 +262,18 @@ where
             return Err(CmgError::VertexOutOfBounds {
                 vertex: right,
                 vertex_count,
+            });
+        }
+        if left > u32::MAX as usize {
+            return Err(CmgError::VertexIndexTooWide {
+                vertex: left,
+                maximum: u32::MAX as usize,
+            });
+        }
+        if right > u32::MAX as usize {
+            return Err(CmgError::VertexIndexTooWide {
+                vertex: right,
+                maximum: u32::MAX as usize,
             });
         }
         if left == right {
@@ -335,5 +351,31 @@ mod tests {
         let graph = Laplacian::from_edges(4, [(0, 1, 2.5)]).unwrap();
         assert_eq!(graph.matrix_nnz(), 4);
         assert_eq!(graph.operator_norm_bound(), 5.0);
+    }
+}
+
+#[cfg(test)]
+mod compact_edge_layout_tests {
+    use super::{Edge, Laplacian};
+    use crate::CmgError;
+
+    #[test]
+    fn edge_uses_compact_endpoints() {
+        assert_eq!(std::mem::size_of::<Edge>(), 16);
+        assert_eq!(std::mem::align_of::<Edge>(), 8);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn endpoint_above_u32_is_rejected_before_graph_allocation() {
+        let vertex = u32::MAX as usize + 1;
+        let error = Laplacian::from_edges(vertex + 1, [(0, vertex, 1.0)]).unwrap_err();
+        assert_eq!(
+            error,
+            CmgError::VertexIndexTooWide {
+                vertex,
+                maximum: u32::MAX as usize,
+            }
+        );
     }
 }

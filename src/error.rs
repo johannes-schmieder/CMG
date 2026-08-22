@@ -22,6 +22,13 @@ pub enum CmgError {
         /// Number of vertices in the graph.
         vertex_count: usize,
     },
+    /// A vertex index cannot be represented by compact retained edge storage.
+    VertexIndexTooWide {
+        /// Vertex index that exceeded the compact representation.
+        vertex: usize,
+        /// Largest endpoint representable by the retained edge format.
+        maximum: usize,
+    },
     /// A self-loop was supplied to an undirected Laplacian edge list.
     SelfLoop {
         /// Vertex carrying the self-loop.
@@ -177,6 +184,10 @@ impl fmt::Display for CmgError {
                 vertex,
                 vertex_count,
             } => write!(formatter, "vertex {vertex} is outside 0..{vertex_count}"),
+            Self::VertexIndexTooWide { vertex, maximum } => write!(
+                formatter,
+                "vertex {vertex} exceeds the retained edge endpoint limit {maximum}"
+            ),
             Self::SelfLoop { vertex } => {
                 write!(
                     formatter,
