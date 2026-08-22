@@ -45,7 +45,10 @@ def evaluate() -> bool:
     ratios: list[float] = []
     for case in CASES:
         first = baseline_rounds[0][case]
-        for round_index, record in enumerate(baseline_rounds + candidate_rounds):
+        for round_index, round_records in enumerate(
+            baseline_rounds + candidate_rounds
+        ):
+            record = round_records[case]
             for field in ("case", "vertices", "edges", "repetitions"):
                 if record[field] != first[field]:
                     reasons.append(f"{case}: round {round_index} changed {field}")
