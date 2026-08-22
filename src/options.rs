@@ -7,7 +7,8 @@ use crate::CmgError;
 pub struct ValidationOptions {
     /// Relative/absolute tolerance used by dense symmetry validation.
     pub symmetry_tolerance: f64,
-    /// Relative tolerance used for component-wise Laplacian compatibility.
+    /// Relative component-sum tolerance used before projecting floating-point
+    /// roundoff onto the exact Laplacian range.
     pub compatibility_tolerance: f64,
 }
 
@@ -15,7 +16,7 @@ impl Default for ValidationOptions {
     fn default() -> Self {
         Self {
             symmetry_tolerance: 1.0e-12,
-            compatibility_tolerance: 1.0e-12,
+            compatibility_tolerance: 1.0e-10,
         }
     }
 }
