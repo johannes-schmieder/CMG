@@ -1,0 +1,184 @@
+name: Analyze CSR and label index layout
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/analyze-csr-index-layout.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Classify persistent native-width vectors
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+
+          structs = []
+          field_sites = []
+          for source_path in sorted(Path('src').glob('*.rs')):
+              source = source_path.read_text()
+              for match in re.finditer(
+                  r'(?s)(?P<header>(?:#\[[^\]]+\]\s*)*'
+                  r'(?:pub(?:\([^)]*\))?\s+)?struct\s+'
+                  r'(?P<name>\w+)(?:<[^\{]+>)?\s*\{)'
+                  r'(?P<body>.*?)\n\}',
+                  source,
+              ):
+                  fields = []
+                  for line in match.group('body').splitlines():
+                      field = re.match(
+                          r'\s*(?:pub(?:\([^)]*\))?\s+)?'
+                          r'(?P<name>\w+)\s*:\s*(?P<type>[^,]+),?',
+                          line,
+                      )
+                      if not field:
+                          continue
+                      field_name = field.group('name')
+                      field_type = field.group('type').strip()
+                      if re.search(r'\bVec\s*<\s*usize\s*>', field_type):
+                          lower = field_name.lower()
+                          if any(token in lower for token in (
+                              'offset', 'pointer', 'ptr', 'start', 'length',
+                              'count', 'size', 'permutation', 'order',
+                          )):
+                              classification = 'offset_or_order_keep_usize'
+                          elif any(token in lower for token in (
+                              'column', 'neighbor', 'vertex', 'component',
+                              'aggregate', 'parent', 'label', 'index',
+                          )):
+                              classification = 'candidate_vertex_index_u32'
+                          else:
+                              classification = 'manual_review'
+                          entry = {
+                              'path': source_path.as_posix(),
+                              'struct': match.group('name'),
+                              'field': field_name,
+                              'type': field_type,
+                              'classification': classification,
+                          }
+                          fields.append(entry)
+                          field_sites.append(entry)
+                  if fields:
+                      structs.append({
+                          'path': source_path.as_posix(),
+                          'name': match.group('name'),
+                          'fields': fields,
+                          'source': match.group(0),
+                      })
+
+          usage = []
+          candidate_names = sorted({
+              entry['field']
+              for entry in field_sites
+              if entry['classification'] == 'candidate_vertex_index_u32'
+          })
+          for name in candidate_names:
+              references = []
+              pattern = re.compile(rf'\.{re.escape(name)}\b|\b{re.escape(name)}\b')
+              for source_path in sorted(Path('src').glob('*.rs')):
+                  for line_number, line in enumerate(
+                      source_path.read_text().splitlines(), 1
+                  ):
+                      if pattern.search(line):
+                          references.append({
+                              'path': source_path.as_posix(),
+                              'line': line_number,
+                              'source': line.strip(),
+                          })
+              usage.append({'field': name, 'references': references})
+
+          result = {
+              'schema_version': 1,
+              'analysis': 'csr-and-label-index-layout',
+              'commit': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'structs': structs,
+              'field_sites': field_sites,
+              'candidate_fields': [
+                  entry for entry in field_sites
+                  if entry['classification'] == 'candidate_vertex_index_u32'
+              ],
+              'offset_fields_kept_native': [
+                  entry for entry in field_sites
+                  if entry['classification'] == 'offset_or_order_keep_usize'
+              ],
+              'manual_review_fields': [
+                  entry for entry in field_sites
+                  if entry['classification'] == 'manual_review'
+              ],
+              'usage': usage,
+              'estimated_saving_per_10m_entries_bytes': 40_000_000,
+              'estimated_saving_per_100m_entries_bytes': 400_000_000,
+          }
+          destination = Path('.ci/performance/csr-index-layout-analysis.json')
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+      - name: Update live plan and remove one-shot workflow
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          result = json.loads(
+              Path('.ci/performance/csr-index-layout-analysis.json').read_text()
+          )
+          candidates = result['candidate_fields']
+          offsets = result['offset_fields_kept_native']
+          manual = result['manual_review_fields']
+          candidate_text = ', '.join(
+              f"`{item['struct']}.{item['field']}`" for item in candidates
+          ) or 'none'
+          checkpoint = f'''### CSR/index-vector analysis checkpoint — 2026-08-22
+
+- Candidate vertex-index or label fields for checked compact storage:
+  {candidate_text}.
+- Offset/order/count fields deliberately retained as native width:
+  {len(offsets)}.
+- Fields requiring manual review: {len(manual)}.
+- A compact `u32` column/label vector saves 4 bytes per entry: about 38.1 MiB
+  per 10 million entries and 381.5 MiB per 100 million entries.
+- Machine-readable evidence:
+  `.ci/performance/csr-index-layout-analysis.json`.
+
+'''
+          path = Path('PERFORMANCE_PLAN.md')
+          text = path.read_text()
+          marker = '## Current next action\n'
+          if marker not in text:
+              raise SystemExit('current-next-action heading missing')
+          if '### CSR/index-vector analysis checkpoint — 2026-08-22' not in text:
+              text = text.replace(marker, checkpoint + marker, 1)
+          path.write_text(text)
+          Path('.github/workflows/analyze-csr-index-layout.yml').unlink()
+
+      - name: Commit analysis checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: analyze CSR and label index width'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: cat .ci/performance/csr-index-layout-analysis.json || true
