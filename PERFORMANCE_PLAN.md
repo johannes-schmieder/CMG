@@ -37,7 +37,7 @@ The matched benchmark workflow builds the frozen baseline and current candidate 
 | P4 Parallel solve kernels | COMPLETE | Package-owned pool and row-parallel CSR pass debug/release CI on Linux, macOS, and Windows |
 | P5 Multi-RHS scheduler | COMPLETE | Ordered, memory-bounded concurrent RHS solves pass debug/release CI on Linux, macOS, and Windows |
 | P6 Parallel setup | IN PROGRESS | Hierarchy diagnostics are unchanged and setup improves |
-| P7 Pinned C comparison | NOT STARTED | One-thread Rust/C kernels agree numerically and are timed equivalently |
+| P7 Pinned C comparison | IN PROGRESS | Pinned `sspmv` agrees numerically and is timed equivalently; restriction/prolongation and recursive-cycle comparisons remain |
 | P8 Large qualification | NOT STARTED | 1–32-thread scaling and memory ceilings documented |
 | P9 Advanced panel/SIMD/NUMA work | DEFERRED | Only after profiles justify complexity |
 
@@ -91,6 +91,16 @@ Matched serial microbenchmarks show that duplicating undirected entries into CSR
 - The repaired all-feature tree passed formatting, Clippy with warnings denied, rustdoc with warnings denied, and debug/release tests on Ubuntu, macOS, and Windows.
 - The benchmark reports actual executor threads, workspace bytes, memory-derived batch concurrency, serial/parallel batch throughput, and serial/parallel CSR matvec throughput.
 
+### P6/P7 continuation
+
+- Parallel graph canonicalization and coarse contraction route only above a conservative 65,536-item floor.
+- Heavy-edge selection also stays on the compact serial edge scan for sparse graphs where temporary CSR construction cannot amortize.
+- Forest splitting now reuses its traversal buffers instead of allocating two vectors for every leaf walk.
+- Parallel-only setup helpers and thresholds are compiled only when the optional `parallel` feature is enabled, preserving warning-free dependency-free serial builds.
+- The isolated benchmark crate compiles the pinned official C `sspmv` arithmetic loop without MATLAB and compares it with the Rust edge-list Laplacian matvec on identical 100,000-vertex graphs. The C code is benchmark-only and is never linked into the production library.
+- The first clean hosted-runner comparison found Rust/C median time ratios of **0.849x** on the weighted path and **0.897x** on the worker–firm graph. Ratios below one favor Rust. Maximum scaled numerical differences were `4.89e-15` and `7.11e-15`, respectively.
+- These C timings isolate one repeated sparse kernel. They do not yet establish full-CMG or MATLAB end-to-end superiority.
+
 ## Approved parallel architecture
 
 - Rayon will be optional and the serial build will remain supported.
@@ -104,8 +114,9 @@ Matched serial microbenchmarks show that duplicating undirected entries into CSR
 - single-RHS production PCG still uses the compact serial edge-scatter operator;
 - parallel within-solve CMG smoothing, restriction, prolongation, and reductions are not yet wired through every hierarchy level;
 - coarse contraction allocates and sorts endpoint triples at each level;
-- forest splitting allocates temporary traversal vectors;
-- terminal setup still materializes dense temporary matrices.
+- forest splitting remains serial, although its traversal allocations have been eliminated;
+- terminal setup still materializes dense temporary matrices;
+- pinned C restriction/prolongation and recursive-cycle comparisons remain to be implemented.
 
 ## Checkpoint log
 
@@ -121,7 +132,11 @@ Matched serial microbenchmarks show that duplicating undirected entries into CSR
 | 2026-08-22 | `ffdc96de` / `3cff911e` | Optional package-owned Rayon pool, deterministic CSR matvec, and memory-bounded ordered batch solving added |
 | 2026-08-22 | `e54024e7` | Parallel scaling benchmark added |
 | 2026-08-22 | `636fa093` / `f17b377d` | Benchmark reconstruction repaired; all-feature debug/release tests passed on Ubuntu, macOS, and Windows |
+| 2026-08-22 | `7e3ab0df` | Setup routing uses measured size and density floors; debug/release tests, Clippy, and rustdoc passed |
+| 2026-08-22 | `fdf5b1de` | Forest traversal buffers are reused; debug/release tests, Clippy, and rustdoc passed |
+| 2026-08-22 | `ba64e736` | Parallel-only helpers are gated; serial and all-feature builds are warning-free |
+| 2026-08-22 | `31530bcf` / `090048bb` | Pinned C `sspmv` comparison passed and retained; Rust was faster on both hosted-runner cases |
 
 ## Current next action
 
-Collect matched 1/2/4/8-thread scaling results for CSR matvec and repeated-RHS throughput, tune the minimum parallel length and batch concurrency policy, and record memory-normalized speedups. Then begin P6 by parallelizing deterministic graph canonicalization, coarse contraction, and heavy-edge selection without changing hierarchy digests.
+Extend the standalone pinned-C harness to restriction and prolongation, then to the recursive preconditioner application. In parallel, run larger setup and repeated-RHS workloads and determine whether within-solve parallel CMG/PCG beats the existing across-RHS scheduler after accounting for memory and synchronization overhead.
