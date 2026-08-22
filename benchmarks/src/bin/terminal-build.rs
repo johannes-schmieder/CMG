@@ -65,7 +65,7 @@ fn benchmark_case(name: &str, graph: &Laplacian, edge_count: usize, repetitions:
 
     for _ in 0..2 {
         black_box(
-            CmgPreconditioner::build(black_box(graph), options.clone())
+            CmgPreconditioner::build(black_box(graph), options)
                 .expect("terminal preconditioner build should succeed"),
         );
     }
@@ -73,7 +73,7 @@ fn benchmark_case(name: &str, graph: &Laplacian, edge_count: usize, repetitions:
     let mut elapsed_ns = Vec::with_capacity(repetitions);
     for _ in 0..repetitions {
         let start = Instant::now();
-        let preconditioner = CmgPreconditioner::build(black_box(graph), options.clone())
+        let preconditioner = CmgPreconditioner::build(black_box(graph), options)
             .expect("terminal preconditioner build should succeed");
         elapsed_ns.push(start.elapsed().as_nanos());
         black_box(preconditioner);
