@@ -5,6 +5,7 @@ This document is the live recovery and decision log for the performance phase of
 ## Baseline
 
 - Correctness-qualified starting commit: `b65ae28a15f00925348046bb474c8133e5128cd0`
+- Benchmark-harness baseline: `b45b252f88925028e3ad9a73a3f75eeab05f6754`
 - Pinned upstream CMG reference: `19752fc102f8cae8e34f66457bfaccb1aaa60375`
 - Baseline implementation: deterministic, single-threaded, canonical edge-list Laplacians, dense grounded terminal LDL, sequential repeated-RHS solves.
 - Performance claims at baseline: none beyond algorithmic equivalence and small-problem correctness.
@@ -28,21 +29,17 @@ This document is the live recovery and decision log for the performance phase of
 
 ## Measurement protocol
 
-The benchmark driver reports input generation, graph construction, hierarchy construction, one CMG application, certified PCG solves, iteration counts, backward error, hierarchy structure, and storage estimates. Candidate and baseline builds must use the same toolchain and release settings. Hosted-runner timings are directional evidence; large-scale and 32-core claims require a larger or self-hosted runner.
+The benchmark driver reports input generation, graph construction, hierarchy construction, one CMG application, certified PCG solves, iteration counts, backward error, hierarchy structure, and storage estimates. Candidate and baseline builds use the same toolchain and release settings. Hosted-runner timings are directional evidence; large-scale and 32-core claims require a larger or self-hosted runner.
 
-## Workloads
-
-Graph families include paths, grids, bottleneck graphs, heavy-tailed bipartite worker–firm graphs, duplicate edges, heterogeneous weights, and deterministic synthetic random graphs.
-
-Target sizes range from 10,000-edge CI smoke tests through 10-million-edge dedicated runs. Shared-hierarchy workloads use 1, 4, 8, 32, and 128 right-hand sides. Thread counts are 1, 2, 4, 8, 16, 32, and higher where hardware permits.
+Graph families include paths, grids, bottleneck graphs, heavy-tailed bipartite worker–firm graphs, duplicate edges, heterogeneous weights, and deterministic synthetic random graphs. Target sizes range from 10,000-edge CI smoke tests through 10-million-edge dedicated runs. Shared-hierarchy workloads use 1, 4, 8, 32, and 128 right-hand sides. Thread counts are 1, 2, 4, 8, 16, 32, and higher where hardware permits.
 
 ## Phases
 
 | Phase | Status | Scope | Gate |
 |---|---|---|---|
 | P0 Measurement | COMPLETE | Benchmark driver, workflow, baseline record, memory estimates | Benchmark binary builds on all platforms and emits JSON |
-| P1 Remove repeated overhead | IN VALIDATION | Cache components and graph identity; remove recurring component allocations | Same solutions and iterations; serial repeated-RHS improvement |
-| P2 Terminal and workspace memory | NOT STARTED | Compress terminal traversal; alias safe scratch arrays; expose byte estimates | Lower apply time and workspace bytes |
+| P1 Remove repeated overhead | COMPLETE | Cache components and graph identity; remove recurring component allocations | Same solutions and iterations on all platforms |
+| P2 Terminal and workspace memory | IN VALIDATION | Compress terminal traversal; alias same-level matvec/residual scratch; exact byte reports | Lower retained bytes with unchanged solves |
 | P3 Frozen CSR operator | NOT STARTED | Deterministic row representation and grouped aggregate/component membership | Serial CSR correctness and measured crossover policy |
 | P4 Parallel solve kernels | NOT STARTED | Package-owned thread pool; parallel matvec, vector updates, restriction, prolongation, reductions | Equivalent certified answers across thread counts |
 | P5 Multi-RHS scheduler | NOT STARTED | Memory-aware concurrency across independent solves | Throughput scaling without uncontrolled memory growth |
@@ -63,28 +60,29 @@ Target sizes range from 10,000-edge CI smoke tests through 10-million-edge dedic
 
 ## Implemented performance changes
 
-### Constant-time normal graph compatibility
+### P1: repeated-solve overhead
 
-`Laplacian::clone` now preserves a private lineage token. A preconditioner built from the graph therefore recognizes the normal solve path in constant time. A separately reconstructed but structurally equal graph still works through the previous full comparison fallback.
+- `Laplacian::clone` preserves a private lineage token, making the normal preconditioner/graph compatibility check constant-time. Independently rebuilt equal graphs retain the structural fallback.
+- PCG reuses the finest `Components` object owned by the preconditioner instead of rebuilding union-find state for every RHS.
+- Component projection and centering use persistent scratch in `PcgWorkspace` and at every CMG hierarchy level.
+- Workspace types expose retained principal heap-byte counts for future memory-aware scheduling.
 
-### Cached connected components
+### P2: terminal and hierarchy scratch
 
-PCG now reuses the finest-level `Components` object already built and owned by `CmgPreconditioner`; it no longer runs union-find for every right-hand side.
-
-### Reusable component scratch
-
-Component compatibility projection and centering now have allocation-free internal paths backed by reusable scratch vectors. `PcgWorkspace` owns finest-level scratch, and `CmgWorkspace` owns one scratch object per hierarchy level. Public convenience methods retain their previous allocating behavior for compatibility.
-
-The workspace types now report their reserved principal heap bytes, allowing the future multi-RHS scheduler to enforce a memory budget rather than estimating concurrency from vertex count alone.
+- The trusted dense terminal factorization, ordering, pivots, and repeat-count denominator remain unchanged.
+- After factorization, the strict lower factor is frozen into either packed-triangular storage or a sparse row/column traversal representation, selected by retained-byte cost.
+- Sparse terminal indices use `u32` when selected; the packed fallback covers dimensions outside that range.
+- Forward and backward substitution no longer scan a nested dense `Vec<Vec<f64>>` containing structural zeros when sparse storage is smaller.
+- Each nonterminal CMG level now aliases the matvec and residual roles through one vector, removing one full vector per hierarchy level.
+- `GroundedLdl::byte_len`, `CmgWorkspace::byte_len`, and `PcgWorkspace::byte_len` provide direct memory accounting.
 
 ## Remaining observed hot spots
 
 - edge-scatter matvec prevents efficient parallel row ownership;
-- the terminal solve stores and scans a dense lower factor;
-- CMG keeps separate same-dimension matvec and residual arrays;
 - batch solving remains sequential;
 - coarse contraction repeatedly allocates and sorts endpoint triples;
-- forest splitting contains recurring temporary-vector allocation.
+- forest splitting contains recurring temporary-vector allocation;
+- terminal factorization itself still materializes dense temporary matrices during setup.
 
 ## Checkpoint log
 
@@ -93,8 +91,9 @@ The workspace types now report their reserved principal heap bytes, allowing the
 | 2026-08-22 | `b65ae28a15f00925348046bb474c8133e5128cd0` | Correctness-qualified baseline identified | Commit measurement infrastructure |
 | 2026-08-22 | `cc9d641d9e4d227196389eb59144e762d3caa926` | Benchmark driver, live plan, and performance workflow added | Cross-platform qualification |
 | 2026-08-22 | `b45b252f88925028e3ad9a73a3f75eeab05f6754` | Benchmark source formatted and built on all three platforms | Remove repeated solve setup |
-| 2026-08-22 | `703ddc2e809f5c92f8a6acbec79b0b7b31a763f0` | Graph lineage and cached components passed quality plus debug/release tests on Linux, macOS, and Windows | Remove component allocations |
+| 2026-08-22 | `703ddc2e809f5c92f8a6acbec79b0b7b31a763f0` | Graph lineage and cached components passed quality plus all platform tests | Remove component allocations |
+| 2026-08-22 | `a6b339fdb86f137d3ad75891922f9ad1fd3f8d3c` | Reusable component scratch passed all debug/release platform tests; formatter produced `8022b568` | Compress terminal and workspace storage |
 
 ## Current next action
 
-Validate the reusable component-workspace checkpoint. If it is green, record P1 as complete, update benchmark memory reporting to use exact workspace byte counts, and begin P2 with terminal-factor compression and CMG scratch aliasing.
+Validate P2 on all platforms, record exact benchmark bytes, and make the performance workflow run the pinned harness baseline and current candidate in the same Ubuntu job. Once that comparison is persisted under `.ci/`, begin P3 with a serial deterministic CSR operator and gather-form aggregation metadata.

@@ -226,23 +226,21 @@ impl CmgPreconditioner {
                         *value = *inverse_diagonal * *rhs_value;
                     }
                 } else {
-                    level.graph().matvec_into(&local.x, &mut local.matvec)?;
+                    level.graph().matvec_into(&local.x, &mut local.residual)?;
                     for (((value, inverse_diagonal), rhs_value), matrix_value) in local
                         .x
                         .iter_mut()
                         .zip(level.inverse_diagonal())
                         .zip(rhs)
-                        .zip(&local.matvec)
+                        .zip(&local.residual)
                     {
                         *value += *inverse_diagonal * (*rhs_value - *matrix_value);
                     }
                 }
 
-                level.graph().matvec_into(&local.x, &mut local.matvec)?;
-                for ((residual, rhs_value), matrix_value) in
-                    local.residual.iter_mut().zip(rhs).zip(&local.matvec)
-                {
-                    *residual = *rhs_value - *matrix_value;
+                level.graph().matvec_into(&local.x, &mut local.residual)?;
+                for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
+                    *residual = *rhs_value - *residual;
                 }
                 aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
                 let mut component_workspace = workspace.take_component(level_index + 1);
@@ -267,13 +265,13 @@ impl CmgPreconditioner {
                 )?;
                 aggregation.prolong_add_into(&local.coarse_correction, &mut local.x)?;
 
-                level.graph().matvec_into(&local.x, &mut local.matvec)?;
+                level.graph().matvec_into(&local.x, &mut local.residual)?;
                 for (((value, inverse_diagonal), rhs_value), matrix_value) in local
                     .x
                     .iter_mut()
                     .zip(level.inverse_diagonal())
                     .zip(rhs)
-                    .zip(&local.matvec)
+                    .zip(&local.residual)
                 {
                     *value += *inverse_diagonal * (*rhs_value - *matrix_value);
                 }

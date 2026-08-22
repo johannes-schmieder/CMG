@@ -2,6 +2,164 @@
 
 use crate::{CmgError, Components, Laplacian, ValidationOptions};
 
+#[derive(Debug, Clone, PartialEq)]
+enum LowerFactor {
+    Packed {
+        values: Vec<f64>,
+    },
+    Sparse {
+        row_offsets: Vec<usize>,
+        columns: Vec<u32>,
+        row_values: Vec<f64>,
+        column_offsets: Vec<usize>,
+        rows: Vec<u32>,
+        column_values: Vec<f64>,
+    },
+}
+
+impl LowerFactor {
+    fn from_dense(lower: &[Vec<f64>]) -> Self {
+        let dimension = lower.len();
+        let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
+        let strict_nonzeros = lower
+            .iter()
+            .enumerate()
+            .map(|(row, values)| values[..row].iter().filter(|value| **value != 0.0).count())
+            .sum::<usize>();
+
+        let packed_bytes = packed_slots.saturating_mul(core::mem::size_of::<f64>());
+        let sparse_bytes = strict_nonzeros
+            .saturating_mul(
+                2 * core::mem::size_of::<u32>() + 2 * core::mem::size_of::<f64>(),
+            )
+            .saturating_add(
+                2 * (dimension + 1).saturating_mul(core::mem::size_of::<usize>()),
+            );
+
+        if dimension <= u32::MAX as usize && sparse_bytes < packed_bytes {
+            let mut row_offsets = Vec::with_capacity(dimension + 1);
+            let mut columns = Vec::with_capacity(strict_nonzeros);
+            let mut row_values = Vec::with_capacity(strict_nonzeros);
+            row_offsets.push(0);
+            for (row, values) in lower.iter().enumerate() {
+                for (column, value) in values[..row].iter().copied().enumerate() {
+                    if value != 0.0 {
+                        columns.push(column as u32);
+                        row_values.push(value);
+                    }
+                }
+                row_offsets.push(columns.len());
+            }
+
+            let mut column_counts = vec![0_usize; dimension];
+            for &column in &columns {
+                column_counts[column as usize] += 1;
+            }
+            let mut column_offsets = Vec::with_capacity(dimension + 1);
+            column_offsets.push(0);
+            for count in column_counts {
+                column_offsets.push(column_offsets.last().copied().unwrap_or(0) + count);
+            }
+            let mut next = column_offsets[..dimension].to_vec();
+            let mut rows = vec![0_u32; strict_nonzeros];
+            let mut column_values = vec![0.0; strict_nonzeros];
+            for row in 0..dimension {
+                for index in row_offsets[row]..row_offsets[row + 1] {
+                    let column = columns[index] as usize;
+                    let destination = next[column];
+                    rows[destination] = row as u32;
+                    column_values[destination] = row_values[index];
+                    next[column] += 1;
+                }
+            }
+
+            Self::Sparse {
+                row_offsets,
+                columns,
+                row_values,
+                column_offsets,
+                rows,
+                column_values,
+            }
+        } else {
+            let mut values = Vec::with_capacity(packed_slots);
+            for (row, dense_row) in lower.iter().enumerate() {
+                values.extend_from_slice(&dense_row[..row]);
+            }
+            Self::Packed { values }
+        }
+    }
+
+    fn forward_correction(&self, row: usize, forward: &[f64]) -> f64 {
+        match self {
+            Self::Packed { values } => {
+                let start = row.saturating_mul(row.saturating_sub(1)) / 2;
+                values[start..start + row]
+                    .iter()
+                    .zip(&forward[..row])
+                    .map(|(lower_value, previous)| lower_value * previous)
+                    .sum()
+            }
+            Self::Sparse {
+                row_offsets,
+                columns,
+                row_values,
+                ..
+            } => (row_offsets[row]..row_offsets[row + 1])
+                .map(|index| row_values[index] * forward[columns[index] as usize])
+                .sum(),
+        }
+    }
+
+    fn backward_correction(&self, row: usize, solution: &[f64]) -> f64 {
+        match self {
+            Self::Packed { values } => ((row + 1)..solution.len())
+                .map(|later| {
+                    let index = later.saturating_mul(later.saturating_sub(1)) / 2 + row;
+                    values[index] * solution[later]
+                })
+                .sum(),
+            Self::Sparse {
+                column_offsets,
+                rows,
+                column_values,
+                ..
+            } => (column_offsets[row]..column_offsets[row + 1])
+                .map(|index| column_values[index] * solution[rows[index] as usize])
+                .sum(),
+        }
+    }
+
+    fn byte_len(&self) -> usize {
+        match self {
+            Self::Packed { values } => values.len().saturating_mul(core::mem::size_of::<f64>()),
+            Self::Sparse {
+                row_offsets,
+                columns,
+                row_values,
+                column_offsets,
+                rows,
+                column_values,
+            } => row_offsets
+                .len()
+                .saturating_add(column_offsets.len())
+                .saturating_mul(core::mem::size_of::<usize>())
+                .saturating_add(
+                    columns
+                        .len()
+                        .saturating_add(rows.len())
+                        .saturating_mul(core::mem::size_of::<u32>()),
+                )
+                .saturating_add(
+                    row_values
+                        .len()
+                        .saturating_add(column_values.len())
+                        .saturating_mul(core::mem::size_of::<f64>()),
+                ),
+        }
+    }
+}
+
 /// A deterministic direct solver for a graph Laplacian on its quotient space.
 ///
 /// One highest-index vertex is grounded in each connected component. The
@@ -14,7 +172,7 @@ pub struct GroundedLdl {
     components: Components,
     anchors: Vec<usize>,
     permutation: Vec<usize>,
-    lower: Vec<Vec<f64>>,
+    lower: LowerFactor,
     diagonal: Vec<f64>,
     factor_nonzeros: usize,
 }
@@ -57,16 +215,16 @@ impl GroundedLdl {
             }
         }
 
-        let mut lower = vec![vec![0.0; dimension]; dimension];
+        let mut dense_lower = vec![vec![0.0; dimension]; dimension];
         let mut diagonal = vec![0.0; dimension];
-        for (row, values) in lower.iter_mut().enumerate() {
+        for (row, values) in dense_lower.iter_mut().enumerate() {
             values[row] = 1.0;
         }
 
         for column in 0..dimension {
             let mut pivot = matrix[column][column];
             for previous in 0..column {
-                let value = lower[column][previous];
+                let value = dense_lower[column][previous];
                 pivot -= value * value * diagonal[previous];
             }
             if !pivot.is_finite() || pivot <= 0.0 {
@@ -80,17 +238,21 @@ impl GroundedLdl {
             for row in (column + 1)..dimension {
                 let mut value = matrix[row][column];
                 for previous in 0..column {
-                    value -= lower[row][previous] * lower[column][previous] * diagonal[previous];
+                    value -= dense_lower[row][previous]
+                        * dense_lower[column][previous]
+                        * diagonal[previous];
                 }
-                lower[row][column] = value / pivot;
+                dense_lower[row][column] = value / pivot;
             }
         }
 
-        let factor_nonzeros = lower
+        let strict_nonzeros = dense_lower
             .iter()
             .enumerate()
-            .map(|(row, values)| values[..=row].iter().filter(|value| **value != 0.0).count())
-            .sum();
+            .map(|(row, values)| values[..row].iter().filter(|value| **value != 0.0).count())
+            .sum::<usize>();
+        let factor_nonzeros = dimension.saturating_add(strict_nonzeros);
+        let lower = LowerFactor::from_dense(&dense_lower);
 
         Ok(Self {
             vertex_count,
@@ -134,6 +296,28 @@ impl GroundedLdl {
     #[must_use]
     pub const fn factor_nonzeros(&self) -> usize {
         self.factor_nonzeros
+    }
+
+    /// Return the principal heap bytes retained by the factorization.
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        self.anchors
+            .len()
+            .saturating_add(self.permutation.len())
+            .saturating_mul(core::mem::size_of::<usize>())
+            .saturating_add(
+                self.diagonal
+                    .len()
+                    .saturating_mul(core::mem::size_of::<f64>()),
+            )
+            .saturating_add(self.lower.byte_len())
+            .saturating_add(
+                self.components
+                    .labels()
+                    .len()
+                    .saturating_add(self.components.sizes().len())
+                    .saturating_mul(core::mem::size_of::<usize>()),
+            )
     }
 
     /// Solve a compatible Laplacian system using default validation tolerances.
@@ -202,23 +386,15 @@ impl GroundedLdl {
         }
 
         for row in 0..dimension {
-            let correction: f64 = self.lower[row][..row]
-                .iter()
-                .zip(&forward[..row])
-                .map(|(lower_value, previous)| lower_value * previous)
-                .sum();
-            forward[row] = rhs[self.permutation[row]] - correction;
+            forward[row] = rhs[self.permutation[row]]
+                - self.lower.forward_correction(row, forward);
         }
         for (value, pivot) in forward.iter_mut().zip(&self.diagonal) {
             *value /= *pivot;
         }
         for row in (0..dimension).rev() {
-            let correction: f64 = self.lower[(row + 1)..]
-                .iter()
-                .zip(&factor_solution[(row + 1)..])
-                .map(|(lower_row, later_solution)| lower_row[row] * later_solution)
-                .sum();
-            factor_solution[row] = forward[row] - correction;
+            factor_solution[row] =
+                forward[row] - self.lower.backward_correction(row, factor_solution);
         }
 
         solution.fill(0.0);
