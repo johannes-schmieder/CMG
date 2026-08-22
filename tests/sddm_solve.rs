@@ -91,6 +91,7 @@ fn forced_multilevel_strictly_dominant_path_is_solved() {
     assert_vector_close(result.solution(), &known, 1.0e-7);
     assert!(solver.augmentation().is_augmented());
     assert!(result.iterations() > 0);
+    assert!(result.refinements() <= 3);
 }
 
 #[test]
