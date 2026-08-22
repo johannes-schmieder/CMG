@@ -80,9 +80,11 @@ impl Components {
     /// Laplacian range and return the Euclidean norm of the removed component.
     ///
     /// A component whose sum exceeds `compatibility_tolerance` relative to its
-    /// one-norm is rejected rather than modified. After mean subtraction, the
-    /// residual floating-point sum is removed from the component's
-    /// lowest-numbered vertex to make the projection deterministic.
+    /// one-norm is rejected rather than modified. The mean is first removed
+    /// from every vertex. Any residual summation error is then absorbed at the
+    /// smallest-magnitude vertex in the component, with vertex index breaking
+    /// ties, so that the correction is both deterministic and numerically
+    /// effective.
     pub fn project_rhs_in_place(
         &self,
         rhs: &mut [f64],
@@ -101,20 +103,19 @@ impl Components {
             *value -= means[*label];
         }
 
-        let residual_sums = self.compensated_sums(rhs, "Components::project_rhs_in_place")?;
-        let mut representatives = vec![usize::MAX; self.count()];
-        for (vertex, label) in self.labels.iter().copied().enumerate() {
-            if representatives[label] == usize::MAX {
-                representatives[label] = vertex;
+        let representatives = self.stable_representatives(rhs);
+        let mut corrections = vec![0.0; self.count()];
+        for _ in 0..2 {
+            let residual_sums = self.compensated_sums(rhs, "Components::project_rhs_in_place")?;
+            for (component, residual_sum) in residual_sums.iter().copied().enumerate() {
+                rhs[representatives[component]] -= residual_sum;
+                corrections[component] += residual_sum;
             }
-        }
-        for (component, residual_sum) in residual_sums.iter().copied().enumerate() {
-            rhs[representatives[component]] -= residual_sum;
         }
 
         let projection_scale = means
             .iter()
-            .zip(&residual_sums)
+            .zip(&corrections)
             .flat_map(|(mean, correction)| [mean.abs(), (*mean + *correction).abs()])
             .fold(0.0, f64::max);
         if projection_scale == 0.0 {
@@ -122,7 +123,7 @@ impl Components {
         }
         let projection_squared = means
             .iter()
-            .zip(&residual_sums)
+            .zip(&corrections)
             .zip(&self.sizes)
             .map(|((mean, correction), size)| {
                 let regular = *mean / projection_scale;
@@ -152,6 +153,20 @@ impl Components {
             *value -= means[*label];
         }
         Ok(())
+    }
+
+    fn stable_representatives(&self, values: &[f64]) -> Vec<usize> {
+        let mut representatives = vec![usize::MAX; self.count()];
+        for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
+            let current = representatives[*label];
+            if current == usize::MAX
+                || value.abs() < values[current].abs()
+                || (value.abs() == values[current].abs() && vertex < current)
+            {
+                representatives[*label] = vertex;
+            }
+        }
+        representatives
     }
 
     fn compatibility_data(
