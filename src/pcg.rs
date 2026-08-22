@@ -52,7 +52,10 @@ impl PcgWorkspace {
             ("PcgWorkspace direction", self.direction.len()),
             ("PcgWorkspace matrix direction", self.matrix_direction.len()),
             ("PcgWorkspace fresh residual", self.fresh_residual.len()),
-            ("PcgWorkspace original residual", self.original_residual.len()),
+            (
+                "PcgWorkspace original residual",
+                self.original_residual.len(),
+            ),
         ] {
             if actual != dimension {
                 return Err(CmgError::dimension(context, dimension, actual));
@@ -176,12 +179,10 @@ pub fn solve_pcg_with_workspace(
 
     let components = Components::from_laplacian(graph);
     workspace.projected_rhs.copy_from_slice(rhs);
-    let rhs_projection_norm = components
-        .project_rhs_in_place(&mut workspace.projected_rhs, options.validation)?;
+    let rhs_projection_norm =
+        components.project_rhs_in_place(&mut workspace.projected_rhs, options.validation)?;
     workspace.solution.fill(0.0);
-    workspace
-        .residual
-        .copy_from_slice(&workspace.projected_rhs);
+    workspace.residual.copy_from_slice(&workspace.projected_rhs);
     workspace.preconditioned.fill(0.0);
     workspace.direction.fill(0.0);
     workspace.matrix_direction.fill(0.0);
