@@ -41,6 +41,8 @@ pub struct Laplacian {
     vertex_count: usize,
     edges: Vec<Edge>,
     diagonal: Vec<f64>,
+    matrix_nnz: usize,
+    operator_norm_bound: f64,
     lineage: Arc<()>,
 }
 
@@ -49,6 +51,8 @@ impl PartialEq for Laplacian {
         self.vertex_count == other.vertex_count
             && self.edges == other.edges
             && self.diagonal == other.diagonal
+            && self.matrix_nnz == other.matrix_nnz
+            && self.operator_norm_bound == other.operator_norm_bound
     }
 }
 
@@ -116,10 +120,16 @@ impl Laplacian {
             diagonal[edge.v] += edge.weight;
         }
 
+        let diagonal_nnz = diagonal.iter().filter(|degree| **degree != 0.0).count();
+        let matrix_nnz = diagonal_nnz + 2 * canonical.len();
+        let operator_norm_bound = 2.0 * diagonal.iter().copied().fold(0.0, f64::max);
+
         Ok(Self {
             vertex_count,
             edges: canonical,
             diagonal,
+            matrix_nnz,
+            operator_norm_bound,
             lineage: Arc::new(()),
         })
     }
@@ -151,19 +161,14 @@ impl Laplacian {
     /// Return the number of nonzero entries in the corresponding symmetric
     /// sparse matrix.
     #[must_use]
-    pub fn matrix_nnz(&self) -> usize {
-        let diagonal_nnz = self
-            .diagonal
-            .iter()
-            .filter(|degree| **degree != 0.0)
-            .count();
-        diagonal_nnz + 2 * self.edges.len()
+    pub const fn matrix_nnz(&self) -> usize {
+        self.matrix_nnz
     }
 
     /// Return an inexpensive upper bound on the Euclidean operator norm.
     #[must_use]
-    pub fn operator_norm_bound(&self) -> f64 {
-        2.0 * self.diagonal.iter().copied().fold(0.0, f64::max)
+    pub const fn operator_norm_bound(&self) -> f64 {
+        self.operator_norm_bound
     }
 
     pub(crate) fn shares_lineage(&self, other: &Self) -> bool {
@@ -321,5 +326,14 @@ mod tests {
         assert!(graph.shares_lineage(&clone));
         assert!(!graph.shares_lineage(&rebuilt));
         assert_eq!(graph, rebuilt);
+        assert_eq!(graph.matrix_nnz(), 7);
+        assert_eq!(graph.operator_norm_bound(), 6.0);
+    }
+
+    #[test]
+    fn cached_invariants_include_isolated_vertices_correctly() {
+        let graph = Laplacian::from_edges(4, [(0, 1, 2.5)]).unwrap();
+        assert_eq!(graph.matrix_nnz(), 4);
+        assert_eq!(graph.operator_norm_bound(), 5.0);
     }
 }
