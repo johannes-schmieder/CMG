@@ -1,0 +1,50 @@
+name: Record benchmark interface
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/record-benchmark-interface.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Build and inspect benchmark entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path benchmarks/Cargo.toml --bin cmg-bench
+          binary=benchmarks/target/release/cmg-bench
+          if [[ ! -x "$binary" ]]; then
+            binary=target/release/cmg-bench
+          fi
+          mkdir -p .ci/performance
+          {
+            echo '# cmg-bench --help'
+            "$binary" --help || true
+            echo
+            echo '# public parallel API references'
+            grep -R -n -E 'ThreadPool|thread_count|threads|Parallel|Execution' \
+              src benchmarks/src tests 2>/dev/null | head -n 300 || true
+          } > .ci/performance/benchmark-interface.txt
+
+      - name: Remove one-shot workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/record-benchmark-interface.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'bench: record parallel benchmark interface'
+          git pull --rebase origin main
+          git push origin HEAD:main
