@@ -9,5 +9,13 @@ publish = false
 cmg = { path = ".." }
 
 [[bin]]
+name = "graph-build"
+path = "src/bin/graph-build.rs"
+
+[[bin]]
+name = "hierarchy-build"
+path = "src/bin/hierarchy-build.rs"
+
+[[bin]]
 name = "terminal-build"
 path = "src/bin/terminal-build.rs"
