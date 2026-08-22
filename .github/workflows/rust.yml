@@ -3,11 +3,17 @@ name: Rust CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.ci/**'
   pull_request:
     branches: [main]
 
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   quality:
@@ -57,3 +63,43 @@ jobs:
 
       - name: Release build
         run: cargo build --release --verbose
+
+  report:
+    name: report checkpoint
+    if: ${{ always() && github.event_name == 'push' }}
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Write status
+        shell: bash
+        env:
+          TESTED_SHA: ${{ github.sha }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          mkdir -p .ci
+          cat > .ci/latest.json <<JSON
+          {
+            "tested_sha": "${TESTED_SHA}",
+            "quality": "${QUALITY_RESULT}",
+            "cross_platform_tests": "${TEST_RESULT}",
+            "platforms": ["ubuntu-latest", "macos-latest", "windows-latest"],
+            "rustc": "$(rustc --version)",
+            "cargo": "$(cargo --version)"
+          }
+          JSON
+
+      - name: Commit status
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .ci/latest.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'ci: record checkpoint status [skip ci]'
+          git push origin HEAD:main
