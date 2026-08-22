@@ -61,13 +61,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let graph = Laplacian::from_edges(config.vertices, raw_edges.iter().copied())?;
-    let parallel_graph = Laplacian::from_edges_with_executor(
-        config.vertices,
-        raw_edges.iter().copied(),
-        &executor,
-    )?;
+    let parallel_graph =
+        Laplacian::from_edges_with_executor(config.vertices, raw_edges.iter().copied(), &executor)?;
     if graph != parallel_graph {
-        return Err(io::Error::other("parallel graph construction changed the canonical graph").into());
+        return Err(
+            io::Error::other("parallel graph construction changed the canonical graph").into(),
+        );
     }
 
     let mut serial_graph_build_ns = Vec::with_capacity(config.repetitions);
@@ -325,10 +324,7 @@ fn time_parallel_graph_build(
     Ok(start.elapsed().as_nanos())
 }
 
-fn time_serial_setup(
-    graph: &Laplacian,
-    options: CmgOptions,
-) -> Result<u128, cmg::CmgError> {
+fn time_serial_setup(graph: &Laplacian, options: CmgOptions) -> Result<u128, cmg::CmgError> {
     let start = Instant::now();
     let preconditioner = CmgPreconditioner::build(graph, options)?;
     black_box(&preconditioner);
