@@ -17,5 +17,9 @@ name = "hierarchy-build"
 path = "src/bin/hierarchy-build.rs"
 
 [[bin]]
+name = "hierarchy-alloc"
+path = "src/bin/hierarchy-alloc.rs"
+
+[[bin]]
 name = "terminal-build"
 path = "src/bin/terminal-build.rs"
