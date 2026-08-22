@@ -8,20 +8,24 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod coarsen;
 mod components;
 mod error;
 mod forest;
 mod graph;
+mod hierarchy;
 mod options;
 mod sddm;
 
+pub use coarsen::Aggregation;
 pub use components::Components;
 pub use error::CmgError;
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };
 pub use graph::{Edge, Laplacian};
-pub use options::ValidationOptions;
+pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
+pub use options::{CmgOptions, ValidationOptions};
 pub use sddm::{SddmAugmentation, SddmMatrix};
 
 /// Return the pinned upstream CMG commit used as the behavioral reference.
