@@ -1,7 +1,8 @@
 #![cfg(feature = "parallel")]
 
 use cmg::{
-    CmgError, CmgOptions, CmgPreconditioner, Laplacian, ParallelExecutor, ParallelOptions,
+    Aggregation, CmgError, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian,
+    ParallelExecutor, ParallelOptions,
     PcgOptions, PcgWorkspace, solve_pcg_batch, solve_pcg_batch_with_executor,
 };
 
@@ -118,4 +119,66 @@ fn one_thread_executor_preserves_serial_behavior() {
     )
     .unwrap();
     assert_eq!(serial, parallel);
+}
+
+#[test]
+fn parallel_edge_sorting_matches_serial_canonicalization() {
+    let raw_edges: Vec<(usize, usize, f64)> = (0..20_000)
+        .flat_map(|index| {
+            let left = index % 4_000;
+            let right = (index.wrapping_mul(1_103).wrapping_add(17) % 4_000 + 1) % 4_000;
+            let right = if right == left { (right + 1) % 4_000 } else { right };
+            let weight = 0.25 + (index % 29) as f64 / 7.0;
+            [(left, right, weight), (right, left, weight / 3.0)]
+        })
+        .rev()
+        .collect();
+    let serial = Laplacian::from_edges(4_000, raw_edges.iter().copied()).unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 4,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+    let parallel =
+        Laplacian::from_edges_with_executor(4_000, raw_edges, &executor).unwrap();
+
+    assert_eq!(serial, parallel);
+}
+
+#[test]
+fn parallel_contraction_and_hierarchy_match_serial_exactly() {
+    let (graph, _) = path_problem(20_000, 1);
+    let labels: Vec<usize> = (0..graph.vertex_count()).map(|vertex| vertex / 3).collect();
+    let aggregation = Aggregation::new(
+        labels,
+        graph.vertex_count().div_ceil(3),
+    )
+    .unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 4,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+
+    let serial_coarse = aggregation.contract(&graph).unwrap();
+    let parallel_coarse = aggregation
+        .contract_with_executor(&graph, &executor)
+        .unwrap();
+    assert_eq!(serial_coarse, parallel_coarse);
+
+    let options = CmgOptions {
+        direct_threshold: 64,
+        ..CmgOptions::default()
+    };
+    let serial_hierarchy = CmgHierarchy::build(&graph, options).unwrap();
+    let parallel_hierarchy =
+        CmgHierarchy::build_with_executor(&graph, options, &executor).unwrap();
+    assert_eq!(serial_hierarchy, parallel_hierarchy);
+
+    let serial_preconditioner = CmgPreconditioner::build(&graph, options).unwrap();
+    let parallel_preconditioner =
+        CmgPreconditioner::build_with_executor(&graph, options, &executor).unwrap();
+    assert_eq!(serial_preconditioner, parallel_preconditioner);
 }

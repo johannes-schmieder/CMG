@@ -1,6 +1,10 @@
 //! Deterministic restriction, prolongation, and Galerkin graph contraction.
 
+#[cfg(feature = "parallel")]
+use crate::ParallelExecutor;
 use crate::{CmgError, Laplacian};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 /// A zero-based partition of fine vertices into coarse aggregates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +110,44 @@ impl Aggregation {
 
     /// Form the exact graph Laplacian `R L R^T`.
     pub fn contract(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
+        self.validate_contract_graph(graph)?;
+        let coarse_edges = graph.edges().iter().filter_map(|edge| {
+            let left = self.labels[edge.u()];
+            let right = self.labels[edge.v()];
+            (left != right).then_some((left, right, edge.weight()))
+        });
+        Laplacian::from_edges(self.coarse_dimension(), coarse_edges)
+    }
+
+    /// Form `R L R^T` using deterministic parallel edge mapping and sorting.
+    ///
+    /// The resulting graph is bit-for-bit identical to [`Self::contract`].
+    /// Small edge sets follow the serial path selected by the executor.
+    #[cfg(feature = "parallel")]
+    pub fn contract_with_executor(
+        &self,
+        graph: &Laplacian,
+        executor: &ParallelExecutor,
+    ) -> Result<Laplacian, CmgError> {
+        self.validate_contract_graph(graph)?;
+        if !executor.should_parallel(graph.edge_count()) {
+            return self.contract(graph);
+        }
+        let coarse_edges: Vec<(usize, usize, f64)> = executor.install(|| {
+            graph
+                .edges()
+                .par_iter()
+                .filter_map(|edge| {
+                    let left = self.labels[edge.u()];
+                    let right = self.labels[edge.v()];
+                    (left != right).then_some((left, right, edge.weight()))
+                })
+                .collect()
+        });
+        Laplacian::from_edges_with_executor(self.coarse_dimension(), coarse_edges, executor)
+    }
+
+    fn validate_contract_graph(&self, graph: &Laplacian) -> Result<(), CmgError> {
         if graph.vertex_count() != self.fine_dimension() {
             return Err(CmgError::dimension(
                 "Aggregation::contract",
@@ -113,12 +155,7 @@ impl Aggregation {
                 graph.vertex_count(),
             ));
         }
-        let coarse_edges = graph.edges().iter().filter_map(|edge| {
-            let left = self.labels[edge.u()];
-            let right = self.labels[edge.v()];
-            (left != right).then_some((left, right, edge.weight()))
-        });
-        Laplacian::from_edges(self.coarse_dimension(), coarse_edges)
+        Ok(())
     }
 }
 

@@ -1,6 +1,10 @@
 //! Canonical weighted graph-Laplacian representation.
 
+#[cfg(feature = "parallel")]
+use crate::ParallelExecutor;
 use crate::CmgError;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use std::sync::Arc;
 
 /// A canonical undirected weighted edge with `u < v` and positive weight.
@@ -58,45 +62,38 @@ impl Laplacian {
     where
         I: IntoIterator<Item = (usize, usize, f64)>,
     {
-        let mut raw = Vec::new();
-        for (left, right, weight) in edges {
-            if left >= vertex_count {
-                return Err(CmgError::VertexOutOfBounds {
-                    vertex: left,
-                    vertex_count,
-                });
-            }
-            if right >= vertex_count {
-                return Err(CmgError::VertexOutOfBounds {
-                    vertex: right,
-                    vertex_count,
-                });
-            }
-            if left == right {
-                return Err(CmgError::SelfLoop { vertex: left });
-            }
-            if !weight.is_finite() || weight <= 0.0 {
-                return Err(CmgError::InvalidEdgeWeight {
-                    u: left,
-                    v: right,
-                    weight,
-                });
-            }
-            let (u, v) = if left < right {
-                (left, right)
-            } else {
-                (right, left)
-            };
-            raw.push((u, v, weight));
+        let mut raw = collect_validated_edges(vertex_count, edges)?;
+        raw.sort_by(compare_raw_edges);
+        Self::from_sorted_raw_edges(vertex_count, raw)
+    }
+
+    /// Build a Laplacian while parallelizing deterministic edge sorting.
+    ///
+    /// Validation and compensated duplicate aggregation are identical to
+    /// [`Self::from_edges`]. The package-owned executor is used only when the
+    /// collected edge count exceeds its configured parallel threshold.
+    #[cfg(feature = "parallel")]
+    pub fn from_edges_with_executor<I>(
+        vertex_count: usize,
+        edges: I,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError>
+    where
+        I: IntoIterator<Item = (usize, usize, f64)>,
+    {
+        let mut raw = collect_validated_edges(vertex_count, edges)?;
+        if executor.should_parallel(raw.len()) {
+            executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
+        } else {
+            raw.sort_by(compare_raw_edges);
         }
+        Self::from_sorted_raw_edges(vertex_count, raw)
+    }
 
-        raw.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then(left.1.cmp(&right.1))
-                .then_with(|| left.2.total_cmp(&right.2))
-        });
-
+    fn from_sorted_raw_edges(
+        vertex_count: usize,
+        raw: Vec<(usize, usize, f64)>,
+    ) -> Result<Self, CmgError> {
         let mut canonical = Vec::with_capacity(raw.len());
         let mut cursor = 0;
         while cursor < raw.len() {
@@ -234,6 +231,58 @@ impl Laplacian {
         }
         dense
     }
+}
+
+fn collect_validated_edges<I>(
+    vertex_count: usize,
+    edges: I,
+) -> Result<Vec<(usize, usize, f64)>, CmgError>
+where
+    I: IntoIterator<Item = (usize, usize, f64)>,
+{
+    let iterator = edges.into_iter();
+    let mut raw = Vec::with_capacity(iterator.size_hint().0);
+    for (left, right, weight) in iterator {
+        if left >= vertex_count {
+            return Err(CmgError::VertexOutOfBounds {
+                vertex: left,
+                vertex_count,
+            });
+        }
+        if right >= vertex_count {
+            return Err(CmgError::VertexOutOfBounds {
+                vertex: right,
+                vertex_count,
+            });
+        }
+        if left == right {
+            return Err(CmgError::SelfLoop { vertex: left });
+        }
+        if !weight.is_finite() || weight <= 0.0 {
+            return Err(CmgError::InvalidEdgeWeight {
+                u: left,
+                v: right,
+                weight,
+            });
+        }
+        let (u, v) = if left < right {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        raw.push((u, v, weight));
+    }
+    Ok(raw)
+}
+
+fn compare_raw_edges(
+    left: &(usize, usize, f64),
+    right: &(usize, usize, f64),
+) -> core::cmp::Ordering {
+    left.0
+        .cmp(&right.0)
+        .then(left.1.cmp(&right.1))
+        .then_with(|| left.2.total_cmp(&right.2))
 }
 
 pub(crate) fn compensated_sum<I>(values: I) -> f64

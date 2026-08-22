@@ -1,5 +1,7 @@
 //! Stationary recursive CMG preconditioner application.
 
+#[cfg(feature = "parallel")]
+use crate::ParallelExecutor;
 use crate::{
     CmgError, CmgHierarchy, CmgOptions, CmgWorkspace, Components, GroundedLdl, Laplacian,
     TerminalReason, ValidationOptions,
@@ -17,7 +19,25 @@ pub struct CmgPreconditioner {
 impl CmgPreconditioner {
     /// Build the complete hierarchy and any direct terminal factorization.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        let mut hierarchy = CmgHierarchy::build(graph, options)?;
+        Self::from_hierarchy(CmgHierarchy::build(graph, options)?)
+    }
+
+    /// Build with deterministic parallel hierarchy contraction and sorting.
+    ///
+    /// The resulting hierarchy, terminal factor, and repeat counts are exactly
+    /// the same as [`Self::build`].
+    #[cfg(feature = "parallel")]
+    pub fn build_with_executor(
+        graph: &Laplacian,
+        options: CmgOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
+        Self::from_hierarchy(CmgHierarchy::build_with_executor(
+            graph, options, executor,
+        )?)
+    }
+
+    fn from_hierarchy(mut hierarchy: CmgHierarchy) -> Result<Self, CmgError> {
         let level_components = hierarchy
             .levels()
             .iter()

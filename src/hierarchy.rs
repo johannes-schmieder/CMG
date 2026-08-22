@@ -1,5 +1,7 @@
 //! Construction and diagnostics for the stationary CMG hierarchy.
 
+#[cfg(feature = "parallel")]
+use crate::ParallelExecutor;
 use crate::{Aggregation, CmgError, CmgOptions, Laplacian, build_forest_grouping};
 
 /// The reason hierarchy construction terminated.
@@ -125,6 +127,35 @@ pub struct CmgHierarchy {
 impl CmgHierarchy {
     /// Build a hierarchy from a weighted graph Laplacian.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
+        Self::build_with_contraction(graph, options, |aggregation, current| {
+            aggregation.contract(current)
+        })
+    }
+
+    /// Build a hierarchy with deterministic parallel coarse-graph contraction.
+    ///
+    /// Forest selection and splitting remain serial in this checkpoint. The
+    /// supplied package-owned executor maps and sorts coarse edges while
+    /// preserving the exact serial hierarchy.
+    #[cfg(feature = "parallel")]
+    pub fn build_with_executor(
+        graph: &Laplacian,
+        options: CmgOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
+        Self::build_with_contraction(graph, options, |aggregation, current| {
+            aggregation.contract_with_executor(current, executor)
+        })
+    }
+
+    fn build_with_contraction<Contract>(
+        graph: &Laplacian,
+        options: CmgOptions,
+        mut contract: Contract,
+    ) -> Result<Self, CmgError>
+    where
+        Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
+    {
         let options = options.validate()?;
         let initial_nonzeros = graph.matrix_nnz();
         let mut cumulative_nonzeros = 0_usize;
@@ -191,7 +222,7 @@ impl CmgHierarchy {
                 break;
             }
 
-            let coarse = aggregation.contract(&current)?;
+            let coarse = contract(&aggregation, &current)?;
             let repeat = repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz());
             levels.push(make_level(current, Some(aggregation), repeat, None));
             current = coarse;
