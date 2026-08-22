@@ -6,6 +6,8 @@ use crate::{
     SddmMatrix, ValidationOptions, solve_pcg_with_workspace,
 };
 
+const MAX_CERTIFICATE_REFINEMENTS: usize = 3;
+
 /// A reusable CMG solver for one fixed SDDM matrix.
 ///
 /// Construction performs the exact upstream extra-vertex augmentation, builds
@@ -90,7 +92,7 @@ impl SddmSolver {
         options: PcgOptions,
         workspace: &mut SddmWorkspace,
     ) -> Result<SddmResult, CmgError> {
-        let options = options.validate()?;
+        let requested_options = options.validate()?;
         let dimension = self.matrix.dimension();
         if rhs.len() != dimension {
             return Err(CmgError::dimension(
@@ -103,57 +105,95 @@ impl SddmSolver {
 
         let lifted = self.augmentation.lift_rhs(rhs)?;
         workspace.lifted_rhs.copy_from_slice(&lifted);
-        let augmented = solve_pcg_with_workspace(
-            self.augmentation.graph(),
-            &self.preconditioner,
-            &workspace.lifted_rhs,
-            options,
-            &mut workspace.pcg,
-        )?;
-        let solution = self.augmentation.extract_solution(augmented.solution())?;
-
-        self.matrix
-            .matvec_into(&solution, &mut workspace.original_residual)?;
-        for (residual, rhs_value) in workspace.original_residual.iter_mut().zip(rhs) {
-            *residual = *rhs_value - *residual;
-        }
-
         let rhs_norm = euclidean_norm(rhs);
-        let solution_norm = euclidean_norm(&solution);
-        let residual_norm = euclidean_norm(&workspace.original_residual);
-        let tolerance = options.absolute_tolerance
-            + options.relative_tolerance * (rhs_norm + self.operator_norm_bound * solution_norm);
-        if residual_norm > tolerance {
-            return Err(CmgError::ResidualVerificationFailed {
-                iteration: augmented.iterations(),
-                residual_norm,
-                tolerance,
-            });
+        let mut solve_options = requested_options;
+        let mut refinements = 0_usize;
+        let mut total_iterations = 0_usize;
+        let mut total_restarts = 0_usize;
+
+        loop {
+            let augmented = solve_pcg_with_workspace(
+                self.augmentation.graph(),
+                &self.preconditioner,
+                &workspace.lifted_rhs,
+                solve_options,
+                &mut workspace.pcg,
+            )?;
+            total_iterations += augmented.iterations();
+            total_restarts += augmented.restarts();
+            let solution = self.augmentation.extract_solution(augmented.solution())?;
+
+            self.matrix
+                .matvec_into(&solution, &mut workspace.original_residual)?;
+            for (residual, rhs_value) in workspace.original_residual.iter_mut().zip(rhs) {
+                *residual = *rhs_value - *residual;
+            }
+
+            let solution_norm = euclidean_norm(&solution);
+            let residual_norm = euclidean_norm(&workspace.original_residual);
+            let tolerance = requested_options.absolute_tolerance
+                + requested_options.relative_tolerance
+                    * (rhs_norm + self.operator_norm_bound * solution_norm);
+            if !residual_norm.is_finite() {
+                return Err(CmgError::PcgBreakdown {
+                    iteration: total_iterations,
+                    quantity: "original SDDM residual norm",
+                    value: residual_norm,
+                });
+            }
+            if !tolerance.is_finite() {
+                return Err(CmgError::PcgBreakdown {
+                    iteration: total_iterations,
+                    quantity: "original SDDM residual tolerance",
+                    value: tolerance,
+                });
+            }
+
+            if residual_norm <= tolerance {
+                let relative_residual = if rhs_norm > 0.0 {
+                    residual_norm / rhs_norm
+                } else {
+                    residual_norm
+                };
+                let denominator = rhs_norm + self.operator_norm_bound * solution_norm;
+                let backward_error = if denominator > 0.0 {
+                    residual_norm / denominator
+                } else {
+                    0.0
+                };
+
+                return Ok(SddmResult {
+                    solution,
+                    iterations: total_iterations,
+                    restarts: total_restarts,
+                    refinements,
+                    residual_norm,
+                    relative_residual,
+                    backward_error,
+                    tolerance,
+                    augmented_residual_norm: augmented.residual_norm(),
+                    augmented_backward_error: augmented.backward_error(),
+                });
+            }
+
+            if refinements == MAX_CERTIFICATE_REFINEMENTS {
+                return Err(CmgError::ResidualVerificationFailed {
+                    iteration: total_iterations,
+                    residual_norm,
+                    tolerance,
+                });
+            }
+
+            refinements += 1;
+            let absolute_target = (0.25 * tolerance).max(f64::from_bits(1));
+            solve_options = PcgOptions {
+                relative_tolerance: 0.0,
+                absolute_tolerance: absolute_target,
+                max_iterations: requested_options.max_iterations,
+                residual_recompute_interval: requested_options.residual_recompute_interval,
+                validation: requested_options.validation,
+            };
         }
-
-        let relative_residual = if rhs_norm > 0.0 {
-            residual_norm / rhs_norm
-        } else {
-            residual_norm
-        };
-        let denominator = rhs_norm + self.operator_norm_bound * solution_norm;
-        let backward_error = if denominator > 0.0 {
-            residual_norm / denominator
-        } else {
-            0.0
-        };
-
-        Ok(SddmResult {
-            solution,
-            iterations: augmented.iterations(),
-            restarts: augmented.restarts(),
-            residual_norm,
-            relative_residual,
-            backward_error,
-            tolerance,
-            augmented_residual_norm: augmented.residual_norm(),
-            augmented_backward_error: augmented.backward_error(),
-        })
     }
 
     /// Solve multiple right-hand sides sequentially with one workspace.
@@ -233,6 +273,7 @@ pub struct SddmResult {
     solution: Vec<f64>,
     iterations: usize,
     restarts: usize,
+    refinements: usize,
     residual_norm: f64,
     relative_residual: f64,
     backward_error: f64,
@@ -254,16 +295,22 @@ impl SddmResult {
         self.solution
     }
 
-    /// Return completed augmented-Laplacian PCG iterations.
+    /// Return total augmented-Laplacian PCG iterations across all attempts.
     #[must_use]
     pub const fn iterations(&self) -> usize {
         self.iterations
     }
 
-    /// Return explicit residual-replacement restarts.
+    /// Return explicit residual-replacement restarts across all attempts.
     #[must_use]
     pub const fn restarts(&self) -> usize {
         self.restarts
+    }
+
+    /// Return the number of stricter augmented-system refinement solves.
+    #[must_use]
+    pub const fn refinements(&self) -> usize {
+        self.refinements
     }
 
     /// Return the fresh residual norm in the original SDDM system.
