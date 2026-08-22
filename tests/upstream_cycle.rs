@@ -90,9 +90,7 @@ fn compare(graph: Laplacian) {
 
 #[test]
 fn stationary_cycle_matches_independent_allocating_reference() {
-    compare(
-        Laplacian::from_edges(40, (0..39).map(|index| (index, index + 1, 1.0))).unwrap(),
-    );
+    compare(Laplacian::from_edges(40, (0..39).map(|index| (index, index + 1, 1.0))).unwrap());
 
     let mut grid_edges = Vec::new();
     for row in 0..5 {

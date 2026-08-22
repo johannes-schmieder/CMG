@@ -1,6 +1,5 @@
 use cmg::{
-    CmgOptions, GroundedLdl, Laplacian, PcgOptions, SddmMatrix, SddmSolver,
-    ValidationOptions,
+    CmgOptions, GroundedLdl, Laplacian, PcgOptions, SddmMatrix, SddmSolver, ValidationOptions,
 };
 
 fn dense_solve(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Vec<f64> {
@@ -68,22 +67,15 @@ fn sddm_solver_matches_independent_dense_elimination() {
             .enumerate()
             .map(|(index, off_sum)| *off_sum + 0.5 + 0.125 * index as f64)
             .collect();
-        let matrix = SddmMatrix::from_parts(
-            diagonal,
-            off_diagonal,
-            ValidationOptions::default(),
-        )
-        .unwrap();
+        let matrix =
+            SddmMatrix::from_parts(diagonal, off_diagonal, ValidationOptions::default()).unwrap();
         let rhs: Vec<f64> = (0..n)
             .map(|index| (index as f64 + 0.25).cos() + 0.1 * index as f64)
             .collect();
         let expected = dense_solve(matrix.to_dense(), rhs.clone());
-        let solver = SddmSolver::from_matrix(
-            &matrix,
-            CmgOptions::default(),
-            ValidationOptions::default(),
-        )
-        .unwrap();
+        let solver =
+            SddmSolver::from_matrix(&matrix, CmgOptions::default(), ValidationOptions::default())
+                .unwrap();
         let result = solver
             .solve(
                 &rhs,
@@ -108,11 +100,7 @@ fn grounded_ldl_matches_independent_dense_reduced_solves() {
             (0..6).map(|index| (index, (index + 1) % 6, 1.0 + 0.25 * index as f64)),
         )
         .unwrap(),
-        Laplacian::from_edges(
-            7,
-            (1..7).map(|leaf| (0, leaf, 0.5 + 0.25 * leaf as f64)),
-        )
-        .unwrap(),
+        Laplacian::from_edges(7, (1..7).map(|leaf| (0, leaf, 0.5 + 0.25 * leaf as f64))).unwrap(),
     ];
 
     for graph in graphs {
