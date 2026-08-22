@@ -229,14 +229,19 @@ pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
         indegree[target] += 1;
     }
 
+    let mut walk = Vec::new();
+    let mut new_ancestors = Vec::new();
+
     for start in 0..n {
         let mut current = start;
         let mut continue_walk = true;
         while continue_walk && indegree[current] == 0 && !visited[current] {
             continue_walk = false;
             let mut ancestors_in_path = 0_i64;
-            let mut walk = vec![current];
-            let mut new_ancestors = vec![0_i64];
+            walk.clear();
+            walk.push(current);
+            new_ancestors.clear();
+            new_ancestors.push(0_i64);
             let mut k = 0_usize;
 
             while k <= 5 || visited[current] {
