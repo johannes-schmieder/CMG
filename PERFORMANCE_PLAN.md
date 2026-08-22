@@ -199,6 +199,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/compact-edge-endpoints-latest.json`.
 
+### Compact graph-build buffer checkpoint — 2026-08-22
+
+- Collecting validated edges directly into the retained 16-byte layout and
+  compacting duplicate pairs in place was **not retained**. Graph time/RSS ratios: 0.872/0.869; hierarchy time/RSS ratios: 0.931/1.010.
+- Endpoint ordering, weight ordering, compensated duplicate summation, and
+  all graph/hierarchy invariants were required to remain unchanged.
+- Qualification status: `success`.
+- Machine-readable evidence:
+  `.ci/performance/compact-edge-build-buffer-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
