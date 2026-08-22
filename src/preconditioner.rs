@@ -9,7 +9,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmgPreconditioner {
     hierarchy: CmgHierarchy,
-    components: Components,
+    level_components: Vec<Components>,
     direct_terminal: Option<GroundedLdl>,
     repeat_counts: Vec<usize>,
 }
@@ -18,7 +18,11 @@ impl CmgPreconditioner {
     /// Build the complete hierarchy and any direct terminal factorization.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
         let hierarchy = CmgHierarchy::build(graph, options)?;
-        let components = Components::from_laplacian(graph);
+        let level_components = hierarchy
+            .levels()
+            .iter()
+            .map(|level| Components::from_laplacian(level.graph()))
+            .collect();
         let direct_terminal = if hierarchy.report().terminal_reason() == TerminalReason::Direct {
             let terminal = hierarchy
                 .levels()
@@ -48,7 +52,7 @@ impl CmgPreconditioner {
 
         Ok(Self {
             hierarchy,
-            components,
+            level_components,
             direct_terminal,
             repeat_counts,
         })
@@ -126,9 +130,8 @@ impl CmgPreconditioner {
         let mut projected_rhs = workspace.take_projected_rhs();
         projected_rhs.copy_from_slice(rhs);
         let result = (|| {
-            self.components
-                .project_rhs_in_place(&mut projected_rhs, validation)?;
-            self.apply_level(0, &projected_rhs, output, workspace)
+            self.level_components[0].project_rhs_in_place(&mut projected_rhs, validation)?;
+            self.apply_level(0, &projected_rhs, output, workspace, validation)
         })();
         workspace.put_projected_rhs(projected_rhs);
         result
@@ -140,6 +143,7 @@ impl CmgPreconditioner {
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
     ) -> Result<(), CmgError> {
         let level = &self.hierarchy.levels()[level_index];
         let dimension = level.graph().vertex_count();
@@ -215,12 +219,20 @@ impl CmgPreconditioner {
                     *residual = *rhs_value - *matrix_value;
                 }
                 aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                self.level_components[level_index + 1].project_rhs_in_place(
+                    &mut local.coarse_rhs,
+                    ValidationOptions {
+                        symmetry_tolerance: validation.symmetry_tolerance,
+                        compatibility_tolerance: 1.0,
+                    },
+                )?;
                 local.coarse_correction.fill(0.0);
                 self.apply_level(
                     level_index + 1,
                     &local.coarse_rhs,
                     &mut local.coarse_correction,
                     workspace,
+                    validation,
                 )?;
                 aggregation.prolong_add_into(&local.coarse_correction, &mut local.x)?;
 
