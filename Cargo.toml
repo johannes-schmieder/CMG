@@ -18,3 +18,8 @@ parallel = ["dep:rayon"]
 rayon = { version = "1.12", optional = true }
 
 [dev-dependencies]
+
+[[bin]]
+name = "cmg-parallel-bench"
+path = "src/bin/cmg-parallel-bench.rs"
+required-features = ["parallel"]
