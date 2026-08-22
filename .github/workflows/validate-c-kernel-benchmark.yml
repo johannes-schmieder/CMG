@@ -19,10 +19,47 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Repair benchmark and default-feature warnings
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('benchmarks/c-kernel/src/main.rs')
+          text = path.read_text()
+          old = 'let mut columns = vec![0_c_uint; total];'
+          new = 'let mut columns = vec![0 as c_uint; total];'
+          if text.count(old) != 1:
+              raise SystemExit('C index literal anchor changed')
+          path.write_text(text.replace(old, new))
+
+          path = Path('src/execution.rs')
+          text = path.read_text()
+          old = '''/// Minimum item count for setup kernels whose parallel path pays sorting or\n/// temporary sparse-storage overhead.\npub(crate) const PARALLEL_SETUP_MIN_ITEMS: usize = 65_536;\n'''
+          new = '''/// Minimum item count for setup kernels whose parallel path pays sorting or\n/// temporary sparse-storage overhead.\n#[cfg(feature = "parallel")]\npub(crate) const PARALLEL_SETUP_MIN_ITEMS: usize = 65_536;\n'''
+          if text.count(old) != 1:
+              raise SystemExit('parallel setup constant anchor changed')
+          path.write_text(text.replace(old, new))
+
+          path = Path('src/csr.rs')
+          text = path.read_text()
+          old = '''    fn maximum_weight_neighbors_serial(&self) -> (Vec<usize>, Vec<f64>) {\n'''
+          new = '''    #[cfg(feature = "parallel")]\n    fn maximum_weight_neighbors_serial(&self) -> (Vec<usize>, Vec<f64>) {\n'''
+          if text.count(old) != 1:
+              raise SystemExit('serial neighbor helper anchor changed')
+          text = text.replace(old, new)
+          old = '''    fn maximum_weight_neighbor(&self, row: usize) -> (usize, f64) {\n'''
+          new = '''    #[cfg(feature = "parallel")]\n    fn maximum_weight_neighbor(&self, row: usize) -> (usize, f64) {\n'''
+          if text.count(old) != 1:
+              raise SystemExit('neighbor helper anchor changed')
+          path.write_text(text.replace(old, new))
+
       - name: Format, test, lint, and build
         shell: bash
         run: |
           set -euo pipefail
+          cargo fmt --all
+          cargo test
+          cargo clippy --all-targets -- -D warnings
           cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all
           cargo test --manifest-path benchmarks/c-kernel/Cargo.toml
           cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --release
