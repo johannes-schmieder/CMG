@@ -26,7 +26,7 @@ impl ComponentWorkspace {
         }
     }
 
-    fn validate(&self, component_count: usize) -> Result<(), CmgError> {
+    pub(crate) fn validate(&self, component_count: usize) -> Result<(), CmgError> {
         for (context, actual) in [
             ("ComponentWorkspace sums", self.sums.len()),
             ("ComponentWorkspace corrections", self.corrections.len()),
@@ -58,6 +58,197 @@ impl ComponentWorkspace {
                 .representatives
                 .len()
                 .saturating_mul(core::mem::size_of::<usize>())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CenteringWorkspace {
+    sums: Vec<f64>,
+    corrections: Vec<f64>,
+    means: Vec<f64>,
+}
+
+impl CenteringWorkspace {
+    fn new(component_count: usize) -> Self {
+        Self {
+            sums: vec![0.0; component_count],
+            corrections: vec![0.0; component_count],
+            means: vec![0.0; component_count],
+        }
+    }
+
+    fn validate(&self, component_count: usize) -> Result<(), CmgError> {
+        for (context, actual) in [
+            ("CenteringWorkspace sums", self.sums.len()),
+            ("CenteringWorkspace corrections", self.corrections.len()),
+            ("CenteringWorkspace means", self.means.len()),
+        ] {
+            if actual != component_count {
+                return Err(CmgError::dimension(context, component_count, actual));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        self.sums.len().saturating_mul(3).saturating_mul(8)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CenteringLabels {
+    Single,
+    Compact(Vec<u32>),
+    Native(Vec<usize>),
+}
+
+/// Minimal component metadata needed for internal recursive centering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CenteringPlan {
+    vertex_count: usize,
+    labels: CenteringLabels,
+    sizes: Vec<usize>,
+}
+
+impl CenteringPlan {
+    pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
+        let Components { labels, sizes } = Components::from_laplacian(graph);
+        let vertex_count = labels.len();
+        let component_count = sizes.len();
+        let labels = if component_count <= 1 {
+            CenteringLabels::Single
+        } else if component_count <= u32::MAX as usize {
+            CenteringLabels::Compact(labels.into_iter().map(|label| label as u32).collect())
+        } else {
+            CenteringLabels::Native(labels)
+        };
+        Self {
+            vertex_count,
+            labels,
+            sizes,
+        }
+    }
+
+    pub(crate) fn workspace(&self) -> CenteringWorkspace {
+        CenteringWorkspace::new(self.sizes.len())
+    }
+
+    pub(crate) fn validate_workspace(
+        &self,
+        workspace: &CenteringWorkspace,
+    ) -> Result<(), CmgError> {
+        workspace.validate(self.sizes.len())
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        let label_bytes = match &self.labels {
+            CenteringLabels::Single => 0,
+            CenteringLabels::Compact(labels) => labels.len().saturating_mul(4),
+            CenteringLabels::Native(labels) => {
+                labels.len().saturating_mul(core::mem::size_of::<usize>())
+            }
+        };
+        label_bytes.saturating_add(
+            self.sizes
+                .len()
+                .saturating_mul(core::mem::size_of::<usize>()),
+        )
+    }
+
+    pub(crate) fn center_in_place_with_workspace(
+        &self,
+        values: &mut [f64],
+        workspace: &mut CenteringWorkspace,
+    ) -> Result<(), CmgError> {
+        if values.len() != self.vertex_count {
+            return Err(CmgError::dimension(
+                "CenteringPlan::center_in_place",
+                self.vertex_count,
+                values.len(),
+            ));
+        }
+        workspace.validate(self.sizes.len())?;
+        workspace.sums.fill(0.0);
+        workspace.corrections.fill(0.0);
+
+        match &self.labels {
+            CenteringLabels::Single => {
+                if !self.sizes.is_empty() {
+                    for (vertex, value) in values.iter().enumerate() {
+                        if !value.is_finite() {
+                            return Err(CmgError::NonFiniteMatrixValue {
+                                row: vertex,
+                                column: 0,
+                                value: *value,
+                            });
+                        }
+                        neumaier_add(
+                            &mut workspace.sums[0],
+                            &mut workspace.corrections[0],
+                            *value,
+                        );
+                    }
+                }
+            }
+            CenteringLabels::Compact(labels) => {
+                for (vertex, (value, label)) in values.iter().zip(labels).enumerate() {
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: vertex,
+                            column: 0,
+                            value: *value,
+                        });
+                    }
+                    let label = *label as usize;
+                    neumaier_add(
+                        &mut workspace.sums[label],
+                        &mut workspace.corrections[label],
+                        *value,
+                    );
+                }
+            }
+            CenteringLabels::Native(labels) => {
+                for (vertex, (value, label)) in values.iter().zip(labels).enumerate() {
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: vertex,
+                            column: 0,
+                            value: *value,
+                        });
+                    }
+                    neumaier_add(
+                        &mut workspace.sums[*label],
+                        &mut workspace.corrections[*label],
+                        *value,
+                    );
+                }
+            }
+        }
+
+        for component in 0..self.sizes.len() {
+            workspace.sums[component] += workspace.corrections[component];
+            workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
+        }
+        match &self.labels {
+            CenteringLabels::Single => {
+                if let Some(mean) = workspace.means.first() {
+                    for value in values {
+                        *value -= *mean;
+                    }
+                }
+            }
+            CenteringLabels::Compact(labels) => {
+                for (value, label) in values.iter_mut().zip(labels) {
+                    *value -= workspace.means[*label as usize];
+                }
+            }
+            CenteringLabels::Native(labels) => {
+                for (value, label) in values.iter_mut().zip(labels) {
+                    *value -= workspace.means[*label];
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -124,6 +315,20 @@ impl Components {
 
     pub(crate) fn workspace(&self) -> ComponentWorkspace {
         ComponentWorkspace::new(self.count())
+    }
+
+    pub(crate) fn validate_workspace(
+        &self,
+        workspace: &ComponentWorkspace,
+    ) -> Result<(), CmgError> {
+        workspace.validate(self.count())
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        self.labels
+            .len()
+            .saturating_add(self.sizes.len())
+            .saturating_mul(core::mem::size_of::<usize>())
     }
 
     /// Return component-wise compensated sums of a vector.

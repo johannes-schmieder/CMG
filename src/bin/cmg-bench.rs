@@ -194,6 +194,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 + size_of_val(level.inverse_diagonal())
         })
         .sum();
+    let component_metadata_bytes = preconditioner.component_metadata_bytes();
     let terminal_factor_bytes = preconditioner
         .terminal_factor()
         .map_or(0, cmg::GroundedLdl::byte_len);
@@ -239,6 +240,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  \"csr_bytes\": {},\n",
             "  \"csr_uses_compact_indices\": {},\n",
             "  \"hierarchy_core_bytes\": {},\n",
+            "  \"component_metadata_bytes\": {},\n",
             "  \"terminal_factor_bytes\": {},\n",
             "  \"cmg_workspace_bytes\": {},\n",
             "  \"pcg_workspace_bytes\": {},\n",
@@ -274,6 +276,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         csr.byte_len(),
         csr.uses_compact_indices(),
         hierarchy_core_bytes,
+        component_metadata_bytes,
         terminal_factor_bytes,
         cmg_workspace_bytes,
         pcg_workspace_bytes,

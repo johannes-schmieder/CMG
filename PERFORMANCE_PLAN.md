@@ -18,6 +18,7 @@ Retained records:
 - `.ci/performance/compatible-apply-latest.json`: accepted compatible-RHS stationary-core experiment.
 - `.ci/performance/inplace-level-output-latest.json`: accepted caller-output hierarchy workspace experiment.
 - `.ci/performance/recursive-centering-latest.json`: accepted internal coarse-residual centering experiment.
+- `.ci/performance/compact-centering-metadata-latest.json`: accepted coarse-centering metadata experiment.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -84,6 +85,8 @@ The recursive-centering change was retained at commit `f6378554` after the same 
 
 Backward errors changed only at floating-point roundoff scale. The full-cycle quotient-space differences from pinned C remained about `2.1e-12` on the path case and approximately `1.0e-15` on worker–firm.
 
+The compact coarse-centering metadata experiment was retained after cross-checking hierarchy structure, iterations, backward errors, and the pinned-C stationary cycle. Candidate metadata was `0.623x` and `0.794x` of the old label-only lower bound on path and worker–firm cases. The same-run geometric-mean solve ratio was `0.991x` and the C-cycle ratio was `0.934x`.
+
 ### Terminal and workspace memory
 
 - Completed strict-lower factors select packed-triangular or sparse row/column traversal storage by retained-byte cost.
@@ -92,6 +95,8 @@ Backward errors changed only at floating-point roundoff scale. The full-cycle qu
 - Recursive hierarchy levels write their solution directly into caller-provided output storage; the former per-level solution vector and final copy were removed.
 - PCG fresh/final residual certification reuses existing storage; per-RHS PCG workspace was reduced from eight to six fine-dimension vectors at commit `f145ac92`.
 - `GroundedLdl`, `CmgWorkspace`, and `PcgWorkspace` report retained principal heap bytes.
+- Full public-quality `Components` metadata is retained only at the finest level. Coarse levels retain a minimal centering plan, use four-byte labels when labels are needed, and omit labels entirely for a single component.
+- Coarse centering scratch stores only sums, compensation terms, and means; the larger projection workspace is retained only for the public finest-level compatibility boundary.
 
 The in-place hierarchy-output experiment was retained at commit `40f7d234`. It reduced CMG workspace to about `0.707x` on paths and `0.691x` on worker–firm graphs, and complete PCG workspace to `0.860x` and `0.875x`. Same-run solve-time ratios were `0.992x` and `0.981x`, with unchanged hierarchy, iterations, residual certificates, and C parity.
 
@@ -128,13 +133,12 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ## Current hot spots
 
-1. Coarse component metadata and full public-quality `ComponentWorkspace` scratch remain allocated at every hierarchy level even though recursive application now needs only centering. A follow-up memory cleanup must retain full finest-level public validation and exact C parity.
-2. The compatible public method still validates dimensions, workspace structure, and options on every PCG application. A crate-private prevalidated core may remove small repeated checks after the component-metadata cleanup is measured.
-3. Single-RHS production PCG remains mostly serial even when the optional parallel feature is enabled.
-4. Coarse contraction still allocates endpoint triples and sorts at every level.
-5. Terminal setup materializes dense temporary matrices before retaining compressed factors.
-6. Aggregation labels remain native-width `usize`; compact labels could reduce bandwidth, but total hierarchy memory and public API compatibility must be measured before adoption.
-7. Hosted hardware has qualified only 1–4 threads.
+1. The compatible public method still validates dimensions, workspace structure, and options on every PCG application. A crate-private prevalidated core may remove small repeated checks inside PCG.
+2. Single-RHS production PCG remains mostly serial even when the optional parallel feature is enabled.
+3. Coarse contraction still allocates endpoint triples and sorts at every level.
+4. Terminal setup materializes dense temporary matrices before retaining compressed factors.
+5. Aggregation maps remain native-width `usize`; compact storage could reduce bandwidth, but must be evaluated without duplicating labels.
+6. Hosted hardware has qualified only 1–4 threads.
 
 ## Rejected or deferred experiments
 
@@ -162,11 +166,11 @@ After in-place level output and recursive centering, the accepted recursive-cent
 | 2026-08-22 | `6d5f4cca` | Compatible stationary core retained; solve time improved with unchanged iterations |
 | 2026-08-22 | `40f7d234` | Per-level solution scratch removed; memory and solve-time gates passed |
 | 2026-08-22 | `f6378554` | Recursive full compatibility projection replaced by centering; C parity and solve gates passed |
+| 2026-08-22 | compact centering metadata | Full component metadata retained only at the finest level; memory, solve, and C-cycle gates passed |
 
 ## Current next action
 
-1. Qualify the combined in-place-output and recursive-centering checkpoint on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.
-2. Remove now-unneeded coarse component metadata and full projection scratch while retaining finest-level public validation; benchmark memory and complete-solve time.
-3. Measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG only after the metadata cleanup is qualified.
-4. Continue large setup profiling and obtain 8–32-thread evidence when a suitable runner is available.
-5. Remove obsolete one-shot staging workflows and scripts after the active qualification checkpoint is secure.
+1. Measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG.
+2. Continue large setup profiling, especially coarse contraction allocation and sorting.
+3. Obtain 8–32-thread and high-memory evidence when a suitable runner is available.
+4. Remove remaining obsolete one-shot workflows and staging scripts after the active checkpoint is secure.

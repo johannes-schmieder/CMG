@@ -2,6 +2,7 @@
 
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
+use crate::components::CenteringPlan;
 use crate::{
     CmgError, CmgHierarchy, CmgOptions, CmgWorkspace, Components, GroundedLdl, Laplacian,
     TerminalReason, ValidationOptions,
@@ -11,7 +12,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmgPreconditioner {
     hierarchy: CmgHierarchy,
-    level_components: Vec<Components>,
+    finest_components: Components,
+    coarse_centering: Vec<CenteringPlan>,
     direct_terminal: Option<GroundedLdl>,
     repeat_counts: Vec<usize>,
 }
@@ -36,10 +38,18 @@ impl CmgPreconditioner {
     }
 
     fn from_hierarchy(mut hierarchy: CmgHierarchy) -> Result<Self, CmgError> {
-        let level_components = hierarchy
+        let finest = hierarchy
+            .levels()
+            .first()
+            .ok_or(CmgError::InvalidHierarchy {
+                context: "hierarchy contains no finest level",
+            })?;
+        let finest_components = Components::from_laplacian(finest.graph());
+        let coarse_centering = hierarchy
             .levels()
             .iter()
-            .map(|level| Components::from_laplacian(level.graph()))
+            .skip(1)
+            .map(|level| CenteringPlan::from_laplacian(level.graph()))
             .collect();
         let direct_terminal = if hierarchy.report().terminal_reason() == TerminalReason::Direct {
             let terminal = hierarchy
@@ -72,7 +82,8 @@ impl CmgPreconditioner {
 
         Ok(Self {
             hierarchy,
-            level_components,
+            finest_components,
+            coarse_centering,
             direct_terminal,
             repeat_counts,
         })
@@ -102,7 +113,18 @@ impl CmgPreconditioner {
     }
 
     pub(crate) fn finest_components(&self) -> &Components {
-        &self.level_components[0]
+        &self.finest_components
+    }
+
+    /// Return retained heap bytes for fine validation and coarse centering metadata.
+    #[must_use]
+    pub fn component_metadata_bytes(&self) -> usize {
+        self.finest_components.byte_len()
+            + self
+                .coarse_centering
+                .iter()
+                .map(CenteringPlan::byte_len)
+                .sum::<usize>()
     }
 
     /// Allocate reusable storage compatible with this preconditioner.
@@ -111,7 +133,8 @@ impl CmgPreconditioner {
         CmgWorkspace::new(
             &self.hierarchy,
             self.direct_terminal.as_ref(),
-            &self.level_components,
+            &self.finest_components,
+            &self.coarse_centering,
         )
     }
 
@@ -185,7 +208,8 @@ impl CmgPreconditioner {
         workspace.validate(
             &self.hierarchy,
             self.direct_terminal.as_ref(),
-            &self.level_components,
+            &self.finest_components,
+            &self.coarse_centering,
         )?;
         validation.validate()?;
         self.apply_level(0, rhs, output, workspace, 1)
@@ -220,18 +244,19 @@ impl CmgPreconditioner {
         workspace.validate(
             &self.hierarchy,
             self.direct_terminal.as_ref(),
-            &self.level_components,
+            &self.finest_components,
+            &self.coarse_centering,
         )?;
         let mut projected_rhs = workspace.take_projected_rhs();
         projected_rhs.copy_from_slice(rhs);
         let result = (|| {
-            let mut component_workspace = workspace.take_component(0);
-            let projection = self.level_components[0].project_rhs_in_place_with_workspace(
+            let mut component_workspace = workspace.take_component();
+            let projection = self.finest_components.project_rhs_in_place_with_workspace(
                 &mut projected_rhs,
                 validation,
                 &mut component_workspace,
             );
-            workspace.put_component(0, component_workspace);
+            workspace.put_component(component_workspace);
             projection?;
             self.apply_level(0, &projected_rhs, output, workspace, 1)
         })();
@@ -323,18 +348,18 @@ impl CmgPreconditioner {
                     *residual = *rhs_value - *residual;
                 }
                 aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                let components = &self.level_components[level_index + 1];
-                let mut component_workspace = workspace.take_component(level_index + 1);
+                let centering = &self.coarse_centering[level_index];
+                let mut centering_workspace = workspace.take_centering(level_index);
                 // Restricted residuals are component-compatible in exact
                 // arithmetic. Remove only floating-point null-space drift before
                 // the recursive solve instead of repeating full public-boundary
                 // compatibility validation and exact correction passes.
-                let centering = components.center_in_place_with_workspace(
+                let centering_result = centering.center_in_place_with_workspace(
                     &mut local.coarse_rhs,
-                    &mut component_workspace,
+                    &mut centering_workspace,
                 );
-                workspace.put_component(level_index + 1, component_workspace);
-                centering?;
+                workspace.put_centering(level_index, centering_workspace);
+                centering_result?;
                 local.coarse_correction.fill(0.0);
                 self.apply_level(
                     level_index + 1,

@@ -1,6 +1,6 @@
 //! Reusable caller-owned storage for CMG applications.
 
-use crate::components::ComponentWorkspace;
+use crate::components::{CenteringPlan, CenteringWorkspace, ComponentWorkspace};
 use crate::{CmgError, CmgHierarchy, Components, GroundedLdl};
 
 #[derive(Debug, Clone, Default)]
@@ -16,7 +16,8 @@ pub(crate) struct LevelWorkspace {
 #[derive(Debug, Clone)]
 pub struct CmgWorkspace {
     levels: Vec<LevelWorkspace>,
-    component_workspaces: Vec<ComponentWorkspace>,
+    component_workspace: ComponentWorkspace,
+    centering_workspaces: Vec<CenteringWorkspace>,
     dimensions: Vec<usize>,
     projected_rhs: Vec<f64>,
 }
@@ -25,7 +26,8 @@ impl CmgWorkspace {
     pub(crate) fn new(
         hierarchy: &CmgHierarchy,
         direct_terminal: Option<&GroundedLdl>,
-        level_components: &[Components],
+        finest_components: &Components,
+        coarse_centering: &[CenteringPlan],
     ) -> Self {
         let dimensions: Vec<usize> = hierarchy
             .levels()
@@ -55,11 +57,16 @@ impl CmgWorkspace {
                 }
             })
             .collect();
-        debug_assert_eq!(level_components.len(), dimensions.len());
-        let component_workspaces = level_components.iter().map(Components::workspace).collect();
+        debug_assert_eq!(coarse_centering.len(), dimensions.len().saturating_sub(1));
+        let component_workspace = finest_components.workspace();
+        let centering_workspaces = coarse_centering
+            .iter()
+            .map(CenteringPlan::workspace)
+            .collect();
         Self {
             levels,
-            component_workspaces,
+            component_workspace,
+            centering_workspaces,
             dimensions,
             projected_rhs,
         }
@@ -96,13 +103,14 @@ impl CmgWorkspace {
                 .saturating_mul(8)
             })
             .sum();
-        let component_bytes: usize = self
-            .component_workspaces
+        let centering_bytes: usize = self
+            .centering_workspaces
             .iter()
-            .map(ComponentWorkspace::byte_len)
+            .map(CenteringWorkspace::byte_len)
             .sum();
         level_bytes
-            .saturating_add(component_bytes)
+            .saturating_add(self.component_workspace.byte_len())
+            .saturating_add(centering_bytes)
             .saturating_add(self.projected_rhs.len().saturating_mul(8))
     }
 
@@ -110,7 +118,8 @@ impl CmgWorkspace {
         &self,
         hierarchy: &CmgHierarchy,
         direct_terminal: Option<&GroundedLdl>,
-        level_components: &[Components],
+        finest_components: &Components,
+        coarse_centering: &[CenteringPlan],
     ) -> Result<(), CmgError> {
         if self.levels.len() != hierarchy.levels().len() {
             return Err(CmgError::dimension(
@@ -119,12 +128,16 @@ impl CmgWorkspace {
                 self.levels.len(),
             ));
         }
-        if self.component_workspaces.len() != level_components.len() {
+        if self.centering_workspaces.len() != coarse_centering.len() {
             return Err(CmgError::dimension(
-                "CmgWorkspace component level count",
-                level_components.len(),
-                self.component_workspaces.len(),
+                "CmgWorkspace centering level count",
+                coarse_centering.len(),
+                self.centering_workspaces.len(),
             ));
+        }
+        finest_components.validate_workspace(&self.component_workspace)?;
+        for (plan, centering) in coarse_centering.iter().zip(&self.centering_workspaces) {
+            plan.validate_workspace(centering)?;
         }
         let fine_dimension = hierarchy
             .levels()
@@ -192,12 +205,20 @@ impl CmgWorkspace {
         self.levels[level] = workspace;
     }
 
-    pub(crate) fn take_component(&mut self, level: usize) -> ComponentWorkspace {
-        core::mem::take(&mut self.component_workspaces[level])
+    pub(crate) fn take_component(&mut self) -> ComponentWorkspace {
+        core::mem::take(&mut self.component_workspace)
     }
 
-    pub(crate) fn put_component(&mut self, level: usize, workspace: ComponentWorkspace) {
-        self.component_workspaces[level] = workspace;
+    pub(crate) fn put_component(&mut self, workspace: ComponentWorkspace) {
+        self.component_workspace = workspace;
+    }
+
+    pub(crate) fn take_centering(&mut self, level: usize) -> CenteringWorkspace {
+        core::mem::take(&mut self.centering_workspaces[level])
+    }
+
+    pub(crate) fn put_centering(&mut self, level: usize, workspace: CenteringWorkspace) {
+        self.centering_workspaces[level] = workspace;
     }
 }
 
