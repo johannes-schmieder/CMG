@@ -1,0 +1,161 @@
+name: Optimize aggregation kernels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/optimize-aggregation-kernels.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Build and benchmark current kernels
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-aggregation-baseline"
+          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cp "$CARGO_TARGET_DIR/release/cmg-c-kernel" "$RUNNER_TEMP/cmg-c-kernel-baseline"
+          mkdir -p "$RUNNER_TEMP/aggregation-results"
+          for CASE in path worker-firm; do
+            "$RUNNER_TEMP/cmg-c-kernel-baseline" \
+              --case "$CASE" --vertices 100000 --repetitions 9 \
+              --output "$RUNNER_TEMP/aggregation-results/baseline-${CASE}.json"
+          done
+
+      - name: Apply unchecked validated-label loops
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/coarsen.rs')
+          text = path.read_text()
+
+          old = '''        coarse.fill(0.0);\n        for (&value, &label) in fine.iter().zip(&self.labels) {\n            coarse[label] += value;\n        }\n        Ok(())\n'''
+          new = '''        coarse.fill(0.0);\n        // SAFETY: `Aggregation::new` validates every label against the\n        // coarse dimension, and the checks above validate both slice lengths.\n        unsafe {\n            let labels = self.labels.as_ptr();\n            let fine_values = fine.as_ptr();\n            let coarse_values = coarse.as_mut_ptr();\n            for index in 0..fine.len() {\n                let label = *labels.add(index);\n                *coarse_values.add(label) += *fine_values.add(index);\n            }\n        }\n        Ok(())\n'''
+          if text.count(old) != 1:
+              raise SystemExit('restriction loop anchor changed')
+          text = text.replace(old, new, 1)
+
+          old = '''        validate_prolong_dimensions(self, coarse, fine)?;\n        for (value, &label) in fine.iter_mut().zip(&self.labels) {\n            *value = coarse[label];\n        }\n        Ok(())\n'''
+          new = '''        validate_prolong_dimensions(self, coarse, fine)?;\n        // SAFETY: labels and dimensions were validated at construction and\n        // by `validate_prolong_dimensions` above.\n        unsafe {\n            let labels = self.labels.as_ptr();\n            let coarse_values = coarse.as_ptr();\n            let fine_values = fine.as_mut_ptr();\n            for index in 0..fine.len() {\n                let label = *labels.add(index);\n                *fine_values.add(index) = *coarse_values.add(label);\n            }\n        }\n        Ok(())\n'''
+          if text.count(old) != 1:
+              raise SystemExit('prolongation loop anchor changed')
+          text = text.replace(old, new, 1)
+
+          old = '''        validate_prolong_dimensions(self, coarse, fine)?;\n        for (value, &label) in fine.iter_mut().zip(&self.labels) {\n            *value += coarse[label];\n        }\n        Ok(())\n'''
+          new = '''        validate_prolong_dimensions(self, coarse, fine)?;\n        // SAFETY: labels and dimensions were validated at construction and\n        // by `validate_prolong_dimensions` above.\n        unsafe {\n            let labels = self.labels.as_ptr();\n            let coarse_values = coarse.as_ptr();\n            let fine_values = fine.as_mut_ptr();\n            for index in 0..fine.len() {\n                let label = *labels.add(index);\n                *fine_values.add(index) += *coarse_values.add(label);\n            }\n        }\n        Ok(())\n'''
+          if text.count(old) != 1:
+              raise SystemExit('additive prolongation loop anchor changed')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+      - name: Validate candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo check --lib --no-default-features
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+          cargo test --all-targets --all-features --release
+          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check
+          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets --release
+
+      - name: Build and benchmark candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-aggregation-candidate"
+          cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cp "$CARGO_TARGET_DIR/release/cmg-c-kernel" "$RUNNER_TEMP/cmg-c-kernel-candidate"
+          for CASE in path worker-firm; do
+            "$RUNNER_TEMP/cmg-c-kernel-candidate" \
+              --case "$CASE" --vertices 100000 --repetitions 9 \
+              --output "$RUNNER_TEMP/aggregation-results/candidate-${CASE}.json"
+          done
+
+      - name: Evaluate same-run improvement
+        id: evaluate
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ['RUNNER_TEMP']) / 'aggregation-results'
+          ratios = {}
+          records = {}
+          for case in ('path', 'worker-firm'):
+              baseline = json.loads((root / f'baseline-{case}.json').read_text())
+              candidate = json.loads((root / f'candidate-{case}.json').read_text())
+              records[case] = {'baseline': baseline, 'candidate': candidate}
+              bp = baseline['projection']
+              cp = candidate['projection']
+              ratios[f'{case}_restriction'] = (
+                  cp['restriction_rust_median_ns'] / bp['restriction_rust_median_ns']
+              )
+              ratios[f'{case}_prolongation'] = (
+                  cp['prolongation_rust_median_ns'] / bp['prolongation_rust_median_ns']
+              )
+
+          geometric_mean = math.exp(
+              sum(math.log(value) for value in ratios.values()) / len(ratios)
+          )
+          accepted = (
+              max(ratios.values()) <= 1.03
+              and geometric_mean <= 0.99
+              and min(ratios.values()) <= 0.98
+          )
+          record = {
+              'schema': 1,
+              'baseline_sha': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'accepted': accepted,
+              'ratios': ratios,
+              'geometric_mean_ratio': geometric_mean,
+              'records': records,
+          }
+          Path('.ci/performance/aggregation-kernel-latest.json').write_text(
+              json.dumps(record, indent=2) + '\n'
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'accepted={str(accepted).lower()}\n')
+
+      - name: Commit accepted optimization or retained experiment
+        shell: bash
+        env:
+          ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/optimize-aggregation-kernels.yml
+          rm -rf benchmarks/c-kernel/target
+          rm -f benchmarks/c-kernel/Cargo.lock
+          if [ "$ACCEPTED" != true ]; then
+            git restore src/coarsen.rs
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if [ "$ACCEPTED" = true ]; then
+            git commit -m 'perf: remove validated aggregation bounds checks'
+          else
+            git commit -m 'perf: record rejected aggregation kernel experiment'
+          fi
+          git pull --rebase origin main
+          git push origin HEAD:main
