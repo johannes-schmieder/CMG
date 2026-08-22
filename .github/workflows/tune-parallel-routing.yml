@@ -71,6 +71,22 @@ jobs:
               raise SystemExit('forest routing anchor changed')
           path.write_text(text.replace(old, new))
 
+          path = Path('src/csr.rs')
+          text = path.read_text()
+          old = '''            ColumnIndices::Compact(columns) => {\n                for index in self.row_offsets[row]..self.row_offsets[row + 1] {\n                    let neighbor = columns[index] as usize;\n                    let weight = self.weights[index];\n                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {\n                        best_neighbor = neighbor;\n                        best_weight = weight;\n                    }\n                }\n            }\n            ColumnIndices::Native(columns) => {\n                for index in self.row_offsets[row]..self.row_offsets[row + 1] {\n                    let neighbor = columns[index];\n                    let weight = self.weights[index];\n                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {\n                        best_neighbor = neighbor;\n                        best_weight = weight;\n                    }\n                }\n            }\n'''
+          new = '''            ColumnIndices::Compact(columns) => {\n                let start = self.row_offsets[row];\n                let end = self.row_offsets[row + 1];\n                for (&neighbor, &weight) in columns[start..end].iter().zip(&self.weights[start..end]) {\n                    let neighbor = neighbor as usize;\n                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {\n                        best_neighbor = neighbor;\n                        best_weight = weight;\n                    }\n                }\n            }\n            ColumnIndices::Native(columns) => {\n                let start = self.row_offsets[row];\n                let end = self.row_offsets[row + 1];\n                for (&neighbor, &weight) in columns[start..end].iter().zip(&self.weights[start..end]) {\n                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {\n                        best_neighbor = neighbor;\n                        best_weight = weight;\n                    }\n                }\n            }\n'''
+          if text.count(old) != 1:
+              raise SystemExit('CSR Clippy anchor changed')
+          path.write_text(text.replace(old, new))
+
+          path = Path('src/hierarchy.rs')
+          text = path.read_text()
+          old = '            |current, threshold| build_forest_grouping(current, threshold),\n'
+          new = '            build_forest_grouping,\n'
+          if text.count(old) != 1:
+              raise SystemExit('hierarchy Clippy anchor changed')
+          path.write_text(text.replace(old, new))
+
       - name: Format and validate
         shell: bash
         run: |
