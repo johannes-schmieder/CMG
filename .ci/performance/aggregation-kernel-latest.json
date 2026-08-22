@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "tested_sha": "037fdf291565c2744c17b1a4e9042335a04d57e6",
+  "accepted": false,
+  "experiment": "unchecked validated aggregation label loops",
+  "reason": "Rejected before timing: implementing the candidate required raw-pointer unsafe blocks, while the production crate deliberately enforces #![forbid(unsafe_code)].",
+  "failed_run_id": 32592202913,
+  "production_changed": false
+}

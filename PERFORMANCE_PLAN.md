@@ -102,6 +102,7 @@ On a four-logical-CPU hosted runner with 50,000 vertices and eight RHSs, retaine
 - Parallel-only setup helpers and thresholds are compiled only when the optional `parallel` feature is enabled, preserving warning-free dependency-free serial builds.
 - The isolated benchmark crate compiles the pinned official C sparse-matvec, restriction, and prolongation loops without MATLAB. The C code is benchmark-only and is never linked into the production library.
 - C-result retention now rejects cancelled or superseded workflow runs so stale evidence cannot replace results from newer benchmark source.
+- A raw-pointer candidate for removing aggregation label bounds checks was rejected before timing because the production crate forbids unsafe code; the validated safe loops remain in place.
 
 At 100,000 vertices on an Ubuntu hosted runner, all Rust/C comparisons passed before timing:
 
@@ -157,4 +158,4 @@ Ratios below one favor Rust. The projection results indicate that arithmetic is 
 
 ## Current next action
 
-Extend the pinned-C harness to the complete stationary recursive preconditioner application. In parallel, audit the single-RHS PCG/CMG call graph for low-risk deterministic within-solve kernels. Begin with compact or grouped projection metadata, vector updates, component operations, and fixed-chunk reductions; benchmark each addition against the frozen baseline before deciding whether to retain the extra hierarchy memory. Large 8–32-thread qualification remains dependent on a larger or self-hosted runner.
+Repair and complete the pinned-C stationary recursive-cycle benchmark, then benchmark the six-vector PCG workspace against the frozen baseline. Continue the single-RHS PCG/CMG audit only with safe deterministic kernels. Large 8–32-thread qualification remains dependent on a larger or self-hosted runner.
