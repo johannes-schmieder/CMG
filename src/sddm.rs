@@ -94,10 +94,7 @@ impl SddmMatrix {
             let u = entries[cursor].0;
             let v = entries[cursor].1;
             let start = cursor;
-            while cursor < entries.len()
-                && entries[cursor].0 == u
-                && entries[cursor].1 == v
-            {
+            while cursor < entries.len() && entries[cursor].0 == u && entries[cursor].1 == v {
                 cursor += 1;
             }
             let value = compensated_sum(entries[start..cursor].iter().map(|entry| entry.2));
@@ -119,10 +116,8 @@ impl SddmMatrix {
             row_off_diagonal_abs[*u] += weight;
             row_off_diagonal_abs[*v] += weight;
         }
-        for (row, (&diagonal_value, &off_diagonal_sum)) in diagonal
-            .iter()
-            .zip(&row_off_diagonal_abs)
-            .enumerate()
+        for (row, (&diagonal_value, &off_diagonal_sum)) in
+            diagonal.iter().zip(&row_off_diagonal_abs).enumerate()
         {
             if diagonal_value < off_diagonal_sum {
                 return Err(CmgError::NotDiagonallyDominant {
@@ -141,10 +136,7 @@ impl SddmMatrix {
     }
 
     /// Validate and construct an SDDM matrix from a dense square matrix.
-    pub fn from_dense(
-        matrix: &[Vec<f64>],
-        options: ValidationOptions,
-    ) -> Result<Self, CmgError> {
+    pub fn from_dense(matrix: &[Vec<f64>], options: ValidationOptions) -> Result<Self, CmgError> {
         let options = options.validate()?;
         let n = matrix.len();
         if let Some(row) = matrix.iter().find(|row| row.len() != n) {
@@ -157,11 +149,7 @@ impl SddmMatrix {
         for (row, values) in matrix.iter().enumerate() {
             for (column, value) in values.iter().copied().enumerate() {
                 if !value.is_finite() {
-                    return Err(CmgError::NonFiniteMatrixValue {
-                        row,
-                        column,
-                        value,
-                    });
+                    return Err(CmgError::NonFiniteMatrixValue { row, column, value });
                 }
             }
         }
@@ -248,10 +236,7 @@ impl SddmMatrix {
     /// Any positive row-sum excess is represented by an edge to one extra
     /// vertex. This is exact even when the excess is below the MATLAB wrapper's
     /// numerical strict-dominance threshold.
-    pub fn augment(
-        &self,
-        options: ValidationOptions,
-    ) -> Result<SddmAugmentation, CmgError> {
+    pub fn augment(&self, options: ValidationOptions) -> Result<SddmAugmentation, CmgError> {
         options.validate()?;
         let n = self.dimension();
         let excess: Vec<f64> = self
