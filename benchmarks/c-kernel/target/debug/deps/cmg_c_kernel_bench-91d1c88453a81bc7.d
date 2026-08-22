@@ -9,4 +9,4 @@ Cargo.toml:
 
 # env-dep:CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__
 # env-dep:CLIPPY_CONF_DIR
-# env-dep:CMG_BENCH_COMMIT
+# env-dep:CMG_BENCH_COMMIT=2335e6b49b688a5ec854b5a9b72d8b8ab1a1ae43

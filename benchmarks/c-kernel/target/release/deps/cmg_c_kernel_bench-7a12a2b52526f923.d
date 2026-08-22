@@ -5,4 +5,4 @@
 src/main.rs:
 src/projection.rs:
 
-# env-dep:CMG_BENCH_COMMIT
+# env-dep:CMG_BENCH_COMMIT=2335e6b49b688a5ec854b5a9b72d8b8ab1a1ae43
