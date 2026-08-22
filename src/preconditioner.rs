@@ -32,9 +32,7 @@ impl CmgPreconditioner {
         options: CmgOptions,
         executor: &ParallelExecutor,
     ) -> Result<Self, CmgError> {
-        Self::from_hierarchy(CmgHierarchy::build_with_executor(
-            graph, options, executor,
-        )?)
+        Self::from_hierarchy(CmgHierarchy::build_with_executor(graph, options, executor)?)
     }
 
     fn from_hierarchy(mut hierarchy: CmgHierarchy) -> Result<Self, CmgError> {

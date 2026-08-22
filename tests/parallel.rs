@@ -2,8 +2,8 @@
 
 use cmg::{
     Aggregation, CmgError, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian,
-    ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgWorkspace, solve_pcg_batch, solve_pcg_batch_with_executor,
+    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, solve_pcg_batch,
+    solve_pcg_batch_with_executor,
 };
 
 fn path_problem(vertex_count: usize, rhs_count: usize) -> (Laplacian, Vec<Vec<f64>>) {
@@ -127,7 +127,11 @@ fn parallel_edge_sorting_matches_serial_canonicalization() {
         .flat_map(|index| {
             let left = index % 4_000;
             let right = (index.wrapping_mul(1_103).wrapping_add(17) % 4_000 + 1) % 4_000;
-            let right = if right == left { (right + 1) % 4_000 } else { right };
+            let right = if right == left {
+                (right + 1) % 4_000
+            } else {
+                right
+            };
             let weight = 0.25 + (index % 29) as f64 / 7.0;
             [(left, right, weight), (right, left, weight / 3.0)]
         })
@@ -140,8 +144,7 @@ fn parallel_edge_sorting_matches_serial_canonicalization() {
         ..ParallelOptions::default()
     })
     .unwrap();
-    let parallel =
-        Laplacian::from_edges_with_executor(4_000, raw_edges, &executor).unwrap();
+    let parallel = Laplacian::from_edges_with_executor(4_000, raw_edges, &executor).unwrap();
 
     assert_eq!(serial, parallel);
 }
@@ -150,11 +153,7 @@ fn parallel_edge_sorting_matches_serial_canonicalization() {
 fn parallel_contraction_and_hierarchy_match_serial_exactly() {
     let (graph, _) = path_problem(20_000, 1);
     let labels: Vec<usize> = (0..graph.vertex_count()).map(|vertex| vertex / 3).collect();
-    let aggregation = Aggregation::new(
-        labels,
-        graph.vertex_count().div_ceil(3),
-    )
-    .unwrap();
+    let aggregation = Aggregation::new(labels, graph.vertex_count().div_ceil(3)).unwrap();
     let executor = ParallelExecutor::new(ParallelOptions {
         threads: 4,
         min_parallel_len: 1,
@@ -173,8 +172,7 @@ fn parallel_contraction_and_hierarchy_match_serial_exactly() {
         ..CmgOptions::default()
     };
     let serial_hierarchy = CmgHierarchy::build(&graph, options).unwrap();
-    let parallel_hierarchy =
-        CmgHierarchy::build_with_executor(&graph, options, &executor).unwrap();
+    let parallel_hierarchy = CmgHierarchy::build_with_executor(&graph, options, &executor).unwrap();
     assert_eq!(serial_hierarchy, parallel_hierarchy);
 
     let serial_preconditioner = CmgPreconditioner::build(&graph, options).unwrap();

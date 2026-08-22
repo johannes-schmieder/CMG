@@ -1,8 +1,8 @@
 //! Canonical weighted graph-Laplacian representation.
 
+use crate::CmgError;
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
-use crate::CmgError;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::sync::Arc;
