@@ -17,8 +17,6 @@ pub struct PcgWorkspace {
     preconditioned: Vec<f64>,
     direction: Vec<f64>,
     matrix_direction: Vec<f64>,
-    fresh_residual: Vec<f64>,
-    original_residual: Vec<f64>,
     component: ComponentWorkspace,
     cmg: CmgWorkspace,
 }
@@ -37,8 +35,6 @@ impl PcgWorkspace {
             preconditioned: vec![0.0; dimension],
             direction: vec![0.0; dimension],
             matrix_direction: vec![0.0; dimension],
-            fresh_residual: vec![0.0; dimension],
-            original_residual: vec![0.0; dimension],
             component: preconditioner.finest_components().workspace(),
             cmg: preconditioner.workspace(),
         }
@@ -55,7 +51,7 @@ impl PcgWorkspace {
     pub fn byte_len(&self) -> usize {
         self.dimension()
             .saturating_mul(8)
-            .saturating_mul(8)
+            .saturating_mul(6)
             .saturating_add(self.component.byte_len())
             .saturating_add(self.cmg.byte_len())
     }
@@ -68,11 +64,6 @@ impl PcgWorkspace {
             ("PcgWorkspace preconditioned", self.preconditioned.len()),
             ("PcgWorkspace direction", self.direction.len()),
             ("PcgWorkspace matrix direction", self.matrix_direction.len()),
-            ("PcgWorkspace fresh residual", self.fresh_residual.len()),
-            (
-                "PcgWorkspace original residual",
-                self.original_residual.len(),
-            ),
         ] {
             if actual != dimension {
                 return Err(CmgError::dimension(context, dimension, actual));
@@ -206,8 +197,6 @@ pub fn solve_pcg_with_workspace(
     workspace.preconditioned.fill(0.0);
     workspace.direction.fill(0.0);
     workspace.matrix_direction.fill(0.0);
-    workspace.fresh_residual.fill(0.0);
-    workspace.original_residual.fill(0.0);
 
     let initial_residual_norm = euclidean_norm(rhs);
     let projected_initial_norm = euclidean_norm(&workspace.projected_rhs);
@@ -287,19 +276,18 @@ pub fn solve_pcg_with_workspace(
                 graph,
                 &workspace.projected_rhs,
                 &workspace.solution,
-                &mut workspace.fresh_residual,
+                &mut workspace.matrix_direction,
             )?;
             workspace
                 .residual
-                .copy_from_slice(&workspace.fresh_residual);
+                .copy_from_slice(&workspace.matrix_direction);
             restarted = true;
             restarts += 1;
             if projected_fresh_norm <= last_tolerance {
                 let original_norm = original_residual_norm(
                     rhs,
                     &workspace.projected_rhs,
-                    &workspace.fresh_residual,
-                    &mut workspace.original_residual,
+                    &workspace.matrix_direction,
                 );
                 if original_norm <= last_tolerance {
                     return Ok(make_result(
@@ -362,14 +350,10 @@ pub fn solve_pcg_with_workspace(
         graph,
         &workspace.projected_rhs,
         &workspace.solution,
-        &mut workspace.fresh_residual,
+        &mut workspace.matrix_direction,
     )?;
-    let residual_norm = original_residual_norm(
-        rhs,
-        &workspace.projected_rhs,
-        &workspace.fresh_residual,
-        &mut workspace.original_residual,
-    );
+    let residual_norm =
+        original_residual_norm(rhs, &workspace.projected_rhs, &workspace.matrix_direction);
     Err(CmgError::MaximumIterations {
         iterations: options.max_iterations,
         residual_norm,
@@ -522,17 +506,25 @@ fn original_residual_norm(
     original_rhs: &[f64],
     projected_rhs: &[f64],
     projected_residual: &[f64],
-    original_residual: &mut [f64],
 ) -> f64 {
-    for (((output, original), projected), residual) in original_residual
-        .iter_mut()
-        .zip(original_rhs)
-        .zip(projected_rhs)
-        .zip(projected_residual)
-    {
-        *output = *residual + (*original - *projected);
+    let values = || {
+        original_rhs
+            .iter()
+            .zip(projected_rhs)
+            .zip(projected_residual)
+            .map(|((&original, &projected), &residual)| residual + (original - projected))
+    };
+    let scale = values().map(f64::abs).fold(0.0, f64::max);
+    if scale == 0.0 {
+        0.0
+    } else {
+        scale
+            * compensated_sum(values().map(|value| {
+                let scaled = value / scale;
+                scaled * scaled
+            }))
+            .sqrt()
     }
-    euclidean_norm(original_residual)
 }
 
 fn dot(left: &[f64], right: &[f64]) -> f64 {
