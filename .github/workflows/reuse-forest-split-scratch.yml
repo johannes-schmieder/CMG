@@ -1,0 +1,253 @@
+name: Reuse forest split scratch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reuse-forest-split-scratch.yml'
+      - 'scripts/reuse_forest_split_scratch.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare baseline and reusable scratch candidate
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import re
+          import statistics
+          import subprocess
+
+          root = Path.cwd()
+          baseline_source = Path('src/forest.rs').read_text()
+          baseline_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+
+          def run(command, *, env=None, check=True):
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  env=env,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+              )
+              print(completed.stdout, end='')
+              if check and completed.returncode != 0:
+                  raise RuntimeError(
+                      f"command failed ({completed.returncode}): {' '.join(command)}"
+                  )
+              return completed
+
+          def build(target):
+              env = os.environ.copy()
+              env['CARGO_TARGET_DIR'] = str(target)
+              run([
+                  'cargo', 'build', '--release',
+                  '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--bin', 'hierarchy-build',
+              ], env=env)
+              return target / 'release' / 'hierarchy-build'
+
+          def sample(binary, case, scale):
+              time_file = Path(f'/tmp/time-{case}-{os.getpid()}')
+              completed = run([
+                  '/usr/bin/time', '-v', '-o', str(time_file),
+                  str(binary), case, str(scale), '2',
+              ])
+              payloads = [
+                  json.loads(line)
+                  for line in completed.stdout.splitlines()
+                  if line.strip().startswith('{')
+              ]
+              if len(payloads) != 1:
+                  raise RuntimeError(f'unexpected benchmark output: {payloads}')
+              timing = time_file.read_text()
+              match = re.search(
+                  r'Maximum resident set size \(kbytes\):\s*(\d+)', timing
+              )
+              if match is None:
+                  raise RuntimeError('peak RSS missing')
+              payloads[0]['peak_rss_kib'] = int(match.group(1))
+              return payloads[0]
+
+          result = {
+              'schema_version': 1,
+              'experiment': 'reuse-forest-split-scratch',
+              'baseline_sha': baseline_sha,
+              'accepted': False,
+              'validation': 'not_run',
+              'decision_reason': '',
+              'cases': {},
+          }
+
+          try:
+              baseline_binary = build(Path('/tmp/cmg-forest-baseline'))
+              run(['python', 'scripts/reuse_forest_split_scratch.py'])
+              run(['cargo', 'fmt', '--all'])
+              run(['cargo', 'fmt', '--all', '--', '--check'])
+              run([
+                  'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all', '--', '--check',
+              ])
+              run([
+                  'cargo', 'clippy', '--all-targets', '--all-features',
+                  '--', '-D', 'warnings',
+              ])
+              run(['cargo', 'test', '--all-targets'])
+              run(['cargo', 'test', '--all-targets', '--release'])
+              run(['cargo', 'build', '--release'])
+              candidate_binary = build(Path('/tmp/cmg-forest-candidate'))
+              result['validation'] = 'success'
+
+              cases = [
+                  ('path', 100_000),
+                  ('grid', 256),
+                  ('worker-firm', 50_000),
+                  ('dense-worker-firm', 20_000),
+              ]
+              ratios = []
+              memory_ratios = []
+              for case, scale in cases:
+                  baseline_samples = []
+                  candidate_samples = []
+                  schedule = [
+                      ('baseline', baseline_binary),
+                      ('candidate', candidate_binary),
+                      ('candidate', candidate_binary),
+                      ('baseline', baseline_binary),
+                  ]
+                  for label, binary in schedule:
+                      observation = sample(binary, case, scale)
+                      if label == 'baseline':
+                          baseline_samples.append(observation)
+                      else:
+                          candidate_samples.append(observation)
+                  baseline_ns = statistics.median(
+                      item['median_ns'] for item in baseline_samples
+                  )
+                  candidate_ns = statistics.median(
+                      item['median_ns'] for item in candidate_samples
+                  )
+                  baseline_rss = max(
+                      item['peak_rss_kib'] for item in baseline_samples
+                  )
+                  candidate_rss = max(
+                      item['peak_rss_kib'] for item in candidate_samples
+                  )
+                  ratio = candidate_ns / baseline_ns
+                  memory_ratio = candidate_rss / baseline_rss
+                  ratios.append(ratio)
+                  memory_ratios.append(memory_ratio)
+                  result['cases'][case] = {
+                      'scale': scale,
+                      'vertices': baseline_samples[0]['vertices'],
+                      'edges': baseline_samples[0]['edges'],
+                      'baseline_median_ns': baseline_ns,
+                      'candidate_median_ns': candidate_ns,
+                      'candidate_over_baseline': ratio,
+                      'baseline_peak_rss_kib': baseline_rss,
+                      'candidate_peak_rss_kib': candidate_rss,
+                      'candidate_over_baseline_peak_rss': memory_ratio,
+                  }
+
+              geometric_ratio = math.exp(
+                  sum(math.log(value) for value in ratios) / len(ratios)
+              )
+              result['geometric_candidate_over_baseline'] = geometric_ratio
+              result['worst_candidate_over_baseline'] = max(ratios)
+              result['worst_candidate_over_baseline_peak_rss'] = max(memory_ratios)
+              result['acceptance_limits'] = {
+                  'geometric_ratio_max': 1.01,
+                  'per_case_ratio_max': 1.04,
+                  'peak_rss_ratio_max': 1.02,
+              }
+              result['accepted'] = (
+                  geometric_ratio <= 1.01
+                  and max(ratios) <= 1.04
+                  and max(memory_ratios) <= 1.02
+              )
+              result['decision_reason'] = (
+                  'full qualification passed and setup timing/memory met the gate'
+                  if result['accepted']
+                  else 'qualification passed but setup timing or memory exceeded the gate'
+              )
+          except Exception as error:
+              result['decision_reason'] = f'experiment failed: {error}'
+              result['error'] = repr(error)
+              print(result['decision_reason'], flush=True)
+
+          if not result['accepted']:
+              Path('src/forest.rs').write_text(baseline_source)
+              run(['cargo', 'fmt', '--all'], check=False)
+
+          record = Path('.ci/performance/forest-scratch-reuse-latest.json')
+          record.parent.mkdir(parents=True, exist_ok=True)
+          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if marker not in plan:
+              raise RuntimeError('current-next-action heading missing')
+          status = 'accepted' if result['accepted'] else 'not retained'
+          ratio = result.get('geometric_candidate_over_baseline')
+          timing = (
+              f' Geometric setup ratio: {ratio:.3f}.' if ratio is not None else ''
+          )
+          checkpoint = f'''### Forest-split scratch checkpoint — 2026-08-22
+
+- Hoisting and reusing the `walk` and `new_ancestors` traversal vectors was
+  **{status}**.{timing}
+- Qualification status: `{result['validation']}`.
+- Machine-readable evidence:
+  `.ci/performance/forest-scratch-reuse-latest.json`.
+
+'''
+          if '### Forest-split scratch checkpoint — 2026-08-22' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          plan_path.write_text(plan)
+
+          Path('scripts/reuse_forest_split_scratch.py').unlink(missing_ok=True)
+          Path('.github/workflows/reuse-forest-split-scratch.yml').unlink(
+              missing_ok=True
+          )
+          try:
+              Path('scripts').rmdir()
+          except OSError:
+              pass
+
+          run(['git', 'config', 'user.name', 'github-actions[bot]'])
+          run([
+              'git', 'config', 'user.email',
+              '41898282+github-actions[bot]@users.noreply.github.com',
+          ])
+          run(['git', 'add', '-A'])
+          message = (
+              'perf: reuse forest split scratch'
+              if result['accepted']
+              else 'perf: record forest scratch experiment'
+          )
+          run(['git', 'commit', '-m', message])
+          run(['git', 'pull', '--rebase', 'origin', 'main'])
+          run(['git', 'push', 'origin', 'HEAD:main'])
+
+      - name: Show retained result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/forest-scratch-reuse-latest.json || true
