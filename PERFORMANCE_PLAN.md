@@ -232,6 +232,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/compact-edge-build-buffer-exact-latest.json`.
 
+### Trimmed compact graph-buffer checkpoint — 2026-08-22
+
+- The compact in-place graph-construction buffer was amended to trim
+  geometrically grown spare capacity after duplicate compaction and was
+  **retained**. Graph time/RSS: 0.861/0.862; hierarchy time/exact peak/retained: 0.960/0.922/0.976.
+- All numerical ordering and compensated summation rules remained unchanged.
+- Qualification status: `success`.
+- Machine-readable evidence:
+  `.ci/performance/compact-edge-build-buffer-trim-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
