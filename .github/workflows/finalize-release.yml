@@ -1,0 +1,75 @@
+name: Finalize release documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/finalize_release_docs.py'
+      - '.github/workflows/finalize-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require exhaustive code qualification
+        shell: bash
+        run: |
+          test -f tests/exhaustive_small.rs
+          grep -q 'iterative_terminal_rejects_jacobi_overflow' tests/nonfinite.rs
+          grep -q 'finite_preconditioner_value' src/preconditioner.rs
+
+      - name: Apply documentation audit
+        run: python3 scripts/finalize_release_docs.py
+
+      - name: Install complete GPLv3 text
+        shell: bash
+        run: |
+          test -f /usr/share/common-licenses/GPL-3
+          cp /usr/share/common-licenses/GPL-3 LICENSE
+
+      - name: Remove temporary formatting automation
+        run: rm -f .github/workflows/format.yml
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      - name: Debug tests
+        run: cargo test --all-targets
+
+      - name: Release tests
+        run: cargo test --all-targets --release
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: Commit final audited state and remove one-shot machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/finalize_release_docs.py
+          rm .github/workflows/finalize-release.yml
+          rmdir scripts 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: close CMG v0.1 implementation audit'
+          git pull --rebase origin main
+          git push origin HEAD:main
