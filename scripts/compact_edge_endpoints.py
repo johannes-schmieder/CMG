@@ -68,19 +68,11 @@ graph = replace_once(
     "canonical Edge construction",
 )
 
-# All retained-edge reads in graph.rs use checked public-style accessors. These
-# exact replacements deliberately avoid broad source rewriting.
-for old, new in (
-    ("diagonal[edge.u]", "diagonal[edge.u()]"),
-    ("diagonal[edge.v]", "diagonal[edge.v()]"),
-    ("input[edge.u]", "input[edge.u()]"),
-    ("input[edge.v]", "input[edge.v()]"),
-    ("output[edge.u]", "output[edge.u()]"),
-    ("output[edge.v]", "output[edge.v()]"),
-    ("dense[edge.u]", "dense[edge.u()]"),
-    ("dense[edge.v]", "dense[edge.v()]"),
-):
-    graph = graph.replace(old, new)
+# All retained-edge indexing inside graph.rs uses the checked usize accessors.
+# Replacing the complete index token also covers the second coordinate of
+# expressions such as dense[edge.u][edge.v].
+graph = graph.replace("[edge.u]", "[edge.u()]")
+graph = graph.replace("[edge.v]", "[edge.v()]")
 
 width_guard_anchor = """        if right >= vertex_count {
             return Err(CmgError::VertexOutOfBounds {
@@ -195,6 +187,8 @@ if "u: u32" not in graph or "v: u32" not in graph:
     raise SystemExit("compact endpoint fields are missing")
 if "VertexIndexTooWide" not in graph or "VertexIndexTooWide" not in error:
     raise SystemExit("typed endpoint-width guard is missing")
+if "[edge.u]" in graph or "[edge.v]" in graph:
+    raise SystemExit("direct compact endpoint indexing remains")
 
 GRAPH_PATH.write_text(graph)
 ERROR_PATH.write_text(error)
