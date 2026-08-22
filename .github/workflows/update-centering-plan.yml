@@ -1,0 +1,88 @@
+name: Update recursive centering plan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/update-centering-plan.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update live plan and clean obsolete diagnostics
+        shell: python
+        run: |
+          from pathlib import Path
+
+          plan = Path('PERFORMANCE_PLAN.md')
+          text = plan.read_text()
+
+          retained_anchor = '- `.ci/performance/inplace-level-output-latest.json`: accepted caller-output hierarchy workspace experiment.\n'
+          retained_entry = '- `.ci/performance/recursive-centering-latest.json`: accepted internal coarse-residual centering experiment.\n'
+          if retained_entry not in text:
+              if text.count(retained_anchor) != 1:
+                  raise SystemExit('retained-record anchor changed')
+              text = text.replace(retained_anchor, retained_anchor + retained_entry, 1)
+
+          implementation_anchor = '- PCG projects the submitted RHS once, maintains residuals in the quotient space, removes only accumulated component-nullspace roundoff, and reuses the compatible stationary core on later applications.\n'
+          implementation_entry = '- Recursive coarse residuals use deterministic component centering rather than repeating public-boundary compatibility validation, exact-correction passes, and projection-norm calculation.\n'
+          if implementation_entry not in text:
+              if text.count(implementation_anchor) != 1:
+                  raise SystemExit('implementation anchor changed')
+              text = text.replace(implementation_anchor, implementation_anchor + implementation_entry, 1)
+
+          timing_anchor = 'This is a substantial reduction from the preceding same-run Rust/C ratios of `1.84x` and `2.36x`. Remaining differences are now concentrated inside recursive level application rather than fine-level public compatibility handling.\n'
+          timing_entry = '\nAt commit `f6378554`, replacing recursive full compatibility projection with centering reduced same-run stationary-cycle time to path `0.730x` and worker–firm `0.712x`; full solve time fell to `0.869x` and `0.944x`. Iteration counts were unchanged and the pinned-C quotient-space differences remained within the existing differential tolerance.\n'
+          if timing_entry not in text:
+              if text.count(timing_anchor) != 1:
+                  raise SystemExit('timing anchor changed')
+              text = text.replace(timing_anchor, timing_anchor + timing_entry, 1)
+
+          old_hot = '1. Every recursive coarse RHS still uses full public-quality compatibility projection: compatibility and scale accumulation, mean removal, representative search, two correction passes, and projection-norm calculation. Internally generated residuals are compatible in exact arithmetic; deterministic component centering may be sufficient and substantially cheaper, but it must pass symmetry, positivity, adversarial PCG, and C-differential gates.\n'
+          new_hot = '1. Coarse component metadata and component scratch remain allocated for every hierarchy level even though recursive application now needs only centering; a follow-up memory cleanup must preserve finest-level public validation and C parity.\n'
+          if old_hot not in text:
+              raise SystemExit('hot-spot anchor changed')
+          text = text.replace(old_hot, new_hot, 1)
+
+          log_anchor = '| 2026-08-22 | in-place hierarchy output | Per-level solution scratch removed; C parity, iterations, residuals, timing, and memory gates passed |\n'
+          log_entry = '| 2026-08-22 | `f6378554` | Recursive full compatibility projection replaced by deterministic centering; C parity and solve gates passed |\n'
+          if log_entry not in text:
+              if text.count(log_anchor) != 1:
+                  raise SystemExit('checkpoint anchor changed')
+              text = text.replace(log_anchor, log_anchor + log_entry, 1)
+
+          old_next = '''1. Qualify the in-place hierarchy-output checkpoint on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.
+2. Measure deterministic component centering in place of full recursive coarse-RHS compatibility projection, retaining it only if full-cycle parity, PCG convergence, symmetry, positivity, and real solve time improve.
+3. If recursive centering is retained, remove now-unneeded coarse component metadata and scratch, then measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG.
+4. Continue large setup profiling and obtain 8–32-thread evidence when a suitable runner is available.
+5. Remove obsolete one-shot staging workflows and scripts after the active qualification checkpoint is secure.'''
+          new_next = '''1. Qualify the in-place-output plus recursive-centering checkpoint on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.
+2. Remove now-unneeded coarse component metadata and scratch while retaining finest-level public validation, then benchmark memory and solve time.
+3. Measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG only after the metadata cleanup is qualified.
+4. Continue large setup profiling and obtain 8–32-thread evidence when a suitable runner is available.
+5. Remove obsolete one-shot staging workflows and scripts after the active qualification checkpoint is secure.'''
+          if old_next not in text:
+              raise SystemExit('next-action anchor changed')
+          plan.write_text(text.replace(old_next, new_next, 1))
+
+      - name: Commit documentation checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/update-centering-plan.yml
+          rm -rf .ci/performance/recursive-centering
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: record recursive-centering optimization'
+          git pull --rebase origin main
+          git push origin HEAD:main
