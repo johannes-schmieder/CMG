@@ -28,45 +28,20 @@ This document is the live recovery and decision log for the performance phase of
 
 ## Measurement protocol
 
-The benchmark driver reports separately:
-
-- input edge generation;
-- canonical graph construction;
-- CMG hierarchy and terminal construction;
-- one stationary preconditioner application;
-- certified PCG solves;
-- PCG iterations and final backward error;
-- hierarchy vertex and nonzero counts;
-- approximate graph and hierarchy storage.
-
-Candidate and baseline builds should be compiled with the same toolchain and release settings. Hosted-runner timings are treated as directional evidence, not as stable regression thresholds. Large-scale and 32-core claims require a larger or self-hosted runner.
+The benchmark driver reports input generation, graph construction, hierarchy construction, one CMG application, certified PCG solves, iteration counts, backward error, hierarchy structure, and storage estimates. Candidate and baseline builds must use the same toolchain and release settings. Hosted-runner timings are directional evidence; large-scale and 32-core claims require a larger or self-hosted runner.
 
 ## Workloads
 
-Graph families:
+Graph families include paths, grids, bottleneck graphs, heavy-tailed bipartite worker–firm graphs, duplicate edges, heterogeneous weights, and deterministic synthetic random graphs.
 
-- path and grid graphs;
-- weakly connected and bottleneck graphs;
-- heavy-tailed bipartite worker–firm graphs;
-- duplicate-edge and heterogeneous-weight variants;
-- deterministic synthetic random graphs.
-
-Target sizes:
-
-- CI smoke: roughly 10,000–50,000 edges;
-- routine macrobenchmarks: 100,000–1,000,000 edges;
-- dedicated qualification: 10,000,000 or more edges, subject to runner memory.
-
-RHS workloads: 1, 4, 8, 32, and 128 shared-hierarchy systems.
-
-Thread counts: 1, 2, 4, 8, 16, 32, and higher where hardware permits.
+Target sizes range from 10,000-edge CI smoke tests through 10-million-edge dedicated runs. Shared-hierarchy workloads use 1, 4, 8, 32, and 128 right-hand sides. Thread counts are 1, 2, 4, 8, 16, 32, and higher where hardware permits.
 
 ## Phases
 
 | Phase | Status | Scope | Gate |
 |---|---|---|---|
-| P0 Measurement | COMPLETE | Benchmark driver, performance workflow, baseline record, memory estimates | Benchmark binary builds on all supported platforms and emits machine-readable output |
-| P1 Remove repeated overhead | IN PROGRESS | Cache components and graph identity; remove per-solve reconstruction and recurring allocations | Same solutions and iterations; serial repeated-RHS improvement |
+| P0 Measurement | COMPLETE | Benchmark driver, workflow, baseline record, memory estimates | Benchmark binary builds on all platforms and emits JSON |
+| P1 Remove repeated overhead | IN VALIDATION | Cache components and graph identity; remove recurring component allocations | Same solutions and iterations; serial repeated-RHS improvement |
 | P2 Terminal and workspace memory | NOT STARTED | Compress terminal traversal; alias safe scratch arrays; expose byte estimates | Lower apply time and workspace bytes |
 | P3 Frozen CSR operator | NOT STARTED | Deterministic row representation and grouped aggregate/component membership | Serial CSR correctness and measured crossover policy |
 | P4 Parallel solve kernels | NOT STARTED | Package-owned thread pool; parallel matvec, vector updates, restriction, prolongation, reductions | Equivalent certified answers across thread counts |
@@ -78,38 +53,48 @@ Thread counts: 1, 2, 4, 8, 16, 32, and higher where hardware permits.
 
 ## Approved architecture
 
-- Add Rayon as an optional feature rather than a mandatory runtime dependency.
-- Use a package-owned custom thread pool; never silently claim the process-wide global pool.
-- Retain a serial build and serial execution path.
-- Introduce a solve-oriented deterministic CSR representation while retaining compact build-time edges.
-- Prefer gather-style parallel kernels over atomics or per-thread full output vectors.
-- Use memory-aware hybrid scheduling across RHSs and within a solve.
-- Permit compact 32-bit internal vertex indices when the graph fits, while public dimensions and edge counts remain `usize`.
-- Vendor pinned upstream C sources only under benchmark/test infrastructure with attribution.
+- Rayon will be optional, with a retained serial build.
+- Parallel execution will use a package-owned custom thread pool.
+- Build-time canonical edges and solve-time deterministic CSR will be separate representations.
+- Parallel kernels will use gather form rather than atomics or thread-local full output vectors.
+- Scheduling across RHSs and within a solve will respect an explicit memory budget.
+- Compact 32-bit internal vertex indices may be used when dimensions permit.
+- Pinned upstream C sources may be vendored only under benchmark/test infrastructure with attribution.
 
-## Current observations
+## Implemented performance changes
 
-The baseline repeats avoidable work in repeated solves:
+### Constant-time normal graph compatibility
 
-- finest-graph structural equality scans;
-- connected-component reconstruction;
-- component projection and centering allocations;
-- sequential batch processing.
+`Laplacian::clone` now preserves a private lineage token. A preconditioner built from the graph therefore recognizes the normal solve path in constant time. A separately reconstructed but structurally equal graph still works through the previous full comparison fallback.
 
-The first P1 checkpoint adds a graph-lineage token preserved by `Laplacian::clone`. A solve using the same graph lineage now performs a constant-time identity check; a separately reconstructed but structurally equal graph retains the compatibility fallback. PCG also reuses the component metadata already stored in the preconditioner rather than rebuilding union-find state for every RHS.
+### Cached connected components
 
-The baseline edge-scatter matvec is compact and effective serially but is not an appropriate multicore kernel because two endpoints are updated for each edge. The primary parallel representation will therefore use deterministic row-wise CSR.
+PCG now reuses the finest-level `Components` object already built and owned by `CmgPreconditioner`; it no longer runs union-find for every right-hand side.
 
-The terminal dimension is bounded by the configured direct threshold, but the baseline stores and traverses a dense lower factor. The initial terminal optimization will keep the trusted dense factorization and compress the completed factor for repeated triangular solves.
+### Reusable component scratch
+
+Component compatibility projection and centering now have allocation-free internal paths backed by reusable scratch vectors. `PcgWorkspace` owns finest-level scratch, and `CmgWorkspace` owns one scratch object per hierarchy level. Public convenience methods retain their previous allocating behavior for compatibility.
+
+The workspace types now report their reserved principal heap bytes, allowing the future multi-RHS scheduler to enforce a memory budget rather than estimating concurrency from vertex count alone.
+
+## Remaining observed hot spots
+
+- edge-scatter matvec prevents efficient parallel row ownership;
+- the terminal solve stores and scans a dense lower factor;
+- CMG keeps separate same-dimension matvec and residual arrays;
+- batch solving remains sequential;
+- coarse contraction repeatedly allocates and sorts endpoint triples;
+- forest splitting contains recurring temporary-vector allocation.
 
 ## Checkpoint log
 
 | Date | Commit | Result | Next action |
 |---|---|---|---|
-| 2026-08-22 | `b65ae28a15f00925348046bb474c8133e5128cd0` | Correctness-qualified baseline identified | Commit measurement-only infrastructure |
-| 2026-08-22 | `cc9d641d9e4d227196389eb59144e762d3caa926` | Benchmark driver, live plan, and performance workflow added | Format and cross-platform qualification |
-| 2026-08-22 | `b45b252f88925028e3ad9a73a3f75eeab05f6754` | Benchmark source formatted; debug/release tests built the benchmark on Linux, macOS, and Windows | Remove repeated graph and component setup |
+| 2026-08-22 | `b65ae28a15f00925348046bb474c8133e5128cd0` | Correctness-qualified baseline identified | Commit measurement infrastructure |
+| 2026-08-22 | `cc9d641d9e4d227196389eb59144e762d3caa926` | Benchmark driver, live plan, and performance workflow added | Cross-platform qualification |
+| 2026-08-22 | `b45b252f88925028e3ad9a73a3f75eeab05f6754` | Benchmark source formatted and built on all three platforms | Remove repeated solve setup |
+| 2026-08-22 | `703ddc2e809f5c92f8a6acbec79b0b7b31a763f0` | Graph lineage and cached components passed quality plus debug/release tests on Linux, macOS, and Windows | Remove component allocations |
 
 ## Current next action
 
-Complete P1 by adding reusable component scratch arrays to CMG and PCG workspaces, then benchmark repeated right-hand sides against the pinned baseline.
+Validate the reusable component-workspace checkpoint. If it is green, record P1 as complete, update benchmark memory reporting to use exact workspace byte counts, and begin P2 with terminal-factor compression and CMG scratch aliasing.

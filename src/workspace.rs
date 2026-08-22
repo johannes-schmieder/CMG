@@ -1,6 +1,7 @@
 //! Reusable caller-owned storage for CMG applications.
 
-use crate::{CmgError, CmgHierarchy, GroundedLdl};
+use crate::components::ComponentWorkspace;
+use crate::{CmgError, CmgHierarchy, Components, GroundedLdl};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LevelWorkspace {
@@ -17,12 +18,17 @@ pub(crate) struct LevelWorkspace {
 #[derive(Debug, Clone)]
 pub struct CmgWorkspace {
     levels: Vec<LevelWorkspace>,
+    component_workspaces: Vec<ComponentWorkspace>,
     dimensions: Vec<usize>,
     projected_rhs: Vec<f64>,
 }
 
 impl CmgWorkspace {
-    pub(crate) fn new(hierarchy: &CmgHierarchy, direct_terminal: Option<&GroundedLdl>) -> Self {
+    pub(crate) fn new(
+        hierarchy: &CmgHierarchy,
+        direct_terminal: Option<&GroundedLdl>,
+        level_components: &[Components],
+    ) -> Self {
         let dimensions: Vec<usize> = hierarchy
             .levels()
             .iter()
@@ -53,8 +59,14 @@ impl CmgWorkspace {
                 }
             })
             .collect();
+        debug_assert_eq!(level_components.len(), dimensions.len());
+        let component_workspaces = level_components
+            .iter()
+            .map(Components::workspace)
+            .collect();
         Self {
             levels,
+            component_workspaces,
             dimensions,
             projected_rhs,
         }
@@ -72,16 +84,55 @@ impl CmgWorkspace {
         &self.dimensions
     }
 
+    /// Return the number of heap bytes reserved by the principal work arrays.
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        let level_bytes: usize = self
+            .levels
+            .iter()
+            .map(|level| {
+                [
+                    level.x.len(),
+                    level.matvec.len(),
+                    level.residual.len(),
+                    level.coarse_rhs.len(),
+                    level.coarse_correction.len(),
+                    level.factor_forward.len(),
+                    level.factor_solution.len(),
+                ]
+                .into_iter()
+                .sum::<usize>()
+                .saturating_mul(8)
+            })
+            .sum();
+        let component_bytes: usize = self
+            .component_workspaces
+            .iter()
+            .map(ComponentWorkspace::byte_len)
+            .sum();
+        level_bytes
+            .saturating_add(component_bytes)
+            .saturating_add(self.projected_rhs.len().saturating_mul(8))
+    }
+
     pub(crate) fn validate(
         &self,
         hierarchy: &CmgHierarchy,
         direct_terminal: Option<&GroundedLdl>,
+        level_components: &[Components],
     ) -> Result<(), CmgError> {
         if self.levels.len() != hierarchy.levels().len() {
             return Err(CmgError::dimension(
                 "CmgWorkspace level count",
                 hierarchy.levels().len(),
                 self.levels.len(),
+            ));
+        }
+        if self.component_workspaces.len() != level_components.len() {
+            return Err(CmgError::dimension(
+                "CmgWorkspace component level count",
+                level_components.len(),
+                self.component_workspaces.len(),
             ));
         }
         let fine_dimension = hierarchy
@@ -150,6 +201,14 @@ impl CmgWorkspace {
 
     pub(crate) fn put_level(&mut self, level: usize, workspace: LevelWorkspace) {
         self.levels[level] = workspace;
+    }
+
+    pub(crate) fn take_component(&mut self, level: usize) -> ComponentWorkspace {
+        core::mem::take(&mut self.component_workspaces[level])
+    }
+
+    pub(crate) fn put_component(&mut self, level: usize, workspace: ComponentWorkspace) {
+        self.component_workspaces[level] = workspace;
     }
 }
 

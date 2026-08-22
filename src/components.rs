@@ -2,6 +2,65 @@
 
 use crate::{CmgError, Laplacian, ValidationOptions};
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ComponentWorkspace {
+    sums: Vec<f64>,
+    corrections: Vec<f64>,
+    scales: Vec<f64>,
+    scale_corrections: Vec<f64>,
+    means: Vec<f64>,
+    projection_corrections: Vec<f64>,
+    representatives: Vec<usize>,
+}
+
+impl ComponentWorkspace {
+    fn new(component_count: usize) -> Self {
+        Self {
+            sums: vec![0.0; component_count],
+            corrections: vec![0.0; component_count],
+            scales: vec![0.0; component_count],
+            scale_corrections: vec![0.0; component_count],
+            means: vec![0.0; component_count],
+            projection_corrections: vec![0.0; component_count],
+            representatives: vec![usize::MAX; component_count],
+        }
+    }
+
+    fn validate(&self, component_count: usize) -> Result<(), CmgError> {
+        for (context, actual) in [
+            ("ComponentWorkspace sums", self.sums.len()),
+            ("ComponentWorkspace corrections", self.corrections.len()),
+            ("ComponentWorkspace scales", self.scales.len()),
+            (
+                "ComponentWorkspace scale corrections",
+                self.scale_corrections.len(),
+            ),
+            ("ComponentWorkspace means", self.means.len()),
+            (
+                "ComponentWorkspace projection corrections",
+                self.projection_corrections.len(),
+            ),
+            (
+                "ComponentWorkspace representatives",
+                self.representatives.len(),
+            ),
+        ] {
+            if actual != component_count {
+                return Err(CmgError::dimension(context, component_count, actual));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn byte_len(&self) -> usize {
+        self.sums.len().saturating_mul(6).saturating_mul(8)
+            + self
+                .representatives
+                .len()
+                .saturating_mul(core::mem::size_of::<usize>())
+    }
+}
+
 /// Connected-component metadata for a weighted graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Components {
@@ -63,17 +122,39 @@ impl Components {
         &self.sizes
     }
 
+    pub(crate) fn workspace(&self) -> ComponentWorkspace {
+        ComponentWorkspace::new(self.count())
+    }
+
     /// Return component-wise compensated sums of a vector.
     pub fn sums(&self, values: &[f64]) -> Result<Vec<f64>, CmgError> {
-        self.compensated_sums(values, "Components::sums")
+        let mut workspace = self.workspace();
+        self.compensated_sums_into(
+            values,
+            "Components::sums",
+            &mut workspace.sums,
+            &mut workspace.corrections,
+        )?;
+        Ok(workspace.sums)
     }
 
     /// Verify that a right-hand side is numerically compatible with every
     /// component null space.
     pub fn validate_rhs(&self, rhs: &[f64], options: ValidationOptions) -> Result<(), CmgError> {
+        let mut workspace = self.workspace();
+        self.validate_rhs_with_workspace(rhs, options, &mut workspace)
+    }
+
+    pub(crate) fn validate_rhs_with_workspace(
+        &self,
+        rhs: &[f64],
+        options: ValidationOptions,
+        workspace: &mut ComponentWorkspace,
+    ) -> Result<(), CmgError> {
         let options = options.validate()?;
-        let (sums, scales) = self.compatibility_data(rhs, "Components::validate_rhs")?;
-        self.validate_component_sums(&sums, &scales, options)
+        workspace.validate(self.count())?;
+        self.compatibility_data_into(rhs, "Components::validate_rhs", workspace)?;
+        self.validate_component_sums(&workspace.sums, &workspace.scales, options)
     }
 
     /// Project accepted floating-point compatibility defects onto the exact
@@ -90,40 +171,58 @@ impl Components {
         rhs: &mut [f64],
         options: ValidationOptions,
     ) -> Result<f64, CmgError> {
-        let options = options.validate()?;
-        let (sums, scales) = self.compatibility_data(rhs, "Components::project_rhs_in_place")?;
-        self.validate_component_sums(&sums, &scales, options)?;
+        let mut workspace = self.workspace();
+        self.project_rhs_in_place_with_workspace(rhs, options, &mut workspace)
+    }
 
-        let means: Vec<f64> = sums
-            .iter()
-            .zip(&self.sizes)
-            .map(|(sum, size)| *sum / *size as f64)
-            .collect();
+    pub(crate) fn project_rhs_in_place_with_workspace(
+        &self,
+        rhs: &mut [f64],
+        options: ValidationOptions,
+        workspace: &mut ComponentWorkspace,
+    ) -> Result<f64, CmgError> {
+        let options = options.validate()?;
+        workspace.validate(self.count())?;
+        self.compatibility_data_into(rhs, "Components::project_rhs_in_place", workspace)?;
+        self.validate_component_sums(&workspace.sums, &workspace.scales, options)?;
+
+        for component in 0..self.count() {
+            workspace.means[component] =
+                workspace.sums[component] / self.sizes[component] as f64;
+        }
         for (value, label) in rhs.iter_mut().zip(&self.labels) {
-            *value -= means[*label];
+            *value -= workspace.means[*label];
         }
 
-        let representatives = self.stable_representatives(rhs);
-        let mut corrections = vec![0.0; self.count()];
+        self.stable_representatives_into(rhs, &mut workspace.representatives);
+        workspace.projection_corrections.fill(0.0);
         for _ in 0..2 {
-            let residual_sums = self.compensated_sums(rhs, "Components::project_rhs_in_place")?;
-            for (component, residual_sum) in residual_sums.iter().copied().enumerate() {
-                rhs[representatives[component]] -= residual_sum;
-                corrections[component] += residual_sum;
+            self.compensated_sums_into(
+                rhs,
+                "Components::project_rhs_in_place",
+                &mut workspace.sums,
+                &mut workspace.corrections,
+            )?;
+            for component in 0..self.count() {
+                let residual_sum = workspace.sums[component];
+                rhs[workspace.representatives[component]] -= residual_sum;
+                workspace.projection_corrections[component] += residual_sum;
             }
         }
 
-        let projection_scale = means
+        let projection_scale = workspace
+            .means
             .iter()
-            .zip(&corrections)
+            .zip(&workspace.projection_corrections)
             .flat_map(|(mean, correction)| [mean.abs(), (*mean + *correction).abs()])
             .fold(0.0, f64::max);
         if projection_scale == 0.0 {
             return Ok(0.0);
         }
-        let projection_squared = means
+        let projection_squared = workspace
+            .means
             .iter()
-            .zip(&corrections)
+            .zip(&workspace.projection_corrections)
             .zip(&self.sizes)
             .map(|((mean, correction), size)| {
                 let regular = *mean / projection_scale;
@@ -136,6 +235,15 @@ impl Components {
 
     /// Subtract the mean within every component in place.
     pub fn center_in_place(&self, values: &mut [f64]) -> Result<(), CmgError> {
+        let mut workspace = self.workspace();
+        self.center_in_place_with_workspace(values, &mut workspace)
+    }
+
+    pub(crate) fn center_in_place_with_workspace(
+        &self,
+        values: &mut [f64],
+        workspace: &mut ComponentWorkspace,
+    ) -> Result<(), CmgError> {
         if values.len() != self.labels.len() {
             return Err(CmgError::dimension(
                 "Components::center_in_place",
@@ -143,20 +251,25 @@ impl Components {
                 values.len(),
             ));
         }
-        let sums = self.sums(values)?;
-        let means: Vec<f64> = sums
-            .iter()
-            .zip(&self.sizes)
-            .map(|(sum, size)| *sum / *size as f64)
-            .collect();
+        workspace.validate(self.count())?;
+        self.compensated_sums_into(
+            values,
+            "Components::center_in_place",
+            &mut workspace.sums,
+            &mut workspace.corrections,
+        )?;
+        for component in 0..self.count() {
+            workspace.means[component] =
+                workspace.sums[component] / self.sizes[component] as f64;
+        }
         for (value, label) in values.iter_mut().zip(&self.labels) {
-            *value -= means[*label];
+            *value -= workspace.means[*label];
         }
         Ok(())
     }
 
-    fn stable_representatives(&self, values: &[f64]) -> Vec<usize> {
-        let mut representatives = vec![usize::MAX; self.count()];
+    fn stable_representatives_into(&self, values: &[f64], representatives: &mut [usize]) {
+        representatives.fill(usize::MAX);
         for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
             let current = representatives[*label];
             if current == usize::MAX
@@ -166,14 +279,14 @@ impl Components {
                 representatives[*label] = vertex;
             }
         }
-        representatives
     }
 
-    fn compatibility_data(
+    fn compatibility_data_into(
         &self,
         values: &[f64],
         context: &'static str,
-    ) -> Result<(Vec<f64>, Vec<f64>), CmgError> {
+        workspace: &mut ComponentWorkspace,
+    ) -> Result<(), CmgError> {
         if values.len() != self.labels.len() {
             return Err(CmgError::dimension(
                 context,
@@ -181,10 +294,10 @@ impl Components {
                 values.len(),
             ));
         }
-        let mut sums = vec![0.0; self.count()];
-        let mut corrections = vec![0.0; self.count()];
-        let mut scales = vec![0.0; self.count()];
-        let mut scale_corrections = vec![0.0; self.count()];
+        workspace.sums.fill(0.0);
+        workspace.corrections.fill(0.0);
+        workspace.scales.fill(0.0);
+        workspace.scale_corrections.fill(0.0);
         for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
             if !value.is_finite() {
                 return Err(CmgError::NonFiniteMatrixValue {
@@ -193,22 +306,22 @@ impl Components {
                     value: *value,
                 });
             }
-            neumaier_add(&mut sums[*label], &mut corrections[*label], *value);
             neumaier_add(
-                &mut scales[*label],
-                &mut scale_corrections[*label],
+                &mut workspace.sums[*label],
+                &mut workspace.corrections[*label],
+                *value,
+            );
+            neumaier_add(
+                &mut workspace.scales[*label],
+                &mut workspace.scale_corrections[*label],
                 value.abs(),
             );
         }
-        for ((sum, correction), (scale, scale_correction)) in sums
-            .iter_mut()
-            .zip(corrections)
-            .zip(scales.iter_mut().zip(scale_corrections))
-        {
-            *sum += correction;
-            *scale += scale_correction;
+        for component in 0..self.count() {
+            workspace.sums[component] += workspace.corrections[component];
+            workspace.scales[component] += workspace.scale_corrections[component];
         }
-        Ok((sums, scales))
+        Ok(())
     }
 
     fn validate_component_sums(
@@ -230,11 +343,13 @@ impl Components {
         Ok(())
     }
 
-    fn compensated_sums(
+    fn compensated_sums_into(
         &self,
         values: &[f64],
         context: &'static str,
-    ) -> Result<Vec<f64>, CmgError> {
+        sums: &mut [f64],
+        corrections: &mut [f64],
+    ) -> Result<(), CmgError> {
         if values.len() != self.labels.len() {
             return Err(CmgError::dimension(
                 context,
@@ -242,8 +357,18 @@ impl Components {
                 values.len(),
             ));
         }
-        let mut sums = vec![0.0; self.count()];
-        let mut corrections = vec![0.0; self.count()];
+        if sums.len() != self.count() {
+            return Err(CmgError::dimension(context, self.count(), sums.len()));
+        }
+        if corrections.len() != self.count() {
+            return Err(CmgError::dimension(
+                context,
+                self.count(),
+                corrections.len(),
+            ));
+        }
+        sums.fill(0.0);
+        corrections.fill(0.0);
         for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
             if !value.is_finite() {
                 return Err(CmgError::NonFiniteMatrixValue {
@@ -254,10 +379,10 @@ impl Components {
             }
             neumaier_add(&mut sums[*label], &mut corrections[*label], *value);
         }
-        for (sum, correction) in sums.iter_mut().zip(corrections) {
-            *sum += correction;
+        for component in 0..self.count() {
+            sums[component] += corrections[component];
         }
-        Ok(sums)
+        Ok(())
     }
 }
 

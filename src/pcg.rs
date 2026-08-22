@@ -1,7 +1,8 @@
 //! Certified quotient-space preconditioned conjugate gradients.
 
+use crate::components::ComponentWorkspace;
 use crate::graph::compensated_sum;
-use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Components, Laplacian, PcgOptions};
+use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, PcgOptions};
 
 /// Reusable vectors for repeated PCG solves with one preconditioner.
 #[derive(Debug, Clone)]
@@ -14,6 +15,7 @@ pub struct PcgWorkspace {
     matrix_direction: Vec<f64>,
     fresh_residual: Vec<f64>,
     original_residual: Vec<f64>,
+    component: ComponentWorkspace,
     cmg: CmgWorkspace,
 }
 
@@ -33,6 +35,7 @@ impl PcgWorkspace {
             matrix_direction: vec![0.0; dimension],
             fresh_residual: vec![0.0; dimension],
             original_residual: vec![0.0; dimension],
+            component: preconditioner.finest_components().workspace(),
             cmg: preconditioner.workspace(),
         }
     }
@@ -41,6 +44,16 @@ impl PcgWorkspace {
     #[must_use]
     pub fn dimension(&self) -> usize {
         self.solution.len()
+    }
+
+    /// Return the number of heap bytes reserved by the principal work arrays.
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        self.dimension()
+            .saturating_mul(8)
+            .saturating_mul(8)
+            .saturating_add(self.component.byte_len())
+            .saturating_add(self.cmg.byte_len())
     }
 
     fn validate(&self, dimension: usize) -> Result<(), CmgError> {
@@ -177,10 +190,13 @@ pub fn solve_pcg_with_workspace(
     }
     workspace.validate(dimension)?;
 
-    let components: &Components = preconditioner.finest_components();
+    let components = preconditioner.finest_components();
     workspace.projected_rhs.copy_from_slice(rhs);
-    let rhs_projection_norm =
-        components.project_rhs_in_place(&mut workspace.projected_rhs, options.validation)?;
+    let rhs_projection_norm = components.project_rhs_in_place_with_workspace(
+        &mut workspace.projected_rhs,
+        options.validation,
+        &mut workspace.component,
+    )?;
     workspace.solution.fill(0.0);
     workspace.residual.copy_from_slice(&workspace.projected_rhs);
     workspace.preconditioned.fill(0.0);
@@ -219,7 +235,10 @@ pub fn solve_pcg_with_workspace(
         &mut workspace.cmg,
         options.validation,
     )?;
-    components.center_in_place(&mut workspace.preconditioned)?;
+    components.center_in_place_with_workspace(
+        &mut workspace.preconditioned,
+        &mut workspace.component,
+    )?;
     let mut rho = dot(&workspace.residual, &workspace.preconditioned);
     validate_positive_pcg(0, "r^T M r", rho)?;
     workspace
@@ -246,7 +265,10 @@ pub fn solve_pcg_with_workspace(
             *solution += alpha * *direction;
             *residual -= alpha * *matrix_direction;
         }
-        components.center_in_place(&mut workspace.solution)?;
+        components.center_in_place_with_workspace(
+            &mut workspace.solution,
+            &mut workspace.component,
+        )?;
 
         let solution_norm = euclidean_norm(&workspace.solution);
         last_tolerance = allowed_residual(
@@ -311,7 +333,10 @@ pub fn solve_pcg_with_workspace(
             &mut workspace.cmg,
             options.validation,
         )?;
-        components.center_in_place(&mut workspace.preconditioned)?;
+        components.center_in_place_with_workspace(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+        )?;
         let new_rho = dot(&workspace.residual, &workspace.preconditioned);
         validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
 

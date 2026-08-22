@@ -90,7 +90,11 @@ impl CmgPreconditioner {
     /// Allocate reusable storage compatible with this preconditioner.
     #[must_use]
     pub fn workspace(&self) -> CmgWorkspace {
-        CmgWorkspace::new(&self.hierarchy, self.direct_terminal.as_ref())
+        CmgWorkspace::new(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.level_components,
+        )
     }
 
     /// Apply the preconditioner using a newly allocated workspace.
@@ -137,11 +141,22 @@ impl CmgPreconditioner {
                 output.len(),
             ));
         }
-        workspace.validate(&self.hierarchy, self.direct_terminal.as_ref())?;
+        workspace.validate(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.level_components,
+        )?;
         let mut projected_rhs = workspace.take_projected_rhs();
         projected_rhs.copy_from_slice(rhs);
         let result = (|| {
-            self.level_components[0].project_rhs_in_place(&mut projected_rhs, validation)?;
+            let mut component_workspace = workspace.take_component(0);
+            let projection = self.level_components[0].project_rhs_in_place_with_workspace(
+                &mut projected_rhs,
+                validation,
+                &mut component_workspace,
+            );
+            workspace.put_component(0, component_workspace);
+            projection?;
             self.apply_level(0, &projected_rhs, output, workspace, validation)
         })();
         workspace.put_projected_rhs(projected_rhs);
@@ -230,13 +245,18 @@ impl CmgPreconditioner {
                     *residual = *rhs_value - *matrix_value;
                 }
                 aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                self.level_components[level_index + 1].project_rhs_in_place(
-                    &mut local.coarse_rhs,
-                    ValidationOptions {
-                        symmetry_tolerance: validation.symmetry_tolerance,
-                        compatibility_tolerance: 1.0,
-                    },
-                )?;
+                let mut component_workspace = workspace.take_component(level_index + 1);
+                let projection = self.level_components[level_index + 1]
+                    .project_rhs_in_place_with_workspace(
+                        &mut local.coarse_rhs,
+                        ValidationOptions {
+                            symmetry_tolerance: validation.symmetry_tolerance,
+                            compatibility_tolerance: 1.0,
+                        },
+                        &mut component_workspace,
+                    );
+                workspace.put_component(level_index + 1, component_workspace);
+                projection?;
                 local.coarse_correction.fill(0.0);
                 self.apply_level(
                     level_index + 1,
