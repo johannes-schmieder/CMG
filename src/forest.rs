@@ -1,8 +1,8 @@
 //! Heavy-edge forests and the CMG forest-partitioning heuristics.
 
+use crate::{CmgError, Laplacian};
 #[cfg(feature = "parallel")]
 use crate::{CsrLaplacian, ParallelExecutor};
-use crate::{CmgError, Laplacian};
 
 /// The complete diagnostic result of one CMG Steiner-group construction.
 #[derive(Debug, Clone, PartialEq)]

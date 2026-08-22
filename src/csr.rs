@@ -261,9 +261,7 @@ impl CsrLaplacian {
                 for index in self.row_offsets[row]..self.row_offsets[row + 1] {
                     let neighbor = columns[index] as usize;
                     let weight = self.weights[index];
-                    if weight > best_weight
-                        || (weight == best_weight && neighbor < best_neighbor)
-                    {
+                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {
                         best_neighbor = neighbor;
                         best_weight = weight;
                     }
@@ -273,9 +271,7 @@ impl CsrLaplacian {
                 for index in self.row_offsets[row]..self.row_offsets[row + 1] {
                     let neighbor = columns[index];
                     let weight = self.weights[index];
-                    if weight > best_weight
-                        || (weight == best_weight && neighbor < best_neighbor)
-                    {
+                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {
                         best_neighbor = neighbor;
                         best_weight = weight;
                     }

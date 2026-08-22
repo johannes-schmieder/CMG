@@ -178,8 +178,7 @@ fn parallel_heavy_edge_selection_and_grouping_match_serial_exactly() {
     assert_eq!(serial_forest, parallel_forest);
 
     let serial_grouping = build_forest_grouping(&graph, 0.125).unwrap();
-    let parallel_grouping =
-        build_forest_grouping_with_executor(&graph, 0.125, &executor).unwrap();
+    let parallel_grouping = build_forest_grouping_with_executor(&graph, 0.125, &executor).unwrap();
     assert_eq!(serial_grouping, parallel_grouping);
 }
 

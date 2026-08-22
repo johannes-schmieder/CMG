@@ -1,8 +1,8 @@
 //! Construction and diagnostics for the stationary CMG hierarchy.
 
+use crate::{Aggregation, CmgError, CmgOptions, ForestGrouping, Laplacian, build_forest_grouping};
 #[cfg(feature = "parallel")]
 use crate::{ParallelExecutor, build_forest_grouping_with_executor};
-use crate::{Aggregation, CmgError, CmgOptions, ForestGrouping, Laplacian, build_forest_grouping};
 
 /// The reason hierarchy construction terminated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,9 +149,7 @@ impl CmgHierarchy {
         Self::build_with_kernels(
             graph,
             options,
-            |current, threshold| {
-                build_forest_grouping_with_executor(current, threshold, executor)
-            },
+            |current, threshold| build_forest_grouping_with_executor(current, threshold, executor),
             |aggregation, current| aggregation.contract_with_executor(current, executor),
         )
     }
