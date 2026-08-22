@@ -17,6 +17,7 @@ Retained records:
 - `.ci/performance/cycle-wiring-latest.json`: complete iterative stationary-cycle differential result.
 - `.ci/performance/compatible-apply-latest.json`: accepted compatible-RHS stationary-core experiment.
 - `.ci/performance/inplace-level-output-latest.json`: accepted caller-output hierarchy workspace experiment.
+- `.ci/performance/recursive-centering-latest.json`: accepted internal coarse-residual centering experiment.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -44,7 +45,7 @@ Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA 
 | Phase | Status | Gate |
 |---|---|---|
 | P0 Measurement | COMPLETE | Matched baseline/current records are retained |
-| P1 Repeated overhead | COMPLETE | Graph metadata and fine-level compatible stationary application are reused |
+| P1 Repeated overhead | COMPLETE | Graph metadata and compatible stationary application are reused |
 | P2 Terminal/workspace memory | COMPLETE | Factor compression and scratch aliasing pass qualification |
 | P3 Frozen CSR | COMPLETE | Deterministic CSR agrees with edge matvec; measured routing is documented |
 | P4 Parallel solve kernels | COMPLETE | Package-owned pool and row-parallel CSR pass cross-platform tests |
@@ -65,6 +66,7 @@ Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA 
 - The normal repeated-RHS path no longer reconstructs components or rescans graph diagonals for immutable invariants.
 - `CmgPreconditioner::apply_compatible_into` exposes the stationary core for callers that have already established component compatibility.
 - PCG projects the submitted RHS once, maintains residuals in the quotient space, removes only accumulated component-nullspace roundoff, and reuses the compatible stationary core on later applications.
+- Recursive coarse residuals use deterministic component centering instead of repeating public-boundary compatibility validation, stable-representative correction, and projection-norm work.
 
 The compatible-RHS change was retained at commit `6d5f4cca` after same-run validation of debug/release tests, C-cycle parity, iteration counts, and original-system residual certificates. Relative to the immediately preceding production code:
 
@@ -73,18 +75,25 @@ The compatible-RHS change was retained at commit `6d5f4cca` after same-run valid
 | Path | `0.697x` | `0.823x` | 26 → 26 |
 | Worker–firm | `0.621x` | `0.894x` | 20 → 20 |
 
-Ratios below one favor the new code. Backward errors changed only at floating-point roundoff scale. The full-cycle quotient-space differences from pinned C remained about `2.1e-12` on the path case and `8.9e-16` on worker–firm.
+The recursive-centering change was retained at commit `f6378554` after the same numerical gates. Relative to the in-place-output baseline immediately before it:
+
+| Case | Stationary-cycle time | Full PCG solve per RHS | Iterations |
+|---|---:|---:|---:|
+| Path | `0.730x` | `0.869x` | 26 → 26 |
+| Worker–firm | `0.712x` | `0.944x` | 20 → 20 |
+
+Backward errors changed only at floating-point roundoff scale. The full-cycle quotient-space differences from pinned C remained about `2.1e-12` on the path case and approximately `1.0e-15` on worker–firm.
 
 ### Terminal and workspace memory
 
 - Completed strict-lower factors select packed-triangular or sparse row/column traversal storage by retained-byte cost.
 - Sparse terminal indices use `u32` when valid.
 - CMG matvec and residual roles share one full vector per hierarchy level.
-- Nonterminal CMG levels now iterate directly in caller-owned output, eliminating a separate solution vector and final copy at every hierarchy level.
+- Recursive hierarchy levels write their solution directly into caller-provided output storage; the former per-level solution vector and final copy were removed.
 - PCG fresh/final residual certification reuses existing storage; per-RHS PCG workspace was reduced from eight to six fine-dimension vectors at commit `f145ac92`.
 - `GroundedLdl`, `CmgWorkspace`, and `PcgWorkspace` report retained principal heap bytes.
 
-The in-place hierarchy-output checkpoint reduced retained CMG workspace to path `0.707x` and worker–firm `0.691x`; complete PCG workspace fell to `0.860x` and `0.875x`. Same-run cycle ratios were `0.979x` and `0.975x`, and solve ratios were `0.992x` and `0.981x`, with unchanged iterations.
+The in-place hierarchy-output experiment was retained at commit `40f7d234`. It reduced CMG workspace to about `0.707x` on paths and `0.691x` on worker–firm graphs, and complete PCG workspace to `0.860x` and `0.875x`. Same-run solve-time ratios were `0.992x` and `0.981x`, with unchanged hierarchy, iterations, residual certificates, and C parity.
 
 For the original 20,000-vertex matched run, hierarchy diagnostics, iterations, and backward errors were unchanged. Relative to the frozen baseline, path CMG application and solve time fell substantially, principally because sparse terminal traversal avoided dense lower-triangle scans. Worker–firm workspace memory also declined materially.
 
@@ -115,12 +124,12 @@ After the compatible stationary-core optimization, same-run complete-cycle timin
 | Path | 7 | `2.07e-12` | `1.30x` |
 | Worker–firm | 8 | `8.88e-16` | `1.46x` |
 
-This is a substantial reduction from the preceding same-run Rust/C ratios of `1.84x` and `2.36x`. Remaining differences are now concentrated inside recursive level application rather than fine-level public compatibility handling.
+After in-place level output and recursive centering, the accepted recursive-centering run measured Rust/C cycle ratios of about `0.866x` on paths and `1.008x` on worker–firm, with the same quotient-space agreement. These hosted-runner values are directional but show that the remaining cycle gap is now small and workload-dependent rather than a broad implementation deficit.
 
 ## Current hot spots
 
-1. Every recursive coarse RHS still uses full public-quality compatibility projection: compatibility and scale accumulation, mean removal, representative search, two correction passes, and projection-norm calculation. Internally generated residuals are compatible in exact arithmetic; deterministic component centering may be sufficient and substantially cheaper, but it must pass symmetry, positivity, adversarial PCG, and C-differential gates.
-2. The compatible public method still validates dimensions, workspace structure, and options on every PCG application. A crate-private prevalidated core could remove small repeated checks after the larger recursive-projection issue is measured.
+1. Coarse component metadata and full public-quality `ComponentWorkspace` scratch remain allocated at every hierarchy level even though recursive application now needs only centering. A follow-up memory cleanup must retain full finest-level public validation and exact C parity.
+2. The compatible public method still validates dimensions, workspace structure, and options on every PCG application. A crate-private prevalidated core may remove small repeated checks after the component-metadata cleanup is measured.
 3. Single-RHS production PCG remains mostly serial even when the optional parallel feature is enabled.
 4. Coarse contraction still allocates endpoint triples and sorts at every level.
 5. Terminal setup materializes dense temporary matrices before retaining compressed factors.
@@ -151,12 +160,13 @@ This is a substantial reduction from the preceding same-run Rust/C ratios of `1.
 | 2026-08-22 | `deadcb6c` | Immutable graph nonzeros and norm bound cached |
 | 2026-08-22 | `249c2d1f` | Recursive repeat schedule aligned with official CMG; full C cycle differential passed |
 | 2026-08-22 | `6d5f4cca` | Compatible stationary core retained; solve time improved with unchanged iterations |
-| 2026-08-22 | in-place hierarchy output | Per-level solution scratch removed; C parity, iterations, residuals, timing, and memory gates passed |
+| 2026-08-22 | `40f7d234` | Per-level solution scratch removed; memory and solve-time gates passed |
+| 2026-08-22 | `f6378554` | Recursive full compatibility projection replaced by centering; C parity and solve gates passed |
 
 ## Current next action
 
-1. Qualify the in-place hierarchy-output checkpoint on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.
-2. Measure deterministic component centering in place of full recursive coarse-RHS compatibility projection, retaining it only if full-cycle parity, PCG convergence, symmetry, positivity, and real solve time improve.
-3. If recursive centering is retained, remove now-unneeded coarse component metadata and scratch, then measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG.
+1. Qualify the combined in-place-output and recursive-centering checkpoint on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.
+2. Remove now-unneeded coarse component metadata and full projection scratch while retaining finest-level public validation; benchmark memory and complete-solve time.
+3. Measure a crate-private prevalidated apply path that skips repeated workspace/options checks inside PCG only after the metadata cleanup is qualified.
 4. Continue large setup profiling and obtain 8–32-thread evidence when a suitable runner is available.
 5. Remove obsolete one-shot staging workflows and scripts after the active qualification checkpoint is secure.
