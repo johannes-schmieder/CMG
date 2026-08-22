@@ -123,7 +123,7 @@ fn one_thread_executor_preserves_serial_behavior() {
 
 #[test]
 fn parallel_edge_sorting_matches_serial_canonicalization() {
-    let raw_edges: Vec<(usize, usize, f64)> = (0..20_000)
+    let raw_edges: Vec<(usize, usize, f64)> = (0usize..20_000)
         .flat_map(|index| {
             let left = index % 4_000;
             let right = (index.wrapping_mul(1_103).wrapping_add(17) % 4_000 + 1) % 4_000;
