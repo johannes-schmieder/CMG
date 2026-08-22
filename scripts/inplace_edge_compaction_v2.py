@@ -78,7 +78,6 @@ new = '''    fn from_sorted_raw_edges(
             write_index += 1;
         }
         raw.truncate(write_index);
-        raw.shrink_to_fit();
 
         let mut diagonal = vec![0.0; vertex_count];
         for &(u, v, weight) in &raw {
