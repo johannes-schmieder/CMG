@@ -80,7 +80,9 @@ impl Components {
     /// Laplacian range and return the Euclidean norm of the removed component.
     ///
     /// A component whose sum exceeds `compatibility_tolerance` relative to its
-    /// one-norm is rejected rather than modified.
+    /// one-norm is rejected rather than modified. After mean subtraction, the
+    /// residual floating-point sum is removed from the component's
+    /// lowest-numbered vertex to make the projection deterministic.
     pub fn project_rhs_in_place(
         &self,
         rhs: &mut [f64],
@@ -95,25 +97,40 @@ impl Components {
             .zip(&self.sizes)
             .map(|(sum, size)| *sum / *size as f64)
             .collect();
-        let projection_scale = means.iter().map(|mean| mean.abs()).fold(0.0, f64::max);
-        let projection_norm = if projection_scale == 0.0 {
-            0.0
-        } else {
-            let squared = means
-                .iter()
-                .zip(&self.sizes)
-                .map(|(mean, size)| {
-                    let scaled = *mean / projection_scale;
-                    *size as f64 * scaled * scaled
-                })
-                .sum::<f64>();
-            projection_scale * squared.sqrt()
-        };
-
         for (value, label) in rhs.iter_mut().zip(&self.labels) {
             *value -= means[*label];
         }
-        Ok(projection_norm)
+
+        let residual_sums = self.compensated_sums(rhs, "Components::project_rhs_in_place")?;
+        let mut representatives = vec![usize::MAX; self.count()];
+        for (vertex, label) in self.labels.iter().copied().enumerate() {
+            if representatives[label] == usize::MAX {
+                representatives[label] = vertex;
+            }
+        }
+        for (component, residual_sum) in residual_sums.iter().copied().enumerate() {
+            rhs[representatives[component]] -= residual_sum;
+        }
+
+        let projection_scale = means
+            .iter()
+            .zip(&residual_sums)
+            .flat_map(|(mean, correction)| [mean.abs(), (*mean + *correction).abs()])
+            .fold(0.0, f64::max);
+        if projection_scale == 0.0 {
+            return Ok(0.0);
+        }
+        let projection_squared = means
+            .iter()
+            .zip(&residual_sums)
+            .zip(&self.sizes)
+            .map(|((mean, correction), size)| {
+                let regular = *mean / projection_scale;
+                let representative = (*mean + *correction) / projection_scale;
+                (*size - 1) as f64 * regular * regular + representative * representative
+            })
+            .sum::<f64>();
+        Ok(projection_scale * projection_squared.sqrt())
     }
 
     /// Subtract the mean within every component in place.
