@@ -23,6 +23,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Archive source snapshot
+        shell: bash
+        run: tar --exclude='.git' -czf /tmp/cmg-current-source.tar.gz .
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmg-source-${{ github.sha }}
+          path: /tmp/cmg-current-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Toolchain
         run: |
           rustc --version
