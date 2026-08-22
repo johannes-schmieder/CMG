@@ -1,0 +1,54 @@
+name: Repair compatible RHS benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-compatible-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Repair call-site patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('.github/workflows/optimize-compatible-apply.yml')
+          text = path.read_text()
+          old = '''          old = ''' + "'''    preconditioner.apply_into_with_validation(\\n        &workspace.residual,\\n        &mut workspace.preconditioned,\\n        &mut workspace.cmg,\\n        options.validation,\\n    )?;\\n'''" + '''
+          new = ''' + "'''    preconditioner.apply_compatible_into_with_validation(\\n        &workspace.residual,\\n        &mut workspace.preconditioned,\\n        &mut workspace.cmg,\\n        options.validation,\\n    )?;\\n'''" + '''
+          if text.count(old) != 2:
+              raise SystemExit(f'expected two PCG preconditioner calls, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+'''
+          new = '''          old = 'preconditioner.apply_into_with_validation'
+          new = 'preconditioner.apply_compatible_into_with_validation'
+          if text.count(old) != 2:
+              raise SystemExit(f'expected two PCG preconditioner calls, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+'''
+          if text.count(old) != 1:
+              raise SystemExit('compatible workflow repair anchor changed')
+          path.write_text(text.replace(old, new, 1))
+
+      - name: Commit repaired benchmark workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-compatible-apply.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: retry compatible-RHS fast-path benchmark'
+          git pull --rebase origin main
+          git push origin HEAD:main
