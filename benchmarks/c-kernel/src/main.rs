@@ -15,6 +15,9 @@ const SOURCE_COMMIT: &str = match option_env!("CMG_BENCH_COMMIT") {
     None => "unknown",
 };
 
+type EdgeSpec = (usize, usize, f64);
+type AnyError = Box<dyn Error>;
+
 unsafe extern "C" {
     fn cmg_reference_sspmv(
         n: c_uint,
@@ -53,7 +56,7 @@ struct UpperSymmetric {
 }
 
 impl UpperSymmetric {
-    fn from_graph(graph: &Laplacian) -> Result<Self, Box<dyn Error>> {
+    fn from_graph(graph: &Laplacian) -> Result<Self, AnyError> {
         let n = graph.vertex_count();
         let n_c = c_uint::try_from(n)
             .map_err(|_| io::Error::other("vertex count exceeds upstream C index width"))?;
@@ -126,7 +129,7 @@ impl UpperSymmetric {
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), AnyError> {
     let config = parse_config()?;
     if config.vertices < 2 {
         return Err(io::Error::other("vertices must be at least two").into());
@@ -228,7 +231,7 @@ fn time_rust(
     input: &[f64],
     output: &mut [f64],
     loops: usize,
-) -> Result<u128, Box<dyn Error>> {
+) -> Result<u128, AnyError> {
     let start = Instant::now();
     for _ in 0..loops {
         graph.matvec_into(black_box(input), black_box(&mut *output))?;
@@ -268,7 +271,7 @@ fn make_input(vertices: usize) -> Vec<f64> {
         .collect()
 }
 
-fn generate_edges(case: &str, vertices: usize) -> Result<Vec<(usize, usize, f64)>, Box<dyn Error>> {
+fn generate_edges(case: &str, vertices: usize) -> Result<Vec<EdgeSpec>, AnyError> {
     match case {
         "path" => Ok((0..vertices - 1)
             .map(|u| (u, u + 1, 1.0 + (u % 17) as f64 / 31.0))
@@ -291,7 +294,7 @@ fn generate_edges(case: &str, vertices: usize) -> Result<Vec<(usize, usize, f64)
     }
 }
 
-fn parse_config() -> Result<Config, Box<dyn Error>> {
+fn parse_config() -> Result<Config, AnyError> {
     let mut config = Config::default();
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
