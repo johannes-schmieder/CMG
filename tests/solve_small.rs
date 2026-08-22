@@ -59,13 +59,7 @@ fn exact_direct_preconditioner_converges_in_one_iteration() {
 fn zero_rhs_returns_without_iteration() {
     let graph = path(8);
     let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
-    let result = solve_pcg(
-        &graph,
-        &preconditioner,
-        &[0.0; 8],
-        PcgOptions::default(),
-    )
-    .unwrap();
+    let result = solve_pcg(&graph, &preconditioner, &[0.0; 8], PcgOptions::default()).unwrap();
     assert_eq!(result.iterations(), 0);
     assert_eq!(result.solution(), &[0.0; 8]);
     assert_eq!(result.residual_norm(), 0.0);
@@ -169,22 +163,11 @@ fn explicit_workspace_can_be_reused_across_distinct_rhs() {
         )
         .unwrap();
     let options = PcgOptions::default();
-    let first_result = solve_pcg_with_workspace(
-        &graph,
-        &preconditioner,
-        &first,
-        options,
-        &mut workspace,
-    )
-    .unwrap();
-    let second_result = solve_pcg_with_workspace(
-        &graph,
-        &preconditioner,
-        &second,
-        options,
-        &mut workspace,
-    )
-    .unwrap();
+    let first_result =
+        solve_pcg_with_workspace(&graph, &preconditioner, &first, options, &mut workspace).unwrap();
+    let second_result =
+        solve_pcg_with_workspace(&graph, &preconditioner, &second, options, &mut workspace)
+            .unwrap();
     assert!(first_result.residual_norm() <= first_result.tolerance());
     assert!(second_result.residual_norm() <= second_result.tolerance());
 }
@@ -219,12 +202,7 @@ fn iteration_budget_and_compatibility_failures_are_explicit() {
     ));
 
     assert!(matches!(
-        solve_pcg(
-            &graph,
-            &preconditioner,
-            &[1.0; 64],
-            PcgOptions::default()
-        ),
+        solve_pcg(&graph, &preconditioner, &[1.0; 64], PcgOptions::default()),
         Err(CmgError::IncompatibleLaplacianRhs { .. })
     ));
 }

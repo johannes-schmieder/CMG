@@ -1,9 +1,7 @@
 //! Certified quotient-space preconditioned conjugate gradients.
 
 use crate::graph::compensated_sum;
-use crate::{
-    CmgError, CmgPreconditioner, CmgWorkspace, Components, Laplacian, PcgOptions,
-};
+use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Components, Laplacian, PcgOptions};
 
 /// Reusable vectors for repeated PCG solves with one preconditioner.
 #[derive(Debug, Clone)]
@@ -169,12 +167,7 @@ pub fn solve_pcg_with_workspace(
 
     let initial_residual_norm = euclidean_norm(rhs);
     let operator_bound = graph.operator_norm_bound();
-    let initial_tolerance = allowed_residual(
-        options,
-        initial_residual_norm,
-        operator_bound,
-        0.0,
-    );
+    let initial_tolerance = allowed_residual(options, initial_residual_norm, operator_bound, 0.0);
     if initial_residual_norm <= initial_tolerance {
         return Ok(make_result(
             workspace.solution.clone(),
@@ -321,9 +314,7 @@ pub fn solve_pcg_batch(
     let mut workspace = PcgWorkspace::new(preconditioner);
     right_hand_sides
         .iter()
-        .map(|rhs| {
-            solve_pcg_with_workspace(graph, preconditioner, rhs, options, &mut workspace)
-        })
+        .map(|rhs| solve_pcg_with_workspace(graph, preconditioner, rhs, options, &mut workspace))
         .collect()
 }
 
