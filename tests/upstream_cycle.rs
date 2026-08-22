@@ -11,7 +11,7 @@ fn reference_apply(
             preconditioner
                 .terminal_factor()
                 .unwrap()
-                .solve(rhs, CmgOptions::default().validation)
+                .solve(rhs)
                 .unwrap()
         } else {
             rhs.iter()
