@@ -72,7 +72,7 @@ jobs:
           exit 0
 
       - name: Build retained comparison record
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         shell: python
         env:
           VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
@@ -98,7 +98,7 @@ jobs:
           validation = os.environ.get('VALIDATION_STATUS') or 'not-run'
           benchmark = os.environ.get('BENCHMARK_STATUS') or 'not-run'
           record = {
-              'schema': 2,
+              'schema': 3,
               'tested_sha': os.environ['CMG_BENCH_COMMIT'],
               'upstream_commit': '19752fc102f8cae8e34f66457bfaccb1aaa60375',
               'runner': 'ubuntu-latest',
@@ -117,7 +117,7 @@ jobs:
           )
 
       - name: Upload raw comparison and diagnostics
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: c-kernel-${{ github.sha }}
@@ -128,10 +128,19 @@ jobs:
           retention-days: 14
 
       - name: Retain comparison on main
-        if: ${{ always() && github.event_name == 'push' }}
+        if: ${{ always() && !cancelled() && github.event_name == 'push' }}
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin main
+          for PATHSPEC in benchmarks/c-kernel .github/workflows/c-kernel.yml; do
+            TESTED_OBJECT=$(git rev-parse "${CMG_BENCH_COMMIT}:${PATHSPEC}")
+            CURRENT_OBJECT=$(git rev-parse "origin/main:${PATHSPEC}")
+            if [ "$TESTED_OBJECT" != "$CURRENT_OBJECT" ]; then
+              echo "Skipping superseded result: ${PATHSPEC} changed on main"
+              exit 0
+            fi
+          done
           rm -f benchmarks/c-kernel/Cargo.lock
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -142,7 +151,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Enforce comparison success
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         shell: bash
         env:
           VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
