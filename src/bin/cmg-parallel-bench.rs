@@ -1,7 +1,6 @@
 use cmg::{
-    CmgOptions, CmgPreconditioner, CsrLaplacian, Laplacian, ParallelExecutor,
-    ParallelOptions, PcgOptions, PcgResult, PcgWorkspace, solve_pcg_batch,
-    solve_pcg_batch_with_executor,
+    CmgOptions, CmgPreconditioner, CsrLaplacian, Laplacian, ParallelExecutor, ParallelOptions,
+    PcgOptions, PcgResult, PcgWorkspace, solve_pcg_batch, solve_pcg_batch_with_executor,
 };
 use std::env;
 use std::error::Error;
@@ -67,15 +66,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         workspace_memory_budget_bytes: config.memory_budget_bytes,
         ..ParallelOptions::default()
     })?;
-    let batch_concurrency =
-        executor.batch_concurrency(workspace_bytes, right_hand_sides.len())?;
+    let batch_concurrency = executor.batch_concurrency(workspace_bytes, right_hand_sides.len())?;
 
-    let serial_warmup = solve_pcg_batch(
-        &graph,
-        &preconditioner,
-        &right_hand_sides,
-        pcg_options,
-    )?;
+    let serial_warmup = solve_pcg_batch(&graph, &preconditioner, &right_hand_sides, pcg_options)?;
     let parallel_warmup = solve_pcg_batch_with_executor(
         &graph,
         &preconditioner,
@@ -141,8 +134,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(io::Error::other("parallel CSR matvec changed row arithmetic").into());
     }
 
-    let matvec_loops =
-        (TARGET_MATVEC_EDGE_VISITS / graph.edge_count().max(1)).clamp(8, 2_000);
+    let matvec_loops = (TARGET_MATVEC_EDGE_VISITS / graph.edge_count().max(1)).clamp(8, 2_000);
     let mut serial_csr_ns = Vec::with_capacity(config.repetitions);
     let mut parallel_csr_ns = Vec::with_capacity(config.repetitions);
     for repetition in 0..config.repetitions {
@@ -266,13 +258,8 @@ fn time_parallel_batch(
     executor: &ParallelExecutor,
 ) -> Result<(u128, Vec<PcgResult>), cmg::CmgError> {
     let start = Instant::now();
-    let results = solve_pcg_batch_with_executor(
-        graph,
-        preconditioner,
-        right_hand_sides,
-        options,
-        executor,
-    )?;
+    let results =
+        solve_pcg_batch_with_executor(graph, preconditioner, right_hand_sides, options, executor)?;
     let elapsed = start.elapsed().as_nanos();
     black_box(&results);
     Ok((elapsed, results))
@@ -307,10 +294,7 @@ fn time_parallel_csr(
     Ok(start.elapsed().as_nanos() / loops as u128)
 }
 
-fn validate_solve_agreement(
-    serial: &[PcgResult],
-    parallel: &[PcgResult],
-) -> Result<(), io::Error> {
+fn validate_solve_agreement(serial: &[PcgResult], parallel: &[PcgResult]) -> Result<(), io::Error> {
     if serial.len() != parallel.len() {
         return Err(io::Error::other("parallel batch changed the result count"));
     }
@@ -335,13 +319,14 @@ fn parse_config() -> Result<Config, Box<dyn Error>> {
             "--case" => config.case = next_value(&mut arguments, "--case")?,
             "--vertices" => {
                 config.vertices =
-                    parse_usize(next_value(&mut arguments, "--vertices")?, 'vertices')?;
+                    parse_usize(next_value(&mut arguments, "--vertices")?, "vertices")?;
             }
             "--rhs" => {
-                config.rhs_count = parse_usize(next_value(&mut arguments, "--rhs")?, 'r')?;
+                config.rhs_count = parse_usize(next_value(&mut arguments, "--rhs")?, "rhs")?;
             }
             "--repetitions" => {
-                config.repetitions = parse_usize(next_value(&mut arguments, "--repetitions")?, "repetitions")?;
+                config.repetitions =
+                    parse_usize(next_value(&mut arguments, "--repetitions")?, "repetitions")?;
             }
             "--direct-threshold" => {
                 config.direct_threshold = parse_usize(
@@ -350,8 +335,7 @@ fn parse_config() -> Result<Config, Box<dyn Error>> {
                 )?;
             }
             "--threads" => {
-                config.threads =
-                    parse_usize(next_value(&mut arguments, "--threads")?, "threads")?;
+                config.threads = parse_usize(next_value(&mut arguments, "--threads")?, "threads")?;
             }
             "--memory-budget" => {
                 config.memory_budget_bytes = Some(parse_usize(
@@ -370,7 +354,7 @@ fn parse_config() -> Result<Config, Box<dyn Error>> {
         }
     }
     if config.vertices < 2 {
-        return Err(invalid_input('vertices must be at least 2').into());
+        return Err(invalid_input("vertices must be at least 2").into());
     }
     if config.rhs_count == 0 {
         return Err(invalid_input("rhs must be positive").into());
@@ -387,12 +371,19 @@ fn parse_config() -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-fn next_value(arguments: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, io::Error> {
-    arguments.next().ok_or_else(|| invalid_input(format!("missing value for {flag}")))
+fn next_value(
+    arguments: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<String, io::Error> {
+    arguments
+        .next()
+        .ok_or_else(|| invalid_input(format!("missing value for {flag}")))
 }
 
 fn parse_usize(value: String, name: &str) -> Result<usize, io::Error> {
-    value.parse::<usize>().map_err(|error| invalid_input(format!("invalid {name} value {value:?}: {error}")))
+    value
+        .parse::<usize>()
+        .map_err(|error| invalid_input(format!("invalid {name} value {value:?}: {error}")))
 }
 
 fn invalid_input(message: impl Into<String>) -> io::Error {
@@ -401,7 +392,9 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
 
 fn generate_edges(case: &str, vertices: usize) -> Result<Vec<(usize, usize, f64)>, io::Error> {
     match case {
-        "path" => Ok((0..vertices - 1).map(|u| (u, u + 1, deterministic_weight(u))).collect()),
+        "path" => Ok((0..vertices - 1)
+            .map(|u| (u, u + 1, deterministic_weight(u)))
+            .collect()),
         "grid" => Ok(grid_edges(vertices)),
         "worker-firm" => Ok(worker_firm_edges(vertices)),
         _ => Err(invalid_input(format!("unknown graph case: {case}"))),
@@ -417,7 +410,11 @@ fn grid_edges(vertices: usize) -> Vec<(usize, usize, f64)> {
             edges.push((vertex, vertex + 1, deterministic_weight(vertex)));
         }
         if vertex + width < vertices {
-            edges.push((vertex, vertex + width, deterministic_weight(vertex.wrapping_mul(31))));
+            edges.push((
+                vertex,
+                vertex + width,
+                deterministic_weight(vertex.wrapping_mul(31)),
+            ));
         }
     }
     edges
@@ -433,13 +430,21 @@ fn worker_firm_edges(vertices: usize) -> Vec<(usize, usize, f64)> {
         if firm_count > 1 {
             let second = worker.wrapping_mul(48_271).wrapping_add(1) % firm_count;
             if second != first {
-                edges.push((worker, worker_count + second, deterministic_weight(worker.wrapping_mul(17).wrapping_add(3))));
+                edges.push((
+                    worker,
+                    worker_count + second,
+                    deterministic_weight(worker.wrapping_mul(17).wrapping_add(3)),
+                ));
             }
         }
         if firm_count > 2 && worker % 7 == 0 {
             let third = worker.wrapping_mul(69_621).wrapping_add(5) % firm_count;
             if third != first {
-                edges.push((worker, worker_count + third, deterministic_weight(worker.wrapping_mul(97).wrapping_add(11))));
+                edges.push((
+                    worker,
+                    worker_count + third,
+                    deterministic_weight(worker.wrapping_mul(97).wrapping_add(11)),
+                ));
             }
         }
     }
@@ -451,13 +456,20 @@ fn deterministic_weight(seed: usize) -> f64 {
 }
 
 fn make_right_hand_sides(graph: &Laplacian, count: usize) -> Result<Vec<Vec<f64>>, cmg::CmgError> {
-    (0..count).map(|rhs_index| {
-        let target: Vec<f64> = (0..graph.vertex_count()).map(|vertex| {
-            let code = vertex.wrapping_mul(31).wrapping_add(rhs_index.wrapping_mul(17)) % 101;
-            (code as f64 - 50.0) / 13.0
-        }).collect();
-        graph.matvec(&target)
-    }).collect()
+    (0..count)
+        .map(|rhs_index| {
+            let target: Vec<f64> = (0..graph.vertex_count())
+                .map(|vertex| {
+                    let code = vertex
+                        .wrapping_mul(31)
+                        .wrapping_add(rhs_index.wrapping_mul(17))
+                        % 101;
+                    (code as f64 - 50.0) / 13.0
+                })
+                .collect();
+            graph.matvec(&target)
+        })
+        .collect()
 }
 
 fn median(values: &mut [u128]) -> u128 {
@@ -469,10 +481,24 @@ fn json_optional_usize(value: Option<usize>) -> String {
     value.map_or_else(|| "null".to_owned(), |value| value.to_string())
 }
 
-fn json_usize_array(values: &mut [usize]) -> String {
-    format!("[{}]", values.iter().map(usize::to_string).collect::<Vec<_>>().join(","))
+fn json_usize_array(values: &[usize]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 fn json_f64_array(values: &[f64]) -> String {
-    format!("[{}]", values.iter().map(|value| format!("{value:.17e}")).collect::<Vec_>>().join(","))
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!("{value:.17e}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
