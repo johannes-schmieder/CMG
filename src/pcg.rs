@@ -6,12 +6,14 @@ use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Components, Laplacian, Pc
 /// Reusable vectors for repeated PCG solves with one preconditioner.
 #[derive(Debug, Clone)]
 pub struct PcgWorkspace {
+    projected_rhs: Vec<f64>,
     solution: Vec<f64>,
     residual: Vec<f64>,
     preconditioned: Vec<f64>,
     direction: Vec<f64>,
     matrix_direction: Vec<f64>,
     fresh_residual: Vec<f64>,
+    original_residual: Vec<f64>,
     cmg: CmgWorkspace,
 }
 
@@ -23,12 +25,14 @@ impl PcgWorkspace {
             .graph()
             .vertex_count();
         Self {
+            projected_rhs: vec![0.0; dimension],
             solution: vec![0.0; dimension],
             residual: vec![0.0; dimension],
             preconditioned: vec![0.0; dimension],
             direction: vec![0.0; dimension],
             matrix_direction: vec![0.0; dimension],
             fresh_residual: vec![0.0; dimension],
+            original_residual: vec![0.0; dimension],
             cmg: preconditioner.workspace(),
         }
     }
@@ -41,12 +45,14 @@ impl PcgWorkspace {
 
     fn validate(&self, dimension: usize) -> Result<(), CmgError> {
         for (context, actual) in [
+            ("PcgWorkspace projected rhs", self.projected_rhs.len()),
             ("PcgWorkspace solution", self.solution.len()),
             ("PcgWorkspace residual", self.residual.len()),
             ("PcgWorkspace preconditioned", self.preconditioned.len()),
             ("PcgWorkspace direction", self.direction.len()),
             ("PcgWorkspace matrix direction", self.matrix_direction.len()),
             ("PcgWorkspace fresh residual", self.fresh_residual.len()),
+            ("PcgWorkspace original residual", self.original_residual.len()),
         ] {
             if actual != dimension {
                 return Err(CmgError::dimension(context, dimension, actual));
@@ -67,6 +73,7 @@ pub struct PcgResult {
     backward_error: f64,
     tolerance: f64,
     restarts: usize,
+    rhs_projection_norm: f64,
 }
 
 impl PcgResult {
@@ -88,13 +95,13 @@ impl PcgResult {
         self.iterations
     }
 
-    /// Return the initial Euclidean residual norm.
+    /// Return the initial Euclidean residual norm for the submitted RHS.
     #[must_use]
     pub const fn initial_residual_norm(&self) -> f64 {
         self.initial_residual_norm
     }
 
-    /// Return the freshly recomputed original-system residual norm.
+    /// Return the freshly recomputed residual norm against the submitted RHS.
     #[must_use]
     pub const fn residual_norm(&self) -> f64 {
         self.residual_norm
@@ -123,6 +130,13 @@ impl PcgResult {
     pub const fn restarts(&self) -> usize {
         self.restarts
     }
+
+    /// Return the norm of accepted component-nullspace roundoff removed from
+    /// the submitted RHS before iteration.
+    #[must_use]
+    pub const fn rhs_projection_norm(&self) -> f64 {
+        self.rhs_projection_norm
+    }
 }
 
 /// Solve a compatible graph-Laplacian system with a newly allocated workspace.
@@ -137,6 +151,10 @@ pub fn solve_pcg(
 }
 
 /// Solve using caller-owned workspace suitable for repeated right-hand sides.
+///
+/// Component-sum defects accepted by `compatibility_tolerance` are projected
+/// onto the exact Laplacian range. Final certification is still performed
+/// against the submitted, unprojected RHS and the projection norm is reported.
 pub fn solve_pcg_with_workspace(
     graph: &Laplacian,
     preconditioner: &CmgPreconditioner,
@@ -157,15 +175,21 @@ pub fn solve_pcg_with_workspace(
     workspace.validate(dimension)?;
 
     let components = Components::from_laplacian(graph);
-    components.validate_rhs(rhs, options.validation)?;
+    workspace.projected_rhs.copy_from_slice(rhs);
+    let rhs_projection_norm = components
+        .project_rhs_in_place(&mut workspace.projected_rhs, options.validation)?;
     workspace.solution.fill(0.0);
-    workspace.residual.copy_from_slice(rhs);
+    workspace
+        .residual
+        .copy_from_slice(&workspace.projected_rhs);
     workspace.preconditioned.fill(0.0);
     workspace.direction.fill(0.0);
     workspace.matrix_direction.fill(0.0);
     workspace.fresh_residual.fill(0.0);
+    workspace.original_residual.fill(0.0);
 
     let initial_residual_norm = euclidean_norm(rhs);
+    let projected_initial_norm = euclidean_norm(&workspace.projected_rhs);
     let operator_bound = graph.operator_norm_bound();
     let initial_tolerance = allowed_residual(options, initial_residual_norm, operator_bound, 0.0);
     if initial_residual_norm <= initial_tolerance {
@@ -177,7 +201,15 @@ pub fn solve_pcg_with_workspace(
             initial_tolerance,
             operator_bound,
             0,
+            rhs_projection_norm,
         ));
+    }
+    if projected_initial_norm == 0.0 {
+        return Err(CmgError::ResidualVerificationFailed {
+            iteration: 0,
+            residual_norm: initial_residual_norm,
+            tolerance: initial_tolerance,
+        });
     }
 
     preconditioner.apply_into_with_validation(
@@ -228,9 +260,9 @@ pub fn solve_pcg_with_workspace(
         let mut restarted = false;
 
         if candidate || scheduled_recompute {
-            let fresh_norm = recompute_residual(
+            let projected_fresh_norm = recompute_residual(
                 graph,
-                rhs,
+                &workspace.projected_rhs,
                 &workspace.solution,
                 &mut workspace.fresh_residual,
             )?;
@@ -239,23 +271,32 @@ pub fn solve_pcg_with_workspace(
                 .copy_from_slice(&workspace.fresh_residual);
             restarted = true;
             restarts += 1;
-            if fresh_norm <= last_tolerance {
-                return Ok(make_result(
-                    workspace.solution.clone(),
-                    iteration,
-                    initial_residual_norm,
-                    fresh_norm,
-                    last_tolerance,
-                    operator_bound,
-                    restarts,
-                ));
-            }
-            if candidate && iteration == options.max_iterations {
-                return Err(CmgError::ResidualVerificationFailed {
-                    iteration,
-                    residual_norm: fresh_norm,
-                    tolerance: last_tolerance,
-                });
+            if projected_fresh_norm <= last_tolerance {
+                let original_norm = original_residual_norm(
+                    rhs,
+                    &workspace.projected_rhs,
+                    &workspace.fresh_residual,
+                    &mut workspace.original_residual,
+                );
+                if original_norm <= last_tolerance {
+                    return Ok(make_result(
+                        workspace.solution.clone(),
+                        iteration,
+                        initial_residual_norm,
+                        original_norm,
+                        last_tolerance,
+                        operator_bound,
+                        restarts,
+                        rhs_projection_norm,
+                    ));
+                }
+                if iteration == options.max_iterations {
+                    return Err(CmgError::ResidualVerificationFailed {
+                        iteration,
+                        residual_norm: original_norm,
+                        tolerance: last_tolerance,
+                    });
+                }
             }
         }
 
@@ -291,12 +332,18 @@ pub fn solve_pcg_with_workspace(
         rho = new_rho;
     }
 
-    let residual_norm = recompute_residual(
+    recompute_residual(
         graph,
-        rhs,
+        &workspace.projected_rhs,
         &workspace.solution,
         &mut workspace.fresh_residual,
     )?;
+    let residual_norm = original_residual_norm(
+        rhs,
+        &workspace.projected_rhs,
+        &workspace.fresh_residual,
+        &mut workspace.original_residual,
+    );
     Err(CmgError::MaximumIterations {
         iterations: options.max_iterations,
         residual_norm,
@@ -326,6 +373,7 @@ fn make_result(
     tolerance: f64,
     operator_bound: f64,
     restarts: usize,
+    rhs_projection_norm: f64,
 ) -> PcgResult {
     let solution_norm = euclidean_norm(&solution);
     let denominator = initial_residual_norm + operator_bound * solution_norm;
@@ -348,6 +396,7 @@ fn make_result(
         backward_error,
         tolerance,
         restarts,
+        rhs_projection_norm,
     }
 }
 
@@ -372,6 +421,23 @@ fn recompute_residual(
         *value = *rhs_value - *value;
     }
     Ok(euclidean_norm(residual))
+}
+
+fn original_residual_norm(
+    original_rhs: &[f64],
+    projected_rhs: &[f64],
+    projected_residual: &[f64],
+    original_residual: &mut [f64],
+) -> f64 {
+    for (((output, original), projected), residual) in original_residual
+        .iter_mut()
+        .zip(original_rhs)
+        .zip(projected_rhs)
+        .zip(projected_residual)
+    {
+        *output = *residual + (*original - *projected);
+    }
+    euclidean_norm(original_residual)
 }
 
 fn dot(left: &[f64], right: &[f64]) -> f64 {
