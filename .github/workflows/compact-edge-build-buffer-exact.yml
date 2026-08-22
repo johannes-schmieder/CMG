@@ -1,0 +1,33 @@
+name: Compact graph-build buffer exact allocation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-edge-build-buffer-exact.yml'
+      - 'scripts/compact_edge_build_buffer.py'
+      - 'scripts/compact_edge_build_buffer_exact_gate.py'
+
+concurrency:
+  group: cmg-compact-edge-build-buffer-exact
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify compact buffer with exact allocation tracking
+        run: python scripts/compact_edge_build_buffer_exact_gate.py
+
+      - name: Show retained result
+        if: always()
+        run: git show origin/main:.ci/performance/compact-edge-build-buffer-exact-latest.json || true
