@@ -63,20 +63,9 @@ impl Components {
         &self.sizes
     }
 
-    /// Return component-wise sums of a vector.
+    /// Return component-wise compensated sums of a vector.
     pub fn sums(&self, values: &[f64]) -> Result<Vec<f64>, CmgError> {
-        if values.len() != self.labels.len() {
-            return Err(CmgError::dimension(
-                "Components::sums",
-                self.labels.len(),
-                values.len(),
-            ));
-        }
-        let mut sums = vec![0.0; self.count()];
-        for (value, label) in values.iter().zip(&self.labels) {
-            sums[*label] += *value;
-        }
-        Ok(sums)
+        self.compensated_sums(values, "Components::sums")
     }
 
     /// Verify that a right-hand side sums to numerical zero on every component.
@@ -89,21 +78,19 @@ impl Components {
                 rhs.len(),
             ));
         }
-        let mut sums = vec![0.0; self.count()];
-        let mut scales = vec![0.0; self.count()];
+        let sums = self.compensated_sums(rhs, "Components::validate_rhs")?;
+        let mut scale_sums = vec![0.0; self.count()];
+        let mut scale_corrections = vec![0.0; self.count()];
         for (value, label) in rhs.iter().zip(&self.labels) {
-            if !value.is_finite() {
-                return Err(CmgError::NonFiniteMatrixValue {
-                    row: *label,
-                    column: 0,
-                    value: *value,
-                });
-            }
-            sums[*label] += *value;
-            scales[*label] += value.abs();
+            neumaier_add(
+                &mut scale_sums[*label],
+                &mut scale_corrections[*label],
+                value.abs(),
+            );
         }
         for component in 0..self.count() {
-            let tolerance = options.compatibility_tolerance * scales[component].max(1.0);
+            let scale = scale_sums[component] + scale_corrections[component];
+            let tolerance = options.compatibility_tolerance * scale.max(1.0);
             if sums[component].abs() > tolerance {
                 return Err(CmgError::IncompatibleLaplacianRhs {
                     component,
@@ -135,6 +122,46 @@ impl Components {
         }
         Ok(())
     }
+
+    fn compensated_sums(
+        &self,
+        values: &[f64],
+        context: &'static str,
+    ) -> Result<Vec<f64>, CmgError> {
+        if values.len() != self.labels.len() {
+            return Err(CmgError::dimension(
+                context,
+                self.labels.len(),
+                values.len(),
+            ));
+        }
+        let mut sums = vec![0.0; self.count()];
+        let mut corrections = vec![0.0; self.count()];
+        for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
+            if !value.is_finite() {
+                return Err(CmgError::NonFiniteMatrixValue {
+                    row: vertex,
+                    column: 0,
+                    value: *value,
+                });
+            }
+            neumaier_add(&mut sums[*label], &mut corrections[*label], *value);
+        }
+        for (sum, correction) in sums.iter_mut().zip(corrections) {
+            *sum += correction;
+        }
+        Ok(sums)
+    }
+}
+
+fn neumaier_add(sum: &mut f64, correction: &mut f64, value: f64) {
+    let next = *sum + value;
+    *correction += if sum.abs() >= value.abs() {
+        (*sum - next) + value
+    } else {
+        (value - next) + *sum
+    };
+    *sum = next;
 }
 
 fn find_root(parent: &mut [usize], vertex: usize) -> usize {
