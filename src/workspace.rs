@@ -18,6 +18,7 @@ pub(crate) struct LevelWorkspace {
 pub struct CmgWorkspace {
     levels: Vec<LevelWorkspace>,
     dimensions: Vec<usize>,
+    projected_rhs: Vec<f64>,
 }
 
 impl CmgWorkspace {
@@ -27,6 +28,7 @@ impl CmgWorkspace {
             .iter()
             .map(|level| level.graph().vertex_count())
             .collect();
+        let projected_rhs = vec![0.0; dimensions.first().copied().unwrap_or(0)];
         let last = dimensions.len().saturating_sub(1);
         let levels = dimensions
             .iter()
@@ -51,7 +53,11 @@ impl CmgWorkspace {
                 }
             })
             .collect();
-        Self { levels, dimensions }
+        Self {
+            levels,
+            dimensions,
+            projected_rhs,
+        }
     }
 
     /// Return the number of hierarchy levels represented by this workspace.
@@ -78,6 +84,16 @@ impl CmgWorkspace {
                 self.levels.len(),
             ));
         }
+        let fine_dimension = hierarchy
+            .levels()
+            .first()
+            .map(|level| level.graph().vertex_count())
+            .unwrap_or(0);
+        validate_length(
+            "CmgWorkspace projected rhs",
+            fine_dimension,
+            self.projected_rhs.len(),
+        )?;
         let last = self.levels.len().saturating_sub(1);
         for (index, (workspace, level)) in self.levels.iter().zip(hierarchy.levels()).enumerate() {
             let dimension = level.graph().vertex_count();
@@ -118,6 +134,14 @@ impl CmgWorkspace {
             )?;
         }
         Ok(())
+    }
+
+    pub(crate) fn take_projected_rhs(&mut self) -> Vec<f64> {
+        core::mem::take(&mut self.projected_rhs)
+    }
+
+    pub(crate) fn put_projected_rhs(&mut self, projected_rhs: Vec<f64>) {
+        self.projected_rhs = projected_rhs;
     }
 
     pub(crate) fn take_level(&mut self, level: usize) -> LevelWorkspace {
