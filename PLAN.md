@@ -32,9 +32,10 @@ intentional interface or numerical deviations.
 - [x] faithful forest diameter/conductance splitting;
 - [x] low-effective-degree forest correction;
 - [x] deterministic forest-component labeling;
-- [ ] exact Galerkin coarse-graph contraction;
-- [ ] upstream hierarchy terminal and stagnation rules;
-- [ ] upstream nonzero-ratio recursive repeat schedule;
+- [x] exact Galerkin coarse-graph contraction;
+- [x] upstream hierarchy terminal and stagnation rules;
+- [ ] final upstream nonzero-ratio recursive repeat schedule, including the
+      direct-terminal factor nonzero count;
 - [ ] grounded degree-ordered LDL^T terminal solver;
 - [ ] stationary recursive CMG cycle with damped Jacobi smoothing;
 - [ ] reusable immutable hierarchy and caller-owned workspaces;
@@ -54,9 +55,9 @@ src/
   sddm.rs             SDDM validation and exact augmentation
   components.rs       Connected components and null-space operations
   forest.rs           Heavy-edge forest, splitting, and forest components
-  coarsen.rs          Galerkin graph contraction
+  coarsen.rs          Restriction, prolongation, and Galerkin contraction
+  hierarchy.rs        Hierarchy construction, stops, repeats, diagnostics
   ldl.rs              Grounded terminal LDL^T
-  hierarchy.rs        CMG hierarchy construction and diagnostics
   workspace.rs        Reusable application workspaces
   preconditioner.rs   Stationary recursive CMG cycle
   pcg.rs              Certified PCG and batched solves
@@ -67,6 +68,7 @@ tests/
   sddm_small.rs
   forest_exact.rs
   hierarchy_exact.rs
+  ldl_small.rs
   preconditioner_properties.rs
   solve_small.rs
   adversarial.rs
@@ -83,9 +85,9 @@ stationary reference port is qualified.
 |---|---|---|
 | 0. Contract, provenance, CI | **complete** | Cross-platform quality/test checkpoint green |
 | 1. Graph and SDDM core | **complete** | Dense assembly, energy, exact augmentation, and component tests green |
-| 2. Forest decomposition | **implemented; final quality CI pending** | Golden parent/split/component tests green on three OSes |
-| 3. Coarse graphs and hierarchy | **in progress locally** | Dense `R L R^T` and hierarchy-digest tests pass |
-| 4. Terminal LDL^T | not started | Dense-reference solution and residual tests pass |
+| 2. Forest decomposition | **complete** | Golden parent/split/component tests and quality gates green |
+| 3. Coarse graphs and hierarchy | **implemented; formatted quality CI running** | Dense `R L R^T`, stop-rule, and hierarchy tests green on three OSes |
+| 4. Terminal LDL^T | **in progress locally** | Dense-reference solution and residual tests pass |
 | 5. CMG cycle | not started | Linearity, symmetry, positivity, and recursion tests pass |
 | 6. PCG and batching | not started | Certified end-to-end small solves pass |
 | 7. Adversarial qualification | not started | Debug/release suites pass on all CI platforms |
@@ -105,7 +107,12 @@ The current code provides:
 - right-hand-side lifting and gauge-invariant SDDM solution extraction;
 - deterministic maximum-weight incident-edge selection with explicit tie rules;
 - a line-by-line Rust port of the pinned C forest diameter/conductance splitter;
-- upstream low-effective-degree correction and deterministic aggregate labels.
+- upstream low-effective-degree correction and deterministic aggregate labels;
+- restriction and prolongation through an explicit aggregation map;
+- exact edge-based construction of `R L R^T`;
+- direct, full-contraction, vertex-stagnation, fill-stagnation, and maximum-level
+  terminals with explicit diagnostics;
+- provisional nonzero-ratio repeat counts for ordinary coarse levels.
 
 The exact augmentation intentionally improves on the MATLAB wrapper's numerical
 `1e-13` classification: a small but positive row-sum excess is not discarded or
@@ -123,13 +130,13 @@ Current exact tests include:
 - graph dense assembly, matvec, energy, duplicate and permutation invariance;
 - disconnected components, singleton handling and RHS compatibility;
 - exact SDDM augmentation, lifting and gauge-invariant extraction;
-- heavy-edge tie behavior;
-- a pinned-C-kernel long-path forest split vector;
-- deterministic forest component labels;
-- low-effective-degree behavior on an equal-weight clique;
-- isolated-vertex forest grouping.
+- heavy-edge tie behavior and a pinned-C-kernel forest split vector;
+- deterministic forest component labels and low-effective-degree behavior;
+- restriction/prolongation and dense-oracle Galerkin equality;
+- every hierarchy terminal reason, strict level reduction, and repeat lower
+  bounds on a forced multilevel path.
 
-Remaining invariants include exact Galerkin contraction, preconditioner
+Remaining invariants include direct-factor residuals, preconditioner
 linearity/symmetry/positivity, batch equality, and end-to-end residual
 certification.
 
@@ -142,6 +149,7 @@ certification.
 - Every positive SDDM dominance excess is augmented exactly, including values
   below the MATLAB wrapper's numerical strict-dominance threshold.
 - Rust exposes hierarchy diagnostics and certified PCG results directly.
+- A configurable maximum-level guard is added as a hard safety limit.
 
 The hierarchy constants and stationary cycle remain faithful to the pinned
 upstream implementation unless a deviation is recorded here.
@@ -157,15 +165,20 @@ upstream implementation unless a deviation is recorded here.
 | 2026-08-22 | Deterministic, single-threaded first | Correctness before parallel optimization |
 | 2026-08-22 | Augment every positive SDDM excess | Preserve the supplied matrix exactly |
 | 2026-08-22 | Lowest-neighbor heavy-edge tie rule | Stable behavior matching sparse index order |
+| 2026-08-22 | Ground one deterministic vertex per component | Extend the upstream connected-graph terminal safely to disconnected inputs |
 
 ## 10. Current risks and open defects
 
-- The formatted forest checkpoint still needs a human-authored trigger commit
-  because GitHub suppresses recursive workflow runs from its formatting bot.
-- The upstream hierarchy can stagnate on dense graphs. The Rust port will
-  preserve its iterative terminal fallback and report it explicitly.
-- The terminal LDL^T implementation is intentionally simple and may be costly
-  for a dense final level.
+- The formatted hierarchy checkpoint needs the full quality rerun triggered by
+  this plan update because GitHub suppresses recursive runs from formatting-bot
+  commits.
+- The final repeat count before a direct terminal must use the terminal LDL
+  factor nonzero count, as in upstream, rather than the provisional coarse graph
+  count.
+- The upstream hierarchy can stagnate on dense graphs. The Rust port preserves
+  its iterative terminal fallback and reports it explicitly.
+- The first terminal LDL implementation prioritizes auditability over sparse
+  asymptotic performance; optimization follows parity and qualification.
 - Local Rust compilation is unavailable in the agent container, so every Rust
   checkpoint is validated through GitHub Actions.
 
@@ -176,11 +189,12 @@ upstream implementation unless a deviation is recorded here.
 | Phase 0 quality harness | `bb5d56e` | green | format, Clippy, docs, debug/release tests and builds on three OSes |
 | Graph foundation | `cfd4d073` | green after rustfmt | deterministic graph, components, energy and dense oracle |
 | Exact SDDM layer | `8c5f710b`–`9fa8af0b` | green | exact augmentation and focused tests on three OSes |
-| Forest decomposition | `a5b80c9b` | tests green; quality rerun triggered | heavy-edge, split kernel, low-degree correction, labels |
-| Forest rustfmt | `13a076ea` | pending | automatic formatting checkpoint |
+| Forest decomposition | `a5b80c9b`–`f5fc26d3` | green | heavy-edge, split kernel, low-degree correction, labels |
+| Hierarchy construction | `0403d435` | tests green; initial format failure fixed | exact Galerkin contraction and all terminal guards |
+| Hierarchy rustfmt | `f51405a7` | full quality rerun triggered | formatted source checkpoint |
 
 ## 12. Current next action
 
-Inspect the formatted forest quality run and repair any Clippy/documentation
-finding. Then implement deterministic Galerkin contraction and hierarchy level
-construction with dense `R L R^T` equality tests.
+Complete and qualify the deterministic component-grounded, static-degree-ordered
+LDL^T terminal solver. Then integrate its factor nonzero count into the final
+upstream repeat schedule before implementing the recursive stationary cycle.
