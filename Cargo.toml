@@ -2,5 +2,14 @@
 name = "cmg"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-only"
+description = "Deterministic Rust port of the Combinatorial Multigrid preconditioner"
+repository = "https://github.com/johannes-schmieder/CMG"
+readme = "README.md"
+keywords = ["laplacian", "multigrid", "preconditioner", "pcg", "sparse"]
+categories = ["algorithms", "mathematics", "science"]
 
 [dependencies]
+
+[dev-dependencies]
