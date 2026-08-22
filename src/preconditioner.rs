@@ -97,6 +97,9 @@ impl CmgPreconditioner {
     }
 
     /// Apply with explicit compatibility-validation tolerances.
+    ///
+    /// A component sum accepted as floating-point roundoff is projected to
+    /// exact zero before the stationary CMG cycle is evaluated.
     pub fn apply_into_with_validation(
         &self,
         rhs: &[f64],
@@ -119,9 +122,16 @@ impl CmgPreconditioner {
                 output.len(),
             ));
         }
-        self.components.validate_rhs(rhs, validation)?;
         workspace.validate(&self.hierarchy, self.direct_terminal.as_ref())?;
-        self.apply_level(0, rhs, output, workspace)
+        let mut projected_rhs = workspace.take_projected_rhs();
+        projected_rhs.copy_from_slice(rhs);
+        let result = (|| {
+            self.components
+                .project_rhs_in_place(&mut projected_rhs, validation)?;
+            self.apply_level(0, &projected_rhs, output, workspace)
+        })();
+        workspace.put_projected_rhs(projected_rhs);
+        result
     }
 
     fn apply_level(
