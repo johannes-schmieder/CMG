@@ -106,12 +106,9 @@ fn singular_laplacian_sddm_uses_component_gauge() {
     .unwrap();
     let known = [4.0, -2.0, 1.0];
     let rhs = matrix.matvec(&known).unwrap();
-    let solver = SddmSolver::from_matrix(
-        &matrix,
-        CmgOptions::default(),
-        ValidationOptions::default(),
-    )
-    .unwrap();
+    let solver =
+        SddmSolver::from_matrix(&matrix, CmgOptions::default(), ValidationOptions::default())
+            .unwrap();
     assert!(!solver.augmentation().is_augmented());
     let result = solver.solve(&rhs, PcgOptions::default()).unwrap();
     assert!(norm(&residual(&matrix, &rhs, result.solution())) <= result.tolerance());
@@ -127,12 +124,9 @@ fn incompatible_rhs_on_a_singular_block_is_rejected() {
         ValidationOptions::default(),
     )
     .unwrap();
-    let solver = SddmSolver::from_matrix(
-        &matrix,
-        CmgOptions::default(),
-        ValidationOptions::default(),
-    )
-    .unwrap();
+    let solver =
+        SddmSolver::from_matrix(&matrix, CmgOptions::default(), ValidationOptions::default())
+            .unwrap();
     assert!(matches!(
         solver.solve(&[1.0, 0.0], PcgOptions::default()),
         Err(CmgError::IncompatibleLaplacianRhs { .. })
@@ -150,12 +144,9 @@ fn workspace_and_batch_results_match_individual_solves() {
         ValidationOptions::default(),
     )
     .unwrap();
-    let solver = SddmSolver::from_matrix(
-        &matrix,
-        CmgOptions::default(),
-        ValidationOptions::default(),
-    )
-    .unwrap();
+    let solver =
+        SddmSolver::from_matrix(&matrix, CmgOptions::default(), ValidationOptions::default())
+            .unwrap();
     let right_hand_sides = vec![
         matrix.matvec(&[1.0, 2.0, 3.0]).unwrap(),
         matrix.matvec(&[-2.0, 0.5, 4.0]).unwrap(),
