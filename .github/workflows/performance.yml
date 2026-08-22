@@ -1,0 +1,101 @@
+name: Performance benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'PERFORMANCE_PLAN.md'
+      - '.github/workflows/performance.yml'
+  workflow_dispatch:
+    inputs:
+      vertices:
+        description: Synthetic worker-firm vertex count
+        required: false
+        default: '20000'
+      rhs:
+        description: Number of right-hand sides
+        required: false
+        default: '4'
+      repetitions:
+        description: Timing repetitions
+        required: false
+        default: '3'
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    env:
+      VERTICES: ${{ github.event.inputs.vertices || '20000' }}
+      RHS: ${{ github.event.inputs.rhs || '4' }}
+      REPETITIONS: ${{ github.event.inputs.repetitions || '3' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Record machine
+        shell: bash
+        run: |
+          uname -a
+          lscpu || true
+          free -h || true
+          rustc --version
+          cargo --version
+
+      - name: Build benchmark
+        run: cargo build --release --bin cmg-bench
+
+      - name: Run path benchmark
+        shell: bash
+        run: |
+          target/release/cmg-bench \
+            --case path \
+            --vertices "$VERTICES" \
+            --rhs "$RHS" \
+            --repetitions "$REPETITIONS" \
+            --output benchmark-path.json
+
+      - name: Run worker-firm benchmark
+        shell: bash
+        run: |
+          target/release/cmg-bench \
+            --case worker-firm \
+            --vertices "$VERTICES" \
+            --rhs "$RHS" \
+            --repetitions "$REPETITIONS" \
+            --output benchmark-worker-firm.json
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          {
+            echo '## CMG performance checkpoint'
+            echo
+            echo '**Path**'
+            echo '```json'
+            cat benchmark-path.json
+            echo '```'
+            echo
+            echo '**Worker–firm**'
+            echo '```json'
+            cat benchmark-worker-firm.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmg-performance-${{ github.sha }}
+          path: |
+            benchmark-path.json
+            benchmark-worker-firm.json
+          if-no-files-found: error
+          retention-days: 30
