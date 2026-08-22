@@ -1,0 +1,460 @@
+name: Evaluate compact centering metadata
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/evaluate-compact-centering-metadata.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compact-centering-metadata
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Record baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "BASELINE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/compact-centering-results"
+
+      - name: Build baseline binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMG_BENCH_COMMIT="$BASELINE_SHA" \
+          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compact-baseline" \
+            cargo build --release --bin cmg-bench
+          cp "$RUNNER_TEMP/cmg-compact-baseline/release/cmg-bench" \
+             "$RUNNER_TEMP/cmg-bench-baseline"
+
+          CMG_BENCH_COMMIT="$BASELINE_SHA" \
+          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-c-compact-baseline" \
+            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cp "$RUNNER_TEMP/cmg-c-compact-baseline/release/cmg-c-kernel-bench" \
+             "$RUNNER_TEMP/cmg-c-kernel-baseline"
+
+      - name: Benchmark baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          for CASE in path worker-firm; do
+            "$RUNNER_TEMP/cmg-bench-baseline" \
+              --case "$CASE" --vertices 20000 --rhs 4 --repetitions 9 \
+              --output "$RUNNER_TEMP/compact-centering-results/solve-baseline-${CASE}.json"
+            "$RUNNER_TEMP/cmg-c-kernel-baseline" \
+              --case "$CASE" --vertices 100000 --repetitions 7 \
+              --output "$RUNNER_TEMP/compact-centering-results/cycle-baseline-${CASE}.json"
+          done
+
+      - name: Apply compact coarse-centering metadata patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/compact_centering_metadata_experiment.py
+          cargo fmt --all
+
+      - name: Validate candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo check --lib --no-default-features
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+          cargo test --all-targets --all-features --release
+          RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --document-private-items --all-features
+          cargo fmt --manifest-path benchmarks/c-kernel/Cargo.toml --all -- --check
+          cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets --release
+
+      - name: Build candidate binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          CMG_BENCH_COMMIT="compact-centering-candidate" \
+          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-compact-candidate" \
+            cargo build --release --bin cmg-bench
+          cp "$RUNNER_TEMP/cmg-compact-candidate/release/cmg-bench" \
+             "$RUNNER_TEMP/cmg-bench-candidate"
+
+          CMG_BENCH_COMMIT="compact-centering-candidate" \
+          CARGO_TARGET_DIR="$RUNNER_TEMP/cmg-c-compact-candidate" \
+            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+          cp "$RUNNER_TEMP/cmg-c-compact-candidate/release/cmg-c-kernel-bench" \
+             "$RUNNER_TEMP/cmg-c-kernel-candidate"
+
+      - name: Benchmark candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          for CASE in path worker-firm; do
+            "$RUNNER_TEMP/cmg-bench-candidate" \
+              --case "$CASE" --vertices 20000 --rhs 4 --repetitions 9 \
+              --output "$RUNNER_TEMP/compact-centering-results/solve-candidate-${CASE}.json"
+            "$RUNNER_TEMP/cmg-c-kernel-candidate" \
+              --case "$CASE" --vertices 100000 --repetitions 7 \
+              --output "$RUNNER_TEMP/compact-centering-results/cycle-candidate-${CASE}.json"
+          done
+
+      - name: Evaluate candidate
+        id: evaluate
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "compact-centering-results"
+          cases = ("path", "worker-firm")
+          records = {}
+          reasons = []
+          solve_ratios = {}
+          apply_ratios = {}
+          cycle_ratios = {}
+          hierarchy_ratios = {}
+          metadata_ratios = {}
+          workspace_ratios = {}
+
+          def load(kind, version, case):
+              return json.loads((root / f"{kind}-{version}-{case}.json").read_text())
+
+          def finite_sequence(values):
+              return all(math.isfinite(float(value)) for value in values)
+
+          for case in cases:
+              solve_baseline = load("solve", "baseline", case)
+              solve_candidate = load("solve", "candidate", case)
+              cycle_baseline = load("cycle", "baseline", case)
+              cycle_candidate = load("cycle", "candidate", case)
+              records[case] = {
+                  "solve_baseline": solve_baseline,
+                  "solve_candidate": solve_candidate,
+                  "cycle_baseline": cycle_baseline,
+                  "cycle_candidate": cycle_candidate,
+              }
+
+              for field in (
+                  "canonical_edges",
+                  "terminal_reason",
+                  "level_vertices",
+                  "level_matrix_nonzeros",
+                  "iterations",
+              ):
+                  if solve_candidate.get(field) != solve_baseline.get(field):
+                      reasons.append(f"{case}: changed {field}")
+
+              baseline_errors = solve_baseline["backward_errors"]
+              candidate_errors = solve_candidate["backward_errors"]
+              if not finite_sequence(candidate_errors):
+                  reasons.append(f"{case}: non-finite candidate backward error")
+              if len(candidate_errors) != len(baseline_errors):
+                  reasons.append(f"{case}: changed backward-error vector length")
+              else:
+                  for index, (before, after) in enumerate(zip(baseline_errors, candidate_errors)):
+                      tolerance = max(5.0e-12, 1.0e-6 * max(abs(before), 1.0e-30))
+                      if abs(after - before) > tolerance:
+                          reasons.append(
+                              f"{case}: backward error {index} changed by {after - before:.3e}"
+                          )
+
+              baseline_cycle = cycle_baseline["cycle"]
+              candidate_cycle = cycle_candidate["cycle"]
+              if candidate_cycle["hierarchy_levels"] != baseline_cycle["hierarchy_levels"]:
+                  reasons.append(f"{case}: changed C-cycle hierarchy depth")
+              quotient_error = candidate_cycle["quotient_max_scaled_error"]
+              allowed_quotient = max(
+                  2.5e-12,
+                  1.10 * baseline_cycle["quotient_max_scaled_error"] + 1.0e-15,
+              )
+              if not math.isfinite(quotient_error) or quotient_error > allowed_quotient:
+                  reasons.append(
+                      f"{case}: C-cycle quotient error {quotient_error:.3e} "
+                      f"exceeds {allowed_quotient:.3e}"
+                  )
+
+              solve_ratios[case] = (
+                  solve_candidate["solve_per_rhs_median_ns"]
+                  / solve_baseline["solve_per_rhs_median_ns"]
+              )
+              apply_ratios[case] = (
+                  solve_candidate["preconditioner_apply_median_ns"]
+                  / solve_baseline["preconditioner_apply_median_ns"]
+              )
+              hierarchy_ratios[case] = (
+                  solve_candidate["hierarchy_build_median_ns"]
+                  / solve_baseline["hierarchy_build_median_ns"]
+              )
+              cycle_ratios[case] = (
+                  candidate_cycle["rust_median_ns"]
+                  / baseline_cycle["rust_median_ns"]
+              )
+
+              candidate_metadata = solve_candidate.get("component_metadata_bytes")
+              if candidate_metadata is None:
+                  reasons.append(f"{case}: candidate omitted component_metadata_bytes")
+                  candidate_metadata = 2**63
+              old_label_lower_bound = sum(solve_baseline["level_vertices"]) * 8
+              metadata_ratios[case] = candidate_metadata / old_label_lower_bound
+              if candidate_metadata >= old_label_lower_bound:
+                  reasons.append(
+                      f"{case}: metadata {candidate_metadata} did not beat "
+                      f"old label-only lower bound {old_label_lower_bound}"
+                  )
+
+              workspace_ratios[case] = (
+                  solve_candidate["cmg_workspace_bytes"]
+                  / solve_baseline["cmg_workspace_bytes"]
+              )
+              if solve_candidate["cmg_workspace_bytes"] > solve_baseline["cmg_workspace_bytes"]:
+                  reasons.append(f"{case}: CMG workspace grew")
+              if solve_candidate["pcg_workspace_bytes"] > solve_baseline["pcg_workspace_bytes"]:
+                  reasons.append(f"{case}: PCG workspace grew")
+
+          def geometric_mean(mapping):
+              return math.exp(sum(math.log(value) for value in mapping.values()) / len(mapping))
+
+          solve_geomean = geometric_mean(solve_ratios)
+          apply_geomean = geometric_mean(apply_ratios)
+          cycle_geomean = geometric_mean(cycle_ratios)
+          hierarchy_geomean = geometric_mean(hierarchy_ratios)
+          metadata_geomean = geometric_mean(metadata_ratios)
+
+          if max(solve_ratios.values()) > 1.08 or solve_geomean > 1.04:
+              reasons.append("solve-time acceptance gate failed")
+          if max(apply_ratios.values()) > 1.08 or apply_geomean > 1.04:
+              reasons.append("stationary-apply acceptance gate failed")
+          if max(cycle_ratios.values()) > 1.08 or cycle_geomean > 1.04:
+              reasons.append("C-cycle timing acceptance gate failed")
+          if max(hierarchy_ratios.values()) > 1.12 or hierarchy_geomean > 1.08:
+              reasons.append("hierarchy-build acceptance gate failed")
+          if metadata_geomean > 0.90:
+              reasons.append("metadata reduction was too small")
+
+          accepted = not reasons
+          record = {
+              "schema": 1,
+              "baseline_sha": os.environ["BASELINE_SHA"],
+              "accepted": accepted,
+              "reasons": reasons,
+              "solve_ratios": solve_ratios,
+              "solve_geometric_mean_ratio": solve_geomean,
+              "apply_ratios": apply_ratios,
+              "apply_geometric_mean_ratio": apply_geomean,
+              "cycle_ratios": cycle_ratios,
+              "cycle_geometric_mean_ratio": cycle_geomean,
+              "hierarchy_ratios": hierarchy_ratios,
+              "hierarchy_geometric_mean_ratio": hierarchy_geomean,
+              "metadata_over_old_label_lower_bound": metadata_ratios,
+              "metadata_geometric_mean_ratio": metadata_geomean,
+              "cmg_workspace_ratios": workspace_ratios,
+              "records": records,
+          }
+          output = Path(".ci/performance/compact-centering-metadata-latest.json")
+          output.parent.mkdir(parents=True, exist_ok=True)
+          output.write_text(json.dumps(record, indent=2) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write(f"accepted={str(accepted).lower()}\n")
+
+      - name: Update live plan
+        shell: python
+        env:
+          ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          record_path = Path(".ci/performance/compact-centering-metadata-latest.json")
+          record = json.loads(record_path.read_text())
+          accepted = os.environ["ACCEPTED"] == "true"
+          plan = Path("PERFORMANCE_PLAN.md")
+          text = plan.read_text()
+
+          retained_anchor = (
+              "- `.ci/performance/recursive-centering-latest.json`: "
+              "accepted internal coarse-residual centering experiment.\n"
+          )
+          retained_entry = (
+              "- `.ci/performance/compact-centering-metadata-latest.json`: "
+              f"{'accepted' if accepted else 'rejected'} coarse-centering metadata experiment.\n"
+          )
+          if retained_entry not in text:
+              if text.count(retained_anchor) != 1:
+                  raise SystemExit("retained-record anchor changed")
+              text = text.replace(retained_anchor, retained_anchor + retained_entry, 1)
+
+          checkpoint_anchor = (
+              "| 2026-08-22 | `f6378554` | Recursive full compatibility projection "
+              "replaced by centering; C parity and solve gates passed |\n"
+          )
+          if accepted:
+              memory_entry = (
+                  "- Full public-quality `Components` metadata is retained only at the finest "
+                  "level. Coarse levels retain a minimal centering plan, use four-byte labels "
+                  "when labels are needed, and omit labels entirely for a single component.\n"
+                  "- Coarse centering scratch stores only sums, compensation terms, and means; "
+                  "the larger projection workspace is retained only for the public finest-level "
+                  "compatibility boundary.\n"
+              )
+              memory_anchor = (
+                  "- `GroundedLdl`, `CmgWorkspace`, and `PcgWorkspace` report retained "
+                  "principal heap bytes.\n"
+              )
+              if memory_entry not in text:
+                  if text.count(memory_anchor) != 1:
+                      raise SystemExit("memory implementation anchor changed")
+                  text = text.replace(memory_anchor, memory_anchor + memory_entry, 1)
+
+              path_ratio = record["metadata_over_old_label_lower_bound"]["path"]
+              worker_ratio = record["metadata_over_old_label_lower_bound"]["worker-firm"]
+              solve_geo = record["solve_geometric_mean_ratio"]
+              cycle_geo = record["cycle_geometric_mean_ratio"]
+              result_paragraph = (
+                  "\nThe compact coarse-centering metadata experiment was retained after "
+                  "cross-checking hierarchy structure, iterations, backward errors, and the "
+                  "pinned-C stationary cycle. Candidate metadata was "
+                  f"`{path_ratio:.3f}x` and `{worker_ratio:.3f}x` of the old label-only lower "
+                  f"bound on path and worker–firm cases. The same-run geometric-mean solve "
+                  f"ratio was `{solve_geo:.3f}x` and the C-cycle ratio was `{cycle_geo:.3f}x`.\n"
+              )
+              result_anchor = (
+                  "Backward errors changed only at floating-point roundoff scale. "
+                  "The full-cycle quotient-space differences from pinned C remained about "
+                  "`2.1e-12` on the path case and approximately `1.0e-15` on worker–firm.\n"
+              )
+              if result_paragraph not in text:
+                  if text.count(result_anchor) != 1:
+                      raise SystemExit("result paragraph anchor changed")
+                  text = text.replace(result_anchor, result_anchor + result_paragraph, 1)
+
+              old_hot = (
+                  "1. Coarse component metadata and full public-quality `ComponentWorkspace` "
+                  "scratch remain allocated at every hierarchy level even though recursive "
+                  "application now needs only centering. A follow-up memory cleanup must retain "
+                  "full finest-level public validation and exact C parity.\n"
+                  "2. The compatible public method still validates dimensions, workspace "
+                  "structure, and options on every PCG application. A crate-private prevalidated "
+                  "core may remove small repeated checks after the component-metadata cleanup is "
+                  "measured.\n"
+                  "3. Single-RHS production PCG remains mostly serial even when the optional "
+                  "parallel feature is enabled.\n"
+                  "4. Coarse contraction still allocates endpoint triples and sorts at every "
+                  "level.\n"
+                  "5. Terminal setup materializes dense temporary matrices before retaining "
+                  "compressed factors.\n"
+                  "6. Aggregation labels remain native-width `usize`; compact labels could "
+                  "reduce bandwidth, but total hierarchy memory and public API compatibility "
+                  "must be measured before adoption.\n"
+                  "7. Hosted hardware has qualified only 1–4 threads.\n"
+              )
+              new_hot = (
+                  "1. The compatible public method still validates dimensions, workspace "
+                  "structure, and options on every PCG application. A crate-private prevalidated "
+                  "core may remove small repeated checks inside PCG.\n"
+                  "2. Single-RHS production PCG remains mostly serial even when the optional "
+                  "parallel feature is enabled.\n"
+                  "3. Coarse contraction still allocates endpoint triples and sorts at every "
+                  "level.\n"
+                  "4. Terminal setup materializes dense temporary matrices before retaining "
+                  "compressed factors.\n"
+                  "5. Aggregation maps remain native-width `usize`; compact storage could "
+                  "reduce bandwidth, but must be evaluated without duplicating labels.\n"
+                  "6. Hosted hardware has qualified only 1–4 threads.\n"
+              )
+              if old_hot not in text:
+                  raise SystemExit("hot-spot block changed")
+              text = text.replace(old_hot, new_hot, 1)
+
+              checkpoint_entry = (
+                  "| 2026-08-22 | compact centering metadata | Full component metadata "
+                  "retained only at the finest level; memory, solve, and C-cycle gates passed |\n"
+              )
+              if checkpoint_entry not in text:
+                  if text.count(checkpoint_anchor) != 1:
+                      raise SystemExit("checkpoint anchor changed")
+                  text = text.replace(checkpoint_anchor, checkpoint_anchor + checkpoint_entry, 1)
+
+              old_next = (
+                  "1. Qualify the combined in-place-output and recursive-centering checkpoint "
+                  "on Ubuntu, macOS, and Windows and refresh matched serial/parallel records.\n"
+                  "2. Remove now-unneeded coarse component metadata and full projection scratch "
+                  "while retaining finest-level public validation; benchmark memory and complete-"
+                  "solve time.\n"
+                  "3. Measure a crate-private prevalidated apply path that skips repeated "
+                  "workspace/options checks inside PCG only after the metadata cleanup is "
+                  "qualified.\n"
+                  "4. Continue large setup profiling and obtain 8–32-thread evidence when a "
+                  "suitable runner is available.\n"
+                  "5. Remove obsolete one-shot staging workflows and scripts after the active "
+                  "qualification checkpoint is secure.\n"
+              )
+              new_next = (
+                  "1. Measure a crate-private prevalidated apply path that skips repeated "
+                  "workspace/options checks inside PCG.\n"
+                  "2. Continue large setup profiling, especially coarse contraction allocation "
+                  "and sorting.\n"
+                  "3. Obtain 8–32-thread and high-memory evidence when a suitable runner is "
+                  "available.\n"
+                  "4. Remove remaining obsolete one-shot workflows and staging scripts after "
+                  "the active checkpoint is secure.\n"
+              )
+              if old_next not in text:
+                  raise SystemExit("next-action block changed")
+              text = text.replace(old_next, new_next, 1)
+          else:
+              rejected_entry = (
+                  "- Compact coarse-centering metadata was tested and rejected by the retained "
+                  "memory/performance/C-parity gates; see the retained record before revisiting.\n"
+              )
+              rejected_anchor = (
+                  "- Duplicating native and compact aggregation labels is not accepted without "
+                  "an end-to-end memory and speed win.\n"
+              )
+              if rejected_entry not in text:
+                  if text.count(rejected_anchor) != 1:
+                      raise SystemExit("rejected-experiment anchor changed")
+                  text = text.replace(rejected_anchor, rejected_anchor + rejected_entry, 1)
+
+          plan.write_text(text)
+
+      - name: Commit accepted optimization or rejection record
+        shell: bash
+        env:
+          ACCEPTED: ${{ steps.evaluate.outputs.accepted }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/evaluate-compact-centering-metadata.yml
+          rm scripts/compact_centering_metadata_experiment.py
+          rm -f .github/workflows/update-centering-plan.yml
+          rm -rf benchmarks/c-kernel/target
+          rm -f benchmarks/c-kernel/Cargo.lock
+
+          if [ "$ACCEPTED" != true ]; then
+            git restore src/components.rs src/workspace.rs src/preconditioner.rs src/bin/cmg-bench.rs
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if [ "$ACCEPTED" = true ]; then
+            git commit -m 'perf: compact coarse centering metadata'
+          else
+            git commit -m 'perf: record rejected compact centering metadata experiment'
+          fi
+          git pull --rebase origin main
+          git push origin HEAD:main
