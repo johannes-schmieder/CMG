@@ -118,7 +118,13 @@ fn compare(graph: Laplacian) {
         ValidationOptions::default().compatibility_tolerance,
     );
     let reference = reference_apply(&preconditioner, 0, &projected_rhs, 1);
+    let mut compatible_workspace = preconditioner.workspace();
+    let mut compatible = vec![0.0; graph.vertex_count()];
+    preconditioner
+        .apply_compatible_into(&projected_rhs, &mut compatible, &mut compatible_workspace)
+        .unwrap();
     assert_vector_close(&production, &reference, 1.0e-12);
+    assert_vector_close(&compatible, &reference, 1.0e-12);
 }
 
 #[test]

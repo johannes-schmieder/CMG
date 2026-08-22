@@ -222,7 +222,7 @@ pub fn solve_pcg_with_workspace(
         });
     }
 
-    preconditioner.apply_into_with_validation(
+    preconditioner.apply_compatible_into_with_validation(
         &workspace.residual,
         &mut workspace.preconditioned,
         &mut workspace.cmg,
@@ -315,7 +315,12 @@ pub fn solve_pcg_with_workspace(
             break;
         }
 
-        preconditioner.apply_into_with_validation(
+        // The public solver projected the submitted RHS once. Remove only the
+        // component-nullspace roundoff accumulated by Krylov updates before
+        // reusing the compatible stationary core.
+        components
+            .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)?;
+        preconditioner.apply_compatible_into_with_validation(
             &workspace.residual,
             &mut workspace.preconditioned,
             &mut workspace.cmg,

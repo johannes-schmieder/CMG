@@ -277,7 +277,7 @@ pub(crate) fn benchmark(
     let mut rust_output = vec![0.0; dimension];
     let mut c_output = vec![0.0; dimension];
 
-    preconditioner.apply_into(&rhs, &mut rust_output, &mut rust_workspace)?;
+    preconditioner.apply_compatible_into(&rhs, &mut rust_output, &mut rust_workspace)?;
     reference.apply_into(&rhs, &mut c_output)?;
     let (raw_max_abs_error, raw_max_scaled_error) = compare_outputs(&rust_output, &c_output);
     let mut rust_quotient = rust_output.clone();
@@ -294,7 +294,7 @@ pub(crate) fn benchmark(
     }
 
     for _ in 0..3 {
-        preconditioner.apply_into(
+        preconditioner.apply_compatible_into(
             black_box(&rhs),
             black_box(&mut rust_output),
             &mut rust_workspace,
@@ -352,7 +352,7 @@ fn time_rust(
 ) -> Result<u128, AnyError> {
     let start = Instant::now();
     for _ in 0..loops {
-        preconditioner.apply_into(black_box(rhs), black_box(&mut *output), workspace)?;
+        preconditioner.apply_compatible_into(black_box(rhs), black_box(&mut *output), workspace)?;
     }
     Ok(start.elapsed().as_nanos())
 }

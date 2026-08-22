@@ -133,6 +133,64 @@ impl CmgPreconditioner {
         self.apply_into_with_validation(rhs, output, workspace, ValidationOptions::default())
     }
 
+    /// Apply a right-hand side already known to be component-compatible.
+    ///
+    /// This skips the fine-level compatibility scan and projection performed by
+    /// [`Self::apply_into`]. It is intended for Krylov solvers that validate and
+    /// project a submitted right-hand side once, then keep residuals in the
+    /// Laplacian range. Dimension, workspace, and option checks remain enabled;
+    /// recursive coarse-level roundoff handling is unchanged.
+    pub fn apply_compatible_into(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+    ) -> Result<(), CmgError> {
+        self.apply_compatible_into_with_validation(
+            rhs,
+            output,
+            workspace,
+            ValidationOptions::default(),
+        )
+    }
+
+    /// Apply an already compatible right-hand side with explicit validation
+    /// tolerances for recursive coarse-level roundoff handling.
+    ///
+    /// Callers are responsible for ensuring component-wise compatibility. An
+    /// incompatible right-hand side does not represent a solvable Laplacian
+    /// system and should use [`Self::apply_into`] instead.
+    pub fn apply_compatible_into_with_validation(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
+    ) -> Result<(), CmgError> {
+        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
+        if rhs.len() != dimension {
+            return Err(CmgError::dimension(
+                "CmgPreconditioner::apply compatible rhs",
+                dimension,
+                rhs.len(),
+            ));
+        }
+        if output.len() != dimension {
+            return Err(CmgError::dimension(
+                "CmgPreconditioner::apply compatible output",
+                dimension,
+                output.len(),
+            ));
+        }
+        workspace.validate(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.level_components,
+        )?;
+        validation.validate()?;
+        self.apply_level(0, rhs, output, workspace, 1, validation)
+    }
+
     /// Apply with explicit compatibility-validation tolerances.
     ///
     /// A component sum accepted as floating-point roundoff is projected to
