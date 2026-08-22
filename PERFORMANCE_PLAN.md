@@ -22,6 +22,7 @@ Retained records:
 - `.ci/performance/prevalidated-pcg-apply-latest.json`: rejected prevalidated PCG apply experiment.
 - `.ci/performance/terminal-factor-latest.json`: accepted direct terminal-factor assembly experiment.
 - `.ci/performance/inplace-edge-compaction-latest.json`: rejected in-place edge-compaction experiment.
+- `.ci/performance/hierarchy-allocation-probe.json`: benchmark-only exact requested-byte hierarchy allocation probe.
 
 Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA behavior, or very large memory configurations require a larger or self-hosted runner.
 
@@ -208,6 +209,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Qualification status: `success`.
 - Machine-readable evidence:
   `.ci/performance/compact-edge-build-buffer-latest.json`.
+
+### Hierarchy allocation probe checkpoint — 2026-08-22
+
+- Added a benchmark-only global counting allocator that resets its peak
+  after graph construction and reports additional live requested bytes during
+  hierarchy construction, retained hierarchy bytes, and post-drop balance.
+- The probe is isolated from production code and supplements, rather than
+  replaces, process-level peak-RSS measurements.
+- Formatting, benchmark Clippy, release compilation, and representative
+  path/worker-firm/dense-worker-firm runs passed.
+- Machine-readable evidence:
+  `.ci/performance/hierarchy-allocation-probe.json`.
 
 ## Current next action
 
