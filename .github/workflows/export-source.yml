@@ -1,4 +1,4 @@
-name: Export source snapshot
+name: Repair and validate parallel benchmark
 
 on:
   push:
@@ -10,35 +10,85 @@ permissions:
   contents: write
 
 jobs:
-  export:
+  repair:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
-      - name: Archive source
-        shell: bash
-        run: tar --exclude='.git' -czf /tmp/cmg-source.tar.gz .
+      - name: Repair reconstructed benchmark source
+        shell: python
+        run: |
+          from pathlib import Path
 
-      - name: Upload source snapshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: cmg-source-${{ github.sha }}
-          path: /tmp/cmg-source.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          path = Path('src/bin/cmg-parallel-bench.rs')
+          text = path.read_text()
+          replacements = {
+              "parse_usize(next_value(&mut arguments, \"--vertices\")?, 'vertices')?":
+                  "parse_usize(next_value(&mut arguments, \"--vertices\")?, \"vertices\")?",
+              "parse_usize(next_value(&mut arguments, \"--rhs\")?, 'r')?":
+                  "parse_usize(next_value(&mut arguments, \"--rhs\")?, \"rhs\")?",
+              "invalid_input('vertices must be at least 2')":
+                  "invalid_input(\"vertices must be at least 2\")",
+              "fn json_usize_array(values: &mut [usize])":
+                  "fn json_usize_array(values: &[usize])",
+              "collect::<Vec_>>()":
+                  "collect::<Vec<_>>()",
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one occurrence of {old!r}, found {count}')
+              text = text.replace(old, new)
+          suspicious = ["'vertices'", "'r'", "invalid_input('", "Vec_>"]
+          leftovers = [token for token in suspicious if token in text]
+          if leftovers:
+              raise SystemExit(f'leftover reconstructed tokens: {leftovers}')
+          path.write_text(text)
 
-      - name: Record export run
+      - name: Format repaired source
+        run: cargo fmt --all
+
+      - name: Commit repaired checkpoint and clean one-shot workflows
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git pull --rebase origin main
+          rm -f .github/workflows/repair-parallel-bench.yml
+          rm -f .github/workflows/export-source.yml
           mkdir -p .ci
-          printf '{\n  "run_id": "%s",\n  "head_sha": "%s",\n  "artifact_name": "cmg-source-%s"\n}\n' \
-            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$GITHUB_SHA" > .ci/source-export.json
-          git add .ci/source-export.json
-          git commit -m 'dev: record source export [skip ci]'
-          git push
+          printf '{\n  "run_id": "%s",\n  "source_sha": "%s",\n  "status": "testing"\n}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" > .ci/parallel-repair.json
+          git add src/bin/cmg-parallel-bench.rs .github/workflows/repair-parallel-bench.yml \
+            .github/workflows/export-source.yml .ci/parallel-repair.json
+          git commit -m 'fix: repair parallel benchmark reconstruction'
+          git push origin main
+
+      - name: Validate full feature set
+        id: validate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --all-targets --all-features && \
+          cargo test --all-targets --all-features --release && \
+          cargo clippy --all-targets --all-features -- -D warnings && \
+          RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+
+      - name: Record validation result
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin main
+          status='${{ steps.validate.outcome }}'
+          printf '{\n  "run_id": "%s",\n  "source_sha": "%s",\n  "status": "%s"\n}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$status" > .ci/parallel-repair.json
+          git add .ci/parallel-repair.json
+          git commit -m "ci: record parallel repair validation $status [skip ci]"
+          git push origin main
+          test "$status" = success
