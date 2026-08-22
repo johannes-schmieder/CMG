@@ -1,8 +1,8 @@
 //! Construction and diagnostics for the stationary CMG hierarchy.
 
 #[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
-use crate::{Aggregation, CmgError, CmgOptions, Laplacian, build_forest_grouping};
+use crate::{ParallelExecutor, build_forest_grouping_with_executor};
+use crate::{Aggregation, CmgError, CmgOptions, ForestGrouping, Laplacian, build_forest_grouping};
 
 /// The reason hierarchy construction terminated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,9 +127,12 @@ pub struct CmgHierarchy {
 impl CmgHierarchy {
     /// Build a hierarchy from a weighted graph Laplacian.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        Self::build_with_contraction(graph, options, |aggregation, current| {
-            aggregation.contract(current)
-        })
+        Self::build_with_kernels(
+            graph,
+            options,
+            |current, threshold| build_forest_grouping(current, threshold),
+            |aggregation, current| aggregation.contract(current),
+        )
     }
 
     /// Build a hierarchy with deterministic parallel coarse-graph contraction.
@@ -143,17 +146,24 @@ impl CmgHierarchy {
         options: CmgOptions,
         executor: &ParallelExecutor,
     ) -> Result<Self, CmgError> {
-        Self::build_with_contraction(graph, options, |aggregation, current| {
-            aggregation.contract_with_executor(current, executor)
-        })
+        Self::build_with_kernels(
+            graph,
+            options,
+            |current, threshold| {
+                build_forest_grouping_with_executor(current, threshold, executor)
+            },
+            |aggregation, current| aggregation.contract_with_executor(current, executor),
+        )
     }
 
-    fn build_with_contraction<Contract>(
+    fn build_with_kernels<Group, Contract>(
         graph: &Laplacian,
         options: CmgOptions,
+        mut group: Group,
         mut contract: Contract,
     ) -> Result<Self, CmgError>
     where
+        Group: FnMut(&Laplacian, f64) -> Result<ForestGrouping, CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
         let options = options.validate()?;
@@ -171,7 +181,7 @@ impl CmgHierarchy {
                 break;
             }
 
-            let grouping = build_forest_grouping(&current, options.low_effective_degree_threshold)?;
+            let grouping = group(&current, options.low_effective_degree_threshold)?;
             let aggregation =
                 Aggregation::new(grouping.labels().to_vec(), grouping.aggregate_count())?;
             let coarse_count = aggregation.coarse_dimension();

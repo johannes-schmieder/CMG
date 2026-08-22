@@ -34,6 +34,8 @@ pub use execution::ParallelOptions;
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };
+#[cfg(feature = "parallel")]
+pub use forest::{build_forest_grouping_with_executor, maximum_weight_forest_with_executor};
 pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
 pub use ldl::GroundedLdl;

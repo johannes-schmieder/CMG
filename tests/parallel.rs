@@ -2,8 +2,9 @@
 
 use cmg::{
     Aggregation, CmgError, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian,
-    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, solve_pcg_batch,
-    solve_pcg_batch_with_executor,
+    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, build_forest_grouping,
+    build_forest_grouping_with_executor, maximum_weight_forest,
+    maximum_weight_forest_with_executor, solve_pcg_batch, solve_pcg_batch_with_executor,
 };
 
 fn path_problem(vertex_count: usize, rhs_count: usize) -> (Laplacian, Vec<Vec<f64>>) {
@@ -147,6 +148,39 @@ fn parallel_edge_sorting_matches_serial_canonicalization() {
     let parallel = Laplacian::from_edges_with_executor(4_000, raw_edges, &executor).unwrap();
 
     assert_eq!(serial, parallel);
+}
+
+#[test]
+fn parallel_heavy_edge_selection_and_grouping_match_serial_exactly() {
+    let raw_edges: Vec<(usize, usize, f64)> = (0usize..80_000)
+        .flat_map(|index| {
+            let left = index % 12_000;
+            let right = (index.wrapping_mul(48_271).wrapping_add(7) % 12_000 + 1) % 12_000;
+            let right = if right == left {
+                (right + 1) % 12_000
+            } else {
+                right
+            };
+            let weight = 1.0 + (index % 11) as f64;
+            [(left, right, weight), (right, left, weight)]
+        })
+        .collect();
+    let graph = Laplacian::from_edges(12_000, raw_edges).unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 4,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+
+    let serial_forest = maximum_weight_forest(&graph);
+    let parallel_forest = maximum_weight_forest_with_executor(&graph, &executor).unwrap();
+    assert_eq!(serial_forest, parallel_forest);
+
+    let serial_grouping = build_forest_grouping(&graph, 0.125).unwrap();
+    let parallel_grouping =
+        build_forest_grouping_with_executor(&graph, 0.125, &executor).unwrap();
+    assert_eq!(serial_grouping, parallel_grouping);
 }
 
 #[test]

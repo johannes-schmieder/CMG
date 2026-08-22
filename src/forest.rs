@@ -1,5 +1,7 @@
 //! Heavy-edge forests and the CMG forest-partitioning heuristics.
 
+#[cfg(feature = "parallel")]
+use crate::{CsrLaplacian, ParallelExecutor};
 use crate::{CmgError, Laplacian};
 
 /// The complete diagnostic result of one CMG Steiner-group construction.
@@ -59,16 +61,43 @@ pub fn build_forest_grouping(
     graph: &Laplacian,
     low_effective_degree_threshold: f64,
 ) -> Result<ForestGrouping, CmgError> {
-    if !low_effective_degree_threshold.is_finite()
-        || !(0.0..=1.0).contains(&low_effective_degree_threshold)
-    {
-        return Err(CmgError::InvalidOption {
-            name: "low_effective_degree_threshold",
-            value: low_effective_degree_threshold,
-        });
-    }
-
+    validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
     let (heavy_parent, selected_weight) = maximum_weight_forest(graph);
+    finish_forest_grouping(
+        graph,
+        low_effective_degree_threshold,
+        heavy_parent,
+        selected_weight,
+    )
+}
+
+/// Construct the same forest grouping while selecting heavy incident edges in parallel.
+///
+/// CSR row ownership makes every vertex selection independent and preserves the
+/// serial maximum-weight and lowest-neighbor tie rule exactly. Forest splitting,
+/// low-effective-degree correction, and component labeling remain deterministic.
+#[cfg(feature = "parallel")]
+pub fn build_forest_grouping_with_executor(
+    graph: &Laplacian,
+    low_effective_degree_threshold: f64,
+    executor: &ParallelExecutor,
+) -> Result<ForestGrouping, CmgError> {
+    validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
+    let (heavy_parent, selected_weight) = maximum_weight_forest_with_executor(graph, executor)?;
+    finish_forest_grouping(
+        graph,
+        low_effective_degree_threshold,
+        heavy_parent,
+        selected_weight,
+    )
+}
+
+fn finish_forest_grouping(
+    graph: &Laplacian,
+    low_effective_degree_threshold: f64,
+    heavy_parent: Vec<usize>,
+    selected_weight: Vec<f64>,
+) -> Result<ForestGrouping, CmgError> {
     let split_parent = split_forest(&heavy_parent)?;
     let mut final_parent = split_parent.clone();
 
@@ -112,6 +141,16 @@ pub fn build_forest_grouping(
     })
 }
 
+fn validate_low_effective_degree_threshold(threshold: f64) -> Result<(), CmgError> {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(CmgError::InvalidOption {
+            name: "low_effective_degree_threshold",
+            value: threshold,
+        });
+    }
+    Ok(())
+}
+
 /// Select each vertex's maximum-weight incident edge.
 ///
 /// Isolated vertices point to themselves. The selected weight is zero for an
@@ -139,6 +178,22 @@ pub fn maximum_weight_forest(graph: &Laplacian) -> (Vec<usize>, Vec<f64>) {
         );
     }
     (parent, selected_weight)
+}
+
+/// Select every vertex's maximum-weight incident edge using the supplied executor.
+///
+/// Small graphs use the original compact edge-list scan. Larger graphs freeze a
+/// temporary deterministic CSR representation and assign complete rows to workers.
+#[cfg(feature = "parallel")]
+pub fn maximum_weight_forest_with_executor(
+    graph: &Laplacian,
+    executor: &ParallelExecutor,
+) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
+    if !executor.should_parallel(graph.edge_count().saturating_mul(2)) {
+        return Ok(maximum_weight_forest(graph));
+    }
+    let csr = CsrLaplacian::from_laplacian(graph)?;
+    Ok(csr.maximum_weight_neighbors_with_executor(executor))
 }
 
 fn consider_parent(

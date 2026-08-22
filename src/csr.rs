@@ -230,6 +230,61 @@ impl CsrLaplacian {
         Ok(())
     }
 
+    #[cfg(feature = "parallel")]
+    pub(crate) fn maximum_weight_neighbors_with_executor(
+        &self,
+        executor: &ParallelExecutor,
+    ) -> (Vec<usize>, Vec<f64>) {
+        if !executor.should_parallel(self.directed_entry_count()) {
+            return self.maximum_weight_neighbors_serial();
+        }
+        let selections: Vec<(usize, f64)> = executor.install(|| {
+            (0..self.vertex_count)
+                .into_par_iter()
+                .map(|row| self.maximum_weight_neighbor(row))
+                .collect()
+        });
+        selections.into_iter().unzip()
+    }
+
+    fn maximum_weight_neighbors_serial(&self) -> (Vec<usize>, Vec<f64>) {
+        (0..self.vertex_count)
+            .map(|row| self.maximum_weight_neighbor(row))
+            .unzip()
+    }
+
+    fn maximum_weight_neighbor(&self, row: usize) -> (usize, f64) {
+        let mut best_neighbor = row;
+        let mut best_weight = 0.0;
+        match &self.columns {
+            ColumnIndices::Compact(columns) => {
+                for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                    let neighbor = columns[index] as usize;
+                    let weight = self.weights[index];
+                    if weight > best_weight
+                        || (weight == best_weight && neighbor < best_neighbor)
+                    {
+                        best_neighbor = neighbor;
+                        best_weight = weight;
+                    }
+                }
+            }
+            ColumnIndices::Native(columns) => {
+                for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                    let neighbor = columns[index];
+                    let weight = self.weights[index];
+                    if weight > best_weight
+                        || (weight == best_weight && neighbor < best_neighbor)
+                    {
+                        best_neighbor = neighbor;
+                        best_weight = weight;
+                    }
+                }
+            }
+        }
+        (best_neighbor, best_weight)
+    }
+
     fn validate_matvec_dimensions(&self, input: &[f64], output: &[f64]) -> Result<(), CmgError> {
         if input.len() != self.vertex_count {
             return Err(CmgError::dimension(
