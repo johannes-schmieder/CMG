@@ -50,20 +50,26 @@ preconditioner.write_text(
 
 pcg = Path("src/pcg.rs")
 text = pcg.read_text()
-old = '''    preconditioner.apply_compatible_into_with_validation(
-        &workspace.residual,
-        &mut workspace.preconditioned,
-        &mut workspace.cmg,
-        options.validation,
-    )?;
-'''
-new = '''    preconditioner.apply_compatible_prevalidated_into(
-        &workspace.residual,
-        &mut workspace.preconditioned,
-        &mut workspace.cmg,
-    )?;
-'''
-count = text.count(old)
-if count != 2:
-    raise SystemExit(f"PCG compatible-apply calls: expected two anchors, found {count}")
-pcg.write_text(text.replace(old, new))
+method_name = "preconditioner.apply_compatible_into_with_validation("
+if text.count(method_name) != 2:
+    raise SystemExit(
+        "PCG compatible-apply method names: expected two anchors, "
+        f"found {text.count(method_name)}"
+    )
+text = text.replace(
+    method_name,
+    "preconditioner.apply_compatible_prevalidated_into(",
+)
+text = replace_once(
+    text,
+    "        options.validation,\n    )?;\n",
+    "    )?;\n",
+    "initial PCG validation argument",
+)
+text = replace_once(
+    text,
+    "            options.validation,\n        )?;\n",
+    "        )?;\n",
+    "iterative PCG validation argument",
+)
+pcg.write_text(text)
