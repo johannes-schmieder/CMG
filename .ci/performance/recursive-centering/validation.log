@@ -1,0 +1,34 @@
+    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+ Downloading crates ...
+  Downloaded rayon-core v1.13.0
+  Downloaded either v1.18.0
+  Downloaded crossbeam-deque v0.8.7
+  Downloaded crossbeam-epoch v0.9.20
+  Downloaded crossbeam-utils v0.8.22
+  Downloaded rayon v1.12.0
+   Compiling crossbeam-utils v0.8.22
+   Compiling crossbeam-epoch v0.9.20
+   Compiling crossbeam-deque v0.8.7
+   Compiling rayon-core v1.13.0
+    Checking either v1.18.0
+    Checking rayon v1.12.0
+    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)
+error: parameter is only used in recursion
+   --> src/preconditioner.rs:249:9
+    |
+249 |         validation: ValidationOptions,
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_validation`
+    |
+note: parameter used here
+   --> src/preconditioner.rs:346:21
+    |
+346 |                     validation,
+    |                     ^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#only_used_in_recursion
+    = note: `-D clippy::only-used-in-recursion` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::only_used_in_recursion)]`
+
+error: could not compile `cmg` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `cmg` (lib) due to 1 previous error
