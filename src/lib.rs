@@ -12,11 +12,13 @@ mod components;
 mod error;
 mod graph;
 mod options;
+mod sddm;
 
 pub use components::Components;
 pub use error::CmgError;
 pub use graph::{Edge, Laplacian};
 pub use options::ValidationOptions;
+pub use sddm::{SddmAugmentation, SddmMatrix};
 
 /// Return the pinned upstream CMG commit used as the behavioral reference.
 #[must_use]
