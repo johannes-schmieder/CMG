@@ -1,145 +1,11 @@
    Compiling cmg v0.1.0 (/home/runner/work/CMG/CMG)
-warning: struct `CenteringWorkspace` is never constructed
-  --> src/components.rs:65:19
-   |
-65 | pub(crate) struct CenteringWorkspace {
-   |                   ^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: associated items `new`, `validate`, and `byte_len` are never used
-  --> src/components.rs:72:8
-   |
-71 | impl CenteringWorkspace {
-   | ----------------------- associated items in this implementation
-72 |     fn new(component_count: usize) -> Self {
-   |        ^^^
-...
-80 |     fn validate(&self, component_count: usize) -> Result<(), CmgError> {
-   |        ^^^^^^^^
-...
-93 |     pub(crate) fn byte_len(&self) -> usize {
-   |                   ^^^^^^^^
-
-warning: enum `CenteringLabels` is never used
-  --> src/components.rs:99:6
-   |
-99 | enum CenteringLabels {
-   |      ^^^^^^^^^^^^^^^
-
-warning: struct `CenteringPlan` is never constructed
-   --> src/components.rs:107:19
-    |
-107 | pub(crate) struct CenteringPlan {
-    |                   ^^^^^^^^^^^^^
-
-warning: associated items `from_laplacian`, `workspace`, `validate_workspace`, `byte_len`, and `center_in_place_with_workspace` are never used
-   --> src/components.rs:114:19
-    |
-113 | impl CenteringPlan {
-    | ------------------ associated items in this implementation
-114 |     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
-    |                   ^^^^^^^^^^^^^^
-...
-132 |     pub(crate) fn workspace(&self) -> CenteringWorkspace {
-    |                   ^^^^^^^^^
-...
-136 |     pub(crate) fn validate_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^
-...
-143 |     pub(crate) fn byte_len(&self) -> usize {
-    |                   ^^^^^^^^
-...
-158 |     pub(crate) fn center_in_place_with_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: methods `validate_workspace` and `byte_len` are never used
-   --> src/components.rs:321:19
-    |
-263 | impl Components {
-    | --------------- methods in this implementation
-...
-321 |     pub(crate) fn validate_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^
-...
-328 |     pub(crate) fn byte_len(&self) -> usize {
-    |                   ^^^^^^^^
-
-warning: `cmg` (lib) generated 6 warnings
-    Finished `release` profile [optimized] target(s) in 1.94s
-   Compiling shlex v2.0.1
+    Finished `release` profile [optimized] target(s) in 1.96s
    Compiling find-msvc-tools v0.1.11
+   Compiling shlex v2.0.1
    Compiling cmg v0.1.0 (/home/runner/work/CMG/CMG)
    Compiling cc v1.4.4
-warning: struct `CenteringWorkspace` is never constructed
-  --> /home/runner/work/CMG/CMG/src/components.rs:65:19
-   |
-65 | pub(crate) struct CenteringWorkspace {
-   |                   ^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: associated items `new`, `validate`, and `byte_len` are never used
-  --> /home/runner/work/CMG/CMG/src/components.rs:72:8
-   |
-71 | impl CenteringWorkspace {
-   | ----------------------- associated items in this implementation
-72 |     fn new(component_count: usize) -> Self {
-   |        ^^^
-...
-80 |     fn validate(&self, component_count: usize) -> Result<(), CmgError> {
-   |        ^^^^^^^^
-...
-93 |     pub(crate) fn byte_len(&self) -> usize {
-   |                   ^^^^^^^^
-
-warning: enum `CenteringLabels` is never used
-  --> /home/runner/work/CMG/CMG/src/components.rs:99:6
-   |
-99 | enum CenteringLabels {
-   |      ^^^^^^^^^^^^^^^
-
-warning: struct `CenteringPlan` is never constructed
-   --> /home/runner/work/CMG/CMG/src/components.rs:107:19
-    |
-107 | pub(crate) struct CenteringPlan {
-    |                   ^^^^^^^^^^^^^
-
-warning: associated items `from_laplacian`, `workspace`, `validate_workspace`, `byte_len`, and `center_in_place_with_workspace` are never used
-   --> /home/runner/work/CMG/CMG/src/components.rs:114:19
-    |
-113 | impl CenteringPlan {
-    | ------------------ associated items in this implementation
-114 |     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
-    |                   ^^^^^^^^^^^^^^
-...
-132 |     pub(crate) fn workspace(&self) -> CenteringWorkspace {
-    |                   ^^^^^^^^^
-...
-136 |     pub(crate) fn validate_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^
-...
-143 |     pub(crate) fn byte_len(&self) -> usize {
-    |                   ^^^^^^^^
-...
-158 |     pub(crate) fn center_in_place_with_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: methods `validate_workspace` and `byte_len` are never used
-   --> /home/runner/work/CMG/CMG/src/components.rs:321:19
-    |
-263 | impl Components {
-    | --------------- methods in this implementation
-...
-321 |     pub(crate) fn validate_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^
-...
-328 |     pub(crate) fn byte_len(&self) -> usize {
-    |                   ^^^^^^^^
-
    Compiling cmg-c-kernel-bench v0.1.0 (/home/runner/work/CMG/CMG/benchmarks/c-kernel)
-warning: `cmg` (lib) generated 6 warnings
-    Finished `release` profile [optimized] target(s) in 2.36s
+    Finished `release` profile [optimized] target(s) in 2.38s
 {
   "schema": 3,
   "source_commit": "unknown",
@@ -152,24 +18,25 @@ warning: `cmg` (lib) generated 6 warnings
   "rhs_count": 4,
   "repetitions": 5,
   "direct_threshold": 700,
-  "generation_ns": 192730,
-  "graph_build_median_ns": 267470,
-  "hierarchy_build_median_ns": 49015853,
-  "preconditioner_apply_median_ns": 507479,
-  "solve_batch_median_ns": 74678269,
-  "solve_per_rhs_median_ns": 18669567,
-  "csr_build_median_ns": 87523,
+  "generation_ns": 200387,
+  "graph_build_median_ns": 280055,
+  "hierarchy_build_median_ns": 51523204,
+  "preconditioner_apply_median_ns": 541743,
+  "solve_batch_median_ns": 81581061,
+  "solve_per_rhs_median_ns": 20395265,
+  "csr_build_median_ns": 98185,
   "matvec_loops": 1000,
-  "edge_matvec_median_ns": 28705,
-  "csr_matvec_median_ns": 44399,
-  "csr_over_edge_matvec": 1.54673401846368219e0,
+  "edge_matvec_median_ns": 30937,
+  "csr_matvec_median_ns": 43759,
+  "csr_over_edge_matvec": 1.41445518311407059e0,
   "graph_core_bytes": 639976,
   "csr_bytes": 639984,
   "csr_uses_compact_indices": true,
   "hierarchy_core_bytes": 1285064,
+  "component_metadata_bytes": 160032,
   "terminal_factor_bytes": 41232,
-  "cmg_workspace_bytes": 621624,
-  "pcg_workspace_bytes": 1581680,
+  "cmg_workspace_bytes": 621528,
+  "pcg_workspace_bytes": 1581584,
   "terminal_reason": "Direct",
   "level_vertices": [20000,7871,3613,645],
   "level_matrix_nonzeros": [59998,23611,10837,1933],
@@ -188,24 +55,25 @@ warning: `cmg` (lib) generated 6 warnings
   "rhs_count": 4,
   "repetitions": 5,
   "direct_threshold": 700,
-  "generation_ns": 447537,
-  "graph_build_median_ns": 1594923,
-  "hierarchy_build_median_ns": 12940623,
-  "preconditioner_apply_median_ns": 1252954,
-  "solve_batch_median_ns": 118376853,
-  "solve_per_rhs_median_ns": 29594213,
-  "csr_build_median_ns": 236622,
+  "generation_ns": 398070,
+  "graph_build_median_ns": 1591139,
+  "hierarchy_build_median_ns": 13551673,
+  "preconditioner_apply_median_ns": 1302090,
+  "solve_batch_median_ns": 126481326,
+  "solve_per_rhs_median_ns": 31620331,
+  "csr_build_median_ns": 199946,
   "matvec_loops": 583,
-  "edge_matvec_median_ns": 56751,
-  "csr_matvec_median_ns": 68599,
-  "csr_over_edge_matvec": 1.20877165160085287e0,
+  "edge_matvec_median_ns": 59724,
+  "csr_matvec_median_ns": 73190,
+  "csr_over_edge_matvec": 1.22547049762239646e0,
   "graph_core_bytes": 982864,
   "csr_bytes": 982872,
   "csr_uses_compact_indices": true,
   "hierarchy_core_bytes": 1545448,
+  "component_metadata_bytes": 160032,
   "terminal_factor_bytes": 561000,
-  "cmg_workspace_bytes": 450640,
-  "pcg_workspace_bytes": 1410696,
+  "cmg_workspace_bytes": 450544,
+  "pcg_workspace_bytes": 1410600,
   "terminal_reason": "Direct",
   "level_vertices": [20000,3630,1183,373],
   "level_matrix_nonzeros": [88572,16818,9015,5987],
@@ -213,73 +81,6 @@ warning: `cmg` (lib) generated 6 warnings
   "backward_errors": [5.48142744053352936e-9,4.95439940649845330e-9,5.79188118201235377e-9,5.49020964983533367e-9]
 }
    Compiling cmg v0.1.0 (/home/runner/work/CMG/CMG)
-warning: struct `CenteringWorkspace` is never constructed
-  --> src/components.rs:65:19
-   |
-65 | pub(crate) struct CenteringWorkspace {
-   |                   ^^^^^^^^^^^^^^^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: associated items `new`, `validate`, and `byte_len` are never used
-  --> src/components.rs:72:8
-   |
-71 | impl CenteringWorkspace {
-   | ----------------------- associated items in this implementation
-72 |     fn new(component_count: usize) -> Self {
-   |        ^^^
-...
-80 |     fn validate(&self, component_count: usize) -> Result<(), CmgError> {
-   |        ^^^^^^^^
-...
-93 |     pub(crate) fn byte_len(&self) -> usize {
-   |                   ^^^^^^^^
-
-warning: enum `CenteringLabels` is never used
-  --> src/components.rs:99:6
-   |
-99 | enum CenteringLabels {
-   |      ^^^^^^^^^^^^^^^
-
-warning: struct `CenteringPlan` is never constructed
-   --> src/components.rs:107:19
-    |
-107 | pub(crate) struct CenteringPlan {
-    |                   ^^^^^^^^^^^^^
-
-warning: associated items `from_laplacian`, `workspace`, `validate_workspace`, `byte_len`, and `center_in_place_with_workspace` are never used
-   --> src/components.rs:114:19
-    |
-113 | impl CenteringPlan {
-    | ------------------ associated items in this implementation
-114 |     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
-    |                   ^^^^^^^^^^^^^^
-...
-132 |     pub(crate) fn workspace(&self) -> CenteringWorkspace {
-    |                   ^^^^^^^^^
-...
-136 |     pub(crate) fn validate_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^
-...
-143 |     pub(crate) fn byte_len(&self) -> usize {
-    |                   ^^^^^^^^
-...
-158 |     pub(crate) fn center_in_place_with_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: methods `validate_workspace` and `byte_len` are never used
-   --> src/components.rs:321:19
-    |
-263 | impl Components {
-    | --------------- methods in this implementation
-...
-321 |     pub(crate) fn validate_workspace(
-    |                   ^^^^^^^^^^^^^^^^^^
-...
-328 |     pub(crate) fn byte_len(&self) -> usize {
-    |                   ^^^^^^^^
-
-warning: `cmg` (lib) generated 6 warnings
 error[E0560]: struct `CmgOptions` has no field named `small_graph_direct_threshold`
   --> examples/compact_metadata_probe.rs:32:9
    |
@@ -294,12 +95,6 @@ error[E0599]: no method named `component_count` found for struct `cmg::Component
 45 |                 + components.component_count() * size_of::<usize>()
    |                              ^^^^^^^^^^^^^^^ method not found in `cmg::Components`
 
-error[E0599]: no method named `component_metadata_bytes` found for struct `CmgPreconditioner` in the current scope
-  --> examples/compact_metadata_probe.rs:50:24
-   |
-50 |         preconditioner.component_metadata_bytes()
-   |                        ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `CmgPreconditioner`
-
 Some errors have detailed explanations: E0560, E0599.
 For more information about an error, try `rustc --explain E0560`.
-error: could not compile `cmg` (example "compact_metadata_probe") due to 3 previous errors
+error: could not compile `cmg` (example "compact_metadata_probe") due to 2 previous errors
