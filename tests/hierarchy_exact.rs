@@ -1,6 +1,4 @@
-use cmg::{
-    Aggregation, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian, TerminalReason,
-};
+use cmg::{Aggregation, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian, TerminalReason};
 
 fn dense_galerkin(graph: &Laplacian, labels: &[usize], coarse_n: usize) -> Vec<Vec<f64>> {
     let fine = graph.to_dense();
@@ -98,8 +96,7 @@ fn forced_multilevel_path_strictly_reduces_nonterminal_levels() {
 
 #[test]
 fn direct_terminal_repeat_uses_unit_lower_factor_nonzeros() {
-    let graph =
-        Laplacian::from_edges(96, (0..95).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
+    let graph = Laplacian::from_edges(96, (0..95).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
     let preconditioner = CmgPreconditioner::build(
         &graph,
         CmgOptions {
