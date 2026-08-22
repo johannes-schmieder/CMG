@@ -1,0 +1,94 @@
+name: Tune parallel setup routing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/tune-parallel-routing.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply conservative setup routing
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/execution.rs')
+          text = path.read_text()
+          old = 'use crate::CmgError;\n'
+          new = '''use crate::CmgError;\n\n/// Minimum item count for setup kernels whose parallel path pays sorting or\n/// temporary sparse-storage overhead.\npub(crate) const PARALLEL_SETUP_MIN_ITEMS: usize = 65_536;\n'''
+          if text.count(old) != 1:
+              raise SystemExit('execution import anchor changed')
+          path.write_text(text.replace(old, new))
+
+          path = Path('src/graph.rs')
+          text = path.read_text()
+          old = '#[cfg(feature = "parallel")]\nuse crate::ParallelExecutor;\n'
+          new = '#[cfg(feature = "parallel")]\nuse crate::{execution::PARALLEL_SETUP_MIN_ITEMS, ParallelExecutor};\n'
+          if text.count(old) != 1:
+              raise SystemExit('graph import anchor changed')
+          text = text.replace(old, new)
+          old = 'if executor.should_parallel(raw.len()) {'
+          new = 'if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {'
+          if text.count(old) != 1:
+              raise SystemExit('graph routing anchor changed')
+          path.write_text(text.replace(old, new))
+
+          path = Path('src/coarsen.rs')
+          text = path.read_text()
+          old = '#[cfg(feature = "parallel")]\nuse crate::ParallelExecutor;\n'
+          new = '#[cfg(feature = "parallel")]\nuse crate::{execution::PARALLEL_SETUP_MIN_ITEMS, ParallelExecutor};\n'
+          if text.count(old) != 1:
+              raise SystemExit('coarsen import anchor changed')
+          text = text.replace(old, new)
+          old = '''        if !executor.should_parallel(graph.edge_count()) {\n            return self.contract(graph);\n        }\n'''
+          new = '''        if graph.edge_count() < PARALLEL_SETUP_MIN_ITEMS\n            || !executor.should_parallel(graph.edge_count())\n        {\n            return self.contract(graph);\n        }\n'''
+          if text.count(old) != 1:
+              raise SystemExit('coarsen routing anchor changed')
+          path.write_text(text.replace(old, new))
+
+          path = Path('src/forest.rs')
+          text = path.read_text()
+          old = '#[cfg(feature = "parallel")]\nuse crate::{CsrLaplacian, ParallelExecutor};\n'
+          new = '#[cfg(feature = "parallel")]\nuse crate::{execution::PARALLEL_SETUP_MIN_ITEMS, CsrLaplacian, ParallelExecutor};\n'
+          if text.count(old) != 1:
+              raise SystemExit('forest import anchor changed')
+          text = text.replace(old, new)
+          old = '''    if !executor.should_parallel(graph.edge_count().saturating_mul(2)) {\n        return Ok(maximum_weight_forest(graph));\n    }\n'''
+          new = '''    let directed_entries = graph.edge_count().saturating_mul(2);\n    let density_floor = graph.vertex_count().saturating_mul(3);\n    if directed_entries < PARALLEL_SETUP_MIN_ITEMS\n        || directed_entries <= density_floor\n        || !executor.should_parallel(directed_entries)\n    {\n        return Ok(maximum_weight_forest(graph));\n    }\n'''
+          if text.count(old) != 1:
+              raise SystemExit('forest routing anchor changed')
+          path.write_text(text.replace(old, new))
+
+      - name: Format and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo test --all-targets --all-features
+          cargo test --all-targets --all-features --release
+          cargo clippy --all-targets --all-features -- -D warnings
+          RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+
+      - name: Commit validated routing policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tune-parallel-routing.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: route setup kernels by size and density'
+          git pull --rebase origin main
+          git push origin HEAD:main
