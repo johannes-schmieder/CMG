@@ -26,8 +26,8 @@ jobs:
 
           path = Path('src/forest.rs')
           text = path.read_text()
-          old = '''    for start in 0..n {\n        let mut current = start;\n'''
-          new = '''    let mut walk = Vec::new();\n    let mut new_ancestors = Vec::new();\n\n    for start in 0..n {\n        let mut current = start;\n'''
+          old = '''    for &target in &forest {\n        indegree[target] += 1;\n    }\n\n    for start in 0..n {\n'''
+          new = '''    for &target in &forest {\n        indegree[target] += 1;\n    }\n\n    let mut walk = Vec::new();\n    let mut new_ancestors = Vec::new();\n\n    for start in 0..n {\n'''
           if text.count(old) != 1:
               raise SystemExit('forest outer-loop anchor changed')
           text = text.replace(old, new)
