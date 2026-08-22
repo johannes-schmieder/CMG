@@ -16,6 +16,14 @@ fn project_rhs(graph: &Laplacian, rhs: &[f64], compatibility_tolerance: f64) -> 
     projected
 }
 
+fn center_rhs(graph: &Laplacian, rhs: &[f64]) -> Vec<f64> {
+    let mut centered = rhs.to_vec();
+    Components::from_laplacian(graph)
+        .center_in_place(&mut centered)
+        .unwrap();
+    centered
+}
+
 fn reference_apply(
     preconditioner: &CmgPreconditioner,
     level_index: usize,
@@ -59,7 +67,7 @@ fn reference_apply(
             *value = *rhs_value - *value;
         }
         let coarse_graph = preconditioner.hierarchy().levels()[level_index + 1].graph();
-        let coarse_rhs = project_rhs(coarse_graph, &aggregation.restrict(&residual).unwrap(), 1.0);
+        let coarse_rhs = center_rhs(coarse_graph, &aggregation.restrict(&residual).unwrap());
         let coarse_solution = reference_apply(
             preconditioner,
             level_index + 1,

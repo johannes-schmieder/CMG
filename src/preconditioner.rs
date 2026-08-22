@@ -139,7 +139,7 @@ impl CmgPreconditioner {
     /// [`Self::apply_into`]. It is intended for Krylov solvers that validate and
     /// project a submitted right-hand side once, then keep residuals in the
     /// Laplacian range. Dimension, workspace, and option checks remain enabled;
-    /// recursive coarse-level roundoff handling is unchanged.
+    /// recursive coarse-level roundoff is removed by deterministic component centering.
     pub fn apply_compatible_into(
         &self,
         rhs: &[f64],
@@ -155,7 +155,7 @@ impl CmgPreconditioner {
     }
 
     /// Apply an already compatible right-hand side with explicit validation
-    /// tolerances for recursive coarse-level roundoff handling.
+    /// tolerances for public validation; recursive coarse residuals are centered.
     ///
     /// Callers are responsible for ensuring component-wise compatibility. An
     /// incompatible right-hand side does not represent a solvable Laplacian
@@ -188,7 +188,7 @@ impl CmgPreconditioner {
             &self.level_components,
         )?;
         validation.validate()?;
-        self.apply_level(0, rhs, output, workspace, 1, validation)
+        self.apply_level(0, rhs, output, workspace, 1)
     }
 
     /// Apply with explicit compatibility-validation tolerances.
@@ -233,7 +233,7 @@ impl CmgPreconditioner {
             );
             workspace.put_component(0, component_workspace);
             projection?;
-            self.apply_level(0, &projected_rhs, output, workspace, 1, validation)
+            self.apply_level(0, &projected_rhs, output, workspace, 1)
         })();
         workspace.put_projected_rhs(projected_rhs);
         result
@@ -246,7 +246,6 @@ impl CmgPreconditioner {
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
         iterations: usize,
-        validation: ValidationOptions,
     ) -> Result<(), CmgError> {
         let level = &self.hierarchy.levels()[level_index];
         let dimension = level.graph().vertex_count();
@@ -324,18 +323,18 @@ impl CmgPreconditioner {
                     *residual = *rhs_value - *residual;
                 }
                 aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                let components = &self.level_components[level_index + 1];
                 let mut component_workspace = workspace.take_component(level_index + 1);
-                let projection = self.level_components[level_index + 1]
-                    .project_rhs_in_place_with_workspace(
-                        &mut local.coarse_rhs,
-                        ValidationOptions {
-                            symmetry_tolerance: validation.symmetry_tolerance,
-                            compatibility_tolerance: 1.0,
-                        },
-                        &mut component_workspace,
-                    );
+                // Restricted residuals are component-compatible in exact
+                // arithmetic. Remove only floating-point null-space drift before
+                // the recursive solve instead of repeating full public-boundary
+                // compatibility validation and exact correction passes.
+                let centering = components.center_in_place_with_workspace(
+                    &mut local.coarse_rhs,
+                    &mut component_workspace,
+                );
                 workspace.put_component(level_index + 1, component_workspace);
-                projection?;
+                centering?;
                 local.coarse_correction.fill(0.0);
                 self.apply_level(
                     level_index + 1,
@@ -343,7 +342,6 @@ impl CmgPreconditioner {
                     &mut local.coarse_correction,
                     workspace,
                     child_iterations,
-                    validation,
                 )?;
                 aggregation.prolong_add_into(&local.coarse_correction, output)?;
 

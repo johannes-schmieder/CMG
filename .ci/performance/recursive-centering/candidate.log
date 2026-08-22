@@ -1,18 +1,11 @@
-    Updating crates.io index
    Compiling cmg v0.1.0 (/home/runner/work/CMG/CMG)
-    Finished `release` profile [optimized] target(s) in 4.22s
-    Updating crates.io index
-     Locking 4 packages to latest Rust 1.85 compatible versions
- Downloading crates ...
-  Downloaded cc v1.4.4
-  Downloaded find-msvc-tools v0.1.11
-  Downloaded shlex v2.0.1
-   Compiling shlex v2.0.1
+    Finished `release` profile [optimized] target(s) in 1.86s
    Compiling find-msvc-tools v0.1.11
+   Compiling shlex v2.0.1
    Compiling cmg v0.1.0 (/home/runner/work/CMG/CMG)
    Compiling cc v1.4.4
    Compiling cmg-c-kernel-bench v0.1.0 (/home/runner/work/CMG/CMG/benchmarks/c-kernel)
-    Finished `release` profile [optimized] target(s) in 4.19s
+    Finished `release` profile [optimized] target(s) in 2.32s
 {
   "schema": 3,
   "source_commit": "unknown",
@@ -25,17 +18,17 @@
   "rhs_count": 4,
   "repetitions": 5,
   "direct_threshold": 700,
-  "generation_ns": 202360,
-  "graph_build_median_ns": 322799,
-  "hierarchy_build_median_ns": 51775131,
-  "preconditioner_apply_median_ns": 668212,
-  "solve_batch_median_ns": 95161574,
-  "solve_per_rhs_median_ns": 23790393,
-  "csr_build_median_ns": 101391,
+  "generation_ns": 202526,
+  "graph_build_median_ns": 331712,
+  "hierarchy_build_median_ns": 51564386,
+  "preconditioner_apply_median_ns": 558645,
+  "solve_batch_median_ns": 82693801,
+  "solve_per_rhs_median_ns": 20673450,
+  "csr_build_median_ns": 103376,
   "matvec_loops": 1000,
-  "edge_matvec_median_ns": 29017,
-  "csr_matvec_median_ns": 43719,
-  "csr_over_edge_matvec": 1.50666850466967639e0,
+  "edge_matvec_median_ns": 29061,
+  "csr_matvec_median_ns": 43681,
+  "csr_over_edge_matvec": 1.50307972884622010e0,
   "graph_core_bytes": 639976,
   "csr_bytes": 639984,
   "csr_uses_compact_indices": true,
@@ -47,7 +40,7 @@
   "level_vertices": [20000,7871,3613,645],
   "level_matrix_nonzeros": [59998,23611,10837,1933],
   "iterations": [26,26,26,26],
-  "backward_errors": [7.18465323717440889e-9,7.03172765458276811e-9,7.18408875550204496e-9,7.27830502317893534e-9]
+  "backward_errors": [7.18465322956828959e-9,7.03172765320618985e-9,7.18408875106878535e-9,7.27830500523987022e-9]
 }
 {
   "schema": 3,
@@ -61,17 +54,17 @@
   "rhs_count": 4,
   "repetitions": 5,
   "direct_threshold": 700,
-  "generation_ns": 430429,
-  "graph_build_median_ns": 1637902,
-  "hierarchy_build_median_ns": 13746331,
-  "preconditioner_apply_median_ns": 1415572,
-  "solve_batch_median_ns": 135683475,
-  "solve_per_rhs_median_ns": 33920868,
-  "csr_build_median_ns": 192686,
+  "generation_ns": 419103,
+  "graph_build_median_ns": 2125944,
+  "hierarchy_build_median_ns": 13618205,
+  "preconditioner_apply_median_ns": 1312404,
+  "solve_batch_median_ns": 128020257,
+  "solve_per_rhs_median_ns": 32005064,
+  "csr_build_median_ns": 183778,
   "matvec_loops": 583,
-  "edge_matvec_median_ns": 57140,
-  "csr_matvec_median_ns": 72469,
-  "csr_over_edge_matvec": 1.26827091354567734e0,
+  "edge_matvec_median_ns": 57272,
+  "csr_matvec_median_ns": 72474,
+  "csr_over_edge_matvec": 1.26543511663640174e0,
   "graph_core_bytes": 982864,
   "csr_bytes": 982872,
   "csr_uses_compact_indices": true,
@@ -83,5 +76,5 @@
   "level_vertices": [20000,3630,1183,373],
   "level_matrix_nonzeros": [88572,16818,9015,5987],
   "iterations": [20,20,20,20],
-  "backward_errors": [5.48142743985063221e-9,4.95439940597499273e-9,5.79188118253984354e-9,5.49020964949153342e-9]
+  "backward_errors": [5.48142744053352936e-9,4.95439940649845330e-9,5.79188118201235377e-9,5.49020964983533367e-9]
 }
