@@ -1,0 +1,30 @@
+name: Opt-in parallel PCG gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/parallel-pcg-gate.yml'
+      - 'scripts/parallel_pcg_gate.py'
+      - 'scripts/add_parallel_pcg_candidate.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify complete certified parallel PCG solves
+        run: python scripts/parallel_pcg_gate.py
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/parallel-pcg-latest.json || true
