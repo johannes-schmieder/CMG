@@ -1,3 +1,4 @@
+# Armed after the workflow existed on the default branch.
 name: Profile contraction after compact labels
 
 on:
