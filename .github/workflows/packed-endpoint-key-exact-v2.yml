@@ -20,6 +20,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # Explicit rerun after the workflow-file creation checkpoint.
       - name: Qualify packed ordering with exact requested-allocation tracking
         run: python scripts/packed_endpoint_key_exact_gate_v2.py
 
