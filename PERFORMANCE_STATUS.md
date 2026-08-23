@@ -6,20 +6,19 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Current recovery point
 
+- Repository head before this status refresh: `a560fa4c351a7d30e2ab7b819208c174de07255e`.
 - Latest retained numerical checkpoint:
-  `19220a4ea31c0869e8a4ab9c7190f6cb79b42bba`
-  (`perf: retain robust prepared parallel PCG solver`).
-- The robust retain gate passed complete serial/all-feature qualification,
-  numerical equivalence, bounded-workspace checks, and interleaved seven-sample
-  strategy benchmarks on Ubuntu.
-- `.ci/latest.json` still names the pre-retention checkpoint
-  `99e8cdcc8b2c7be0523d03c78d6405e79cd83317`; this status update intentionally
-  triggers ordinary formatting, Clippy, rustdoc, benchmark-crate qualification,
+  `701036624e312fa4a8e21a26297d8254b7dc0142`
+  (`perf: retain packed endpoint-key ordering after exact gate`).
+- The packed-key candidate passed full serial/all-feature qualification and the
+  exact requested-allocation gate; the subsequent contraction profile was
+  benchmark-only and did not alter numerical source.
+- `.ci/latest.json` predates the retained packed-key source. This status commit
+  intentionally triggers formatting, Clippy, rustdoc, benchmark-crate checks,
   debug/release tests, release build, and Ubuntu/macOS/Windows testing on the
-  exact retained source.
-- Do not begin another production numerical mutation until `.ci/latest.json`
-  records the retained checkpoint with quality and cross-platform status
-  `success`.
+  exact retained implementation.
+- Do not begin another production numerical mutation until that record reports
+  quality and cross-platform status `success`.
 
 ## Retained performance work
 
@@ -32,6 +31,8 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
   remain `usize`.
 - Graph construction compacts validated duplicate edges in retained 16-byte
   storage and trims unused capacity before levels are retained.
+- Canonical edge sorting compares one packed 64-bit endpoint key; exact
+  allocation and retained bytes are unchanged.
 - Coarse contraction constructs retained 16-byte `Edge` values directly,
   avoiding temporary 24-byte `(usize, usize, f64)` tuples in serial and
   parallel hierarchy construction.
@@ -76,6 +77,13 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
   `0.999x`, inside the stricter `1.03x`/`1.08x` gates.
 - Maximum scaled solution difference and retained workspace excess were both
   exactly zero in the benchmark matrix.
+- Packed endpoint ordering improved the original hierarchy timing gate to
+  `0.970x`; the exact-allocation recheck measured `0.981x` geometrically, with
+  exactly `1.000000x` additional-peak and retained requested bytes.
+- The contraction survival profile found `12.0` MB
+  and `10.8` MB of avoidable first-level
+  reservation on path and worker–firm cases, but only
+  `1.5` MB on dense worker–firm.
 - These values are directional hosted-runner evidence, not a claim about
   8–32-core or NUMA scaling.
 
@@ -100,15 +108,15 @@ Benchmark a routed exact-capacity contraction buffer:
 
 ## Remaining major work
 
-- Complete ordinary Ubuntu/macOS/Windows qualification of the retained prepared
-  solver source.
-- Add user-facing examples and memory/performance guidance for automatic,
-  explicit within-solve, and explicit across-RHS execution.
-- Profile packed contraction keys and reusable contraction buffers.
+- Complete ordinary Ubuntu/macOS/Windows qualification of the retained packed
+  endpoint-key source.
+- Qualify the routed exact-capacity contraction candidate.
+- Extend user-facing memory/performance guidance for automatic, explicit
+  within-solve, and explicit across-RHS execution.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
   hardware; ordinary hosted runners currently expose only four logical CPUs.
-- Remove obsolete self-removing workflows, staging scripts, and committed
-  Python cache files after active gates are secure.
+- Remove obsolete self-removing workflows and staging scripts after active gates
+  are secure.
 
 ## Recovery rule
 

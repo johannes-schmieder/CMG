@@ -317,12 +317,34 @@ After in-place level output and recursive centering, the accepted recursive-cent
   `.ci/performance/packed-endpoint-key-latest.json` and
   `.ci/performance/packed-endpoint-key-exact-latest.json`.
 
+### Contraction edge-survival profile — 2026-08-23
+
+- This was a read-only benchmark; production numerical source was unchanged.
+- First path level: `0.250` of edges survive,
+  `12.0` MB of temporary compact-edge
+  reservation is avoidable, and the median counting scan was
+  `0.815` ms.
+- First worker–firm level: `0.551` survive,
+  `10.8` MB is avoidable, and the
+  scan was `1.708` ms. The next
+  level still has `4.8` MB of
+  avoidable reservation.
+- First dense worker–firm level: `0.942` survive, so an
+  unconditional second pass would add work for only
+  `1.5` MB of potential savings.
+- The next candidate must be routed by edge count and contraction ratio;
+  dense/high-survival levels keep the one-pass path.
+- Machine-readable evidence:
+  `.ci/performance/contraction-survival-profile.json`.
+
 ## Current next action
 
-1. Profile a routed exact-capacity contraction buffer on levels where many fine
-   edges become internal; retain it only if setup time and exact allocation both
-   improve without changing hierarchy metadata.
-2. Audit and remove obsolete one-shot workflows and staging scripts now that the
-   packed-key decision is closed.
-3. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
+1. Benchmark an exact-capacity serial contraction path when the fine edge count
+   is at least 250,000 and the coarse/fine vertex ratio is at most 0.5.
+2. For executor builds, test the same routed counting pass followed by serial
+   exact-capacity mapping and deterministic parallel sorting; retain it only if
+   four-thread timing stays within the existing gate and memory improves.
+3. Audit and remove obsolete one-shot workflows and staging scripts after the
+   routed contraction decision is closed.
+4. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
    is available.
