@@ -20,6 +20,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # Explicit rerun after workflow creation.
       - name: Remove completed one-shot machinery and refresh recovery state
         run: python scripts/cleanup_obsolete_one_shots.py
 
