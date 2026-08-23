@@ -732,9 +732,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Serial/planned PCG geometric ratios: `0.995387475894316` / `0.9878997999485909`.
 - Evidence: `.ci/performance/compact-aggregation-labels-v2-latest.json`.
 
+### Post-compaction routing requalification — 2026-08-23
+
+- Status: `success`.
+- Routing / metadata / numerical failures: `0` / `0` / `0`.
+- Planned-case geometric speedup: `1.6262176840051474`.
+- Evidence: `.ci/performance/post-compact-label-routing.json`.
+
 ## Current next action
 
-1. Re-run the full certified routing matrix after any retained aggregation-label change.
-2. Re-profile contraction mapping and sorting with the retained layout.
-3. Evaluate compact aggregate-size storage only if it remains material after label compaction.
+1. Re-profile contraction mapping and sorting after compact aggregation labels.
+2. Evaluate compact aggregate-size storage only if retained-memory accounting shows material headroom.
+3. Revisit moderate-density scratch radix only if reusable scratch can preserve its speed signal without peak-memory inflation.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

@@ -255,3 +255,14 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Serial/planned PCG geometric ratios: `0.995387475894316` / `0.9878997999485909`.
 - Public native-width labels remain available through a lazy compatibility cache.
 - Evidence: `.ci/performance/compact-aggregation-labels-v2-latest.json`.
+
+## Post-compaction routing requalification
+
+- Status: `success`.
+- Source SHA: `aef1e2354c321ce210d6f94cbabf7fffb9ba5d98`.
+- Routing failures: `none`.
+- Metadata failures: `none`.
+- Numerical failures: `none`.
+- Planned-case geometric speedup: `1.6262176840051474`.
+- Maximum scaled serial/planned solution difference: `5.605302390305238e-10`.
+- Evidence: `.ci/performance/post-compact-label-routing.json`.
