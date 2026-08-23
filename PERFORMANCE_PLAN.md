@@ -616,6 +616,19 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Only the order-independent maximum pass is parallel. The compensated squared-sum pass remains serial in its original order, and every non-timing benchmark field was required to match exactly.
 - Machine-readable evidence: `.ci/performance/parallel-exact-norm-scale-latest.json`.
 
+### Deterministic fixed-chunk dot checkpoint — 2026-08-23
+
+- Fixed-chunk planned-PCG dot products were **not retained**.
+- Qualification status: `not_run`.
+- Decision: experiment failed: expected one planned dot call: 'let p_ap = dot(&workspace.direction, &workspace.matvec);'.
+
+| Case | Serial solve ratio | Planned solve ratio | Planned/serial scaled difference |
+|---|---:|---:|---:|
+| no completed timing cases | — | — | — |
+
+- Chunk boundaries and the binary combine tree are fixed by `reduction_chunk_size`, so results are invariant to thread scheduling and thread count. Iteration counts were required to remain unchanged and final solutions/residual certificates remain independently verified.
+- Machine-readable evidence: `.ci/performance/fixed-chunk-dot-latest.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest

@@ -1,0 +1,11 @@
+{
+  "accepted": false,
+  "baseline_sha": "1877817eedaccbd8ca425372e7186db1b167528d",
+  "cases": {},
+  "decision_reason": "experiment failed: expected one planned dot call: 'let p_ap = dot(&workspace.direction, &workspace.matvec);'",
+  "error": "RuntimeError(\"expected one planned dot call: 'let p_ap = dot(&workspace.direction, &workspace.matvec);'\")",
+  "experiment": "deterministic-fixed-chunk-dot",
+  "run_id": "32654754258",
+  "schema_version": 1,
+  "validation": "not_run"
+}

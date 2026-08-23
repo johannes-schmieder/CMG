@@ -112,3 +112,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned geometric full-solve ratio: `0.971x`.
 - Evidence: `.ci/performance/parallel-exact-norm-scale-latest.json`.
 
+## Deterministic fixed-chunk dot gate
+
+- Decision: `not retained`.
+- Validation: `not_run`.
+- Planned geometric full-solve ratio: `nanx`.
+- Maximum scaled solution difference: `nan`.
+- Evidence: `.ci/performance/fixed-chunk-dot-latest.json`.
+
