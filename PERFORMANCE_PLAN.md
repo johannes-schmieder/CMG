@@ -908,6 +908,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; endpoint groups were sorted and summed cache-locally with stable hierarchy gains.
 - Evidence: `.ci/performance/local-duplicate-merge-latest.json`.
 
+### Compact forest-indegree checkpoint — 2026-08-23
+
+- Monomorphized `u32` forest indegrees with a native-width fallback were **not retained**.
+- Validation: `failure`.
+- Geometric split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: expected two indegree decrements.
+- Evidence: `.ci/performance/compact-forest-indegree-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

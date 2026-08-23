@@ -455,3 +455,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Production-contraction / hierarchy-build ratios: `0.972x` / `0.976x`.
 - Worst peak-RSS ratio: `1.003x`.
 - Evidence: `.ci/performance/local-duplicate-merge-latest.json`.
+
+## Compact forest-indegree gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/compact-forest-indegree-latest.json`.
