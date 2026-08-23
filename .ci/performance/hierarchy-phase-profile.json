@@ -1,8 +1,8 @@
 {
   "cases": {},
-  "error": "error('Error -3 while decompressing data: invalid bit length repeat')",
+  "error": "RuntimeError('command failed (101): cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings')",
   "experiment": "hierarchy-phase-profile",
-  "profiled_base_sha": "0d060824d5dd1d499d3c88bd80974f6ec39795da",
-  "schema_version": 1,
+  "profiled_base_sha": "2a5fc3cff51e4bf1e524734d556f2fc156d67b04",
+  "schema_version": 2,
   "status": "failure"
 }

@@ -371,10 +371,22 @@ After in-place level output and recursive centering, the accepted recursive-cent
     - Machine-readable evidence:
       `.ci/performance/hierarchy-phase-profile.json`.
 
+### Hierarchy phase-profile rerun checkpoint — 2026-08-23
+
+- Read-only benchmark status: `failure`.
+- Aggregate dominant measured phase: `unresolved`
+  (0.0% of summed manual-profile time).
+- No completed cases.
+- The profiler checks terminal reason, level vertex counts, matrix nonzeros,
+  and fill accounting against production hierarchy construction before timing
+  is interpreted.
+- No production numerical behavior changed in this checkpoint.
+- Machine-readable evidence:
+  `.ci/performance/hierarchy-phase-profile.json`.
+
 ## Current next action
 
-    1. Repair and rerun the read-only hierarchy phase profiler.
-    2. Do not mutate production numerical source until the phase profile succeeds.
-    3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
-       hardware is available.
-    
+1. Inspect the recorded compiler/test failure and repair the read-only profiler.
+2. Do not mutate production numerical source until the phase profile succeeds.
+3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+   hardware is available.

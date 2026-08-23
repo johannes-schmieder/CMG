@@ -94,10 +94,11 @@ The decision record is
 
 ## Next prepared optimization
 
-    The read-only hierarchy phase profiler did not complete successfully. Repair
-    the profiler before staging another production numerical optimization.
+The read-only hierarchy phase profiler did not complete successfully. Inspect
+`.ci/performance/hierarchy-phase-profile.json` and repair the benchmark before
+staging another production numerical optimization.
 
-    ## Remaining major work
+## Remaining major work
 
 - Extend user-facing memory/performance guidance for automatic, explicit
   within-solve, and explicit across-RHS execution.
