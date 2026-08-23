@@ -136,9 +136,7 @@ fn phase_json(name: &str, calls: usize, median_ns: u128, total_ns: u128) -> Stri
     } else {
         median_ns as f64 / total_ns as f64
     };
-    format!(
-        "\"{name}\":{{\"median_ns\":{median_ns},\"calls\":{calls},\"share\":{share:.17e}}}"
-    )
+    format!("\"{name}\":{{\"median_ns\":{median_ns},\"calls\":{calls},\"share\":{share:.17e}}}")
 }
 
 fn main() {
@@ -317,18 +315,8 @@ fn main() {
         phase_json("vector_updates", calls[4], update_ns, total_ns),
         phase_json("centering", calls[5], centering_ns, total_ns),
         phase_json("norms", calls[6], norms_ns, total_ns),
-        phase_json(
-            "residual_recompute",
-            calls[7],
-            recompute_ns,
-            total_ns,
-        ),
-        phase_json(
-            "certification",
-            calls[8],
-            certification_ns,
-            total_ns,
-        ),
+        phase_json("residual_recompute", calls[7], recompute_ns, total_ns),
+        phase_json("certification", calls[8], certification_ns, total_ns),
     ]
     .join(",");
 
