@@ -6,18 +6,20 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Current recovery point
 
-- Repository head before this status refresh:
-  `f3b3a7acd0181f5872ebf0d79ac7f9e67cffb8fa`.
-- Latest substantive numerical checkpoint:
-  `f3b3a7acd0181f5872ebf0d79ac7f9e67cffb8fa`
-  (`perf: add opt-in prebuilt-plan parallel PCG`).
-- The retain gate passed complete serial/all-feature qualification and
-  end-to-end certified-solve benchmarks on Ubuntu. This status refresh
-  intentionally triggers ordinary formatting, Clippy, rustdoc,
-  benchmark-crate qualification, debug/release tests, release build, and
-  Ubuntu/macOS/Windows testing on the exact retained source.
+- Latest retained numerical checkpoint:
+  `19220a4ea31c0869e8a4ab9c7190f6cb79b42bba`
+  (`perf: retain robust prepared parallel PCG solver`).
+- The robust retain gate passed complete serial/all-feature qualification,
+  numerical equivalence, bounded-workspace checks, and interleaved seven-sample
+  strategy benchmarks on Ubuntu.
+- `.ci/latest.json` still names the pre-retention checkpoint
+  `99e8cdcc8b2c7be0523d03c78d6405e79cd83317`; this status update intentionally
+  triggers ordinary formatting, Clippy, rustdoc, benchmark-crate qualification,
+  debug/release tests, release build, and Ubuntu/macOS/Windows testing on the
+  exact retained source.
 - Do not begin another production numerical mutation until `.ci/latest.json`
-  records this checkpoint with quality and cross-platform status `success`.
+  records the retained checkpoint with quality and cross-platform status
+  `success`.
 
 ## Retained performance work
 
@@ -39,14 +41,18 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 - The optional `ParallelCmgPlan` stores CSR operators only on routed
   nonterminal levels. Sparse path-like cases retain the serial hierarchy and
   build no parallel operators.
-- The opt-in planned PCG API reuses one validated plan and caller-owned
-  workspace through every Krylov iteration, including scheduled fresh residual
-  replacement and final original-system certification. The existing serial PCG
-  API and implementation remain unchanged.
+- Planned PCG reuses one validated plan and caller-owned workspace through every
+  Krylov iteration, including fresh residual replacement and final
+  original-system certification.
+- `ParallelPcgSolver` now owns one immutable graph/preconditioner/executor/plan
+  bundle, reports retained plan and workspace costs, and routes a batch to
+  serial, within-solve planned, or across-RHS execution without nested
+  oversubscription.
+- Automatic batch workspaces retain exactly the memory implied by the selected
+  concurrency; the robust gate measured zero excess bytes.
+- Existing explicit serial, planned, and across-RHS APIs remain available.
 - The official pinned C matvec/restriction/prolongation/full-cycle kernels are
   compiled in the benchmark-only crate and checked for numerical agreement.
-- Stable stationary-apply, serial-solve, and planned-PCG benchmarks are retained
-  in the benchmark crate.
 
 ## Current measured evidence
 
@@ -59,51 +65,47 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
   cases. Its geometric hierarchy-build time and peak-RSS ratios were
   `0.952x` and `0.924x`; the parallel-case ratios were `0.942x` and `0.883x`.
 - Selectively routed `ParallelCmgPlan` application had four-thread geometric
-  speedup `1.279x` with zero scaled numerical difference. It built no path
-  operator, measured `1.166x` on the 600,000-edge worker–firm case, and
-  `2.358x` on the 800,000-edge dense worker–firm case.
+  speedup `1.279x` with zero scaled numerical difference.
 - Complete certified planned-PCG solves had four-thread geometric speedup
   `1.237x`, with identical iteration counts, residuals, backward errors, and
   zero measured solution difference in every retained case.
-- Full-solve speedups were `2.169x` on the 800,000-edge dense worker–firm case,
-  `1.066x` on the 600,000-edge worker–firm case, `1.026x` on the 300,000-edge
-  worker–firm case, and `0.988x` on the path, which built no parallel operator.
-- Measured plan-build break-even was below one RHS on the dense and larger
-  worker–firm cases and about 1.70 RHS on the smaller worker–firm case.
-- Optional plan storage remained below the configured 128 bytes per original
-  edge, with a measured maximum of about 112.71 bytes per edge.
+- The robust prepared-solver gate used seven interleaved samples per strategy.
+  Automatic-to-best explicit timing was `0.989x` geometrically and at worst
+  `1.054x`, inside the unchanged `1.04x`/`1.12x` gates.
+- Automatic-to-selected explicit timing was `0.986x` geometrically and at worst
+  `0.999x`, inside the stricter `1.03x`/`1.08x` gates.
+- Maximum scaled solution difference and retained workspace excess were both
+  exactly zero in the benchmark matrix.
 - These values are directional hosted-runner evidence, not a claim about
   8–32-core or NUMA scaling.
 
 ## Latest resolved benchmark gate
 
-The opt-in prebuilt-plan PCG candidate passed validation and was **retained**.
-Its decision record is `.ci/performance/parallel-pcg-latest.json`.
+The robust memory-aware prepared parallel PCG solver passed validation and was
+**retained**. Its decision record is
+`.ci/performance/prepared-parallel-solver-robust-latest.json`.
 
 ## Next prepared optimization
 
-After ordinary cross-platform qualification closes, build a prepared solver
-abstraction and benchmark a memory-aware hybrid policy for repeated right-hand
-sides:
+After ordinary cross-platform qualification closes, profile hierarchy setup
+allocation and bandwidth again with the direct compact-contraction path in
+place. The next retain/revert experiments should be:
 
-1. combine one immutable preconditioner, executor, and optional parallel plan
-   behind a reusable solver object without hiding memory costs;
-2. choose between within-solve planned PCG and across-RHS serial PCG according
-   to RHS count, routed operator count, thread count, and workspace budget;
-3. prevent nested oversubscription by assigning each CPU to exactly one level
-   of parallelism;
-4. benchmark RHS counts 1, 2, 4, 8, and 32 at 1, 2, and 4 threads;
-5. preserve input order, original-system certification, and existing APIs;
-6. retain automatic routing only if it is never materially worse than the best
-   explicit strategy on the qualified workload matrix.
+1. packed 64-bit endpoint keys for coarse-edge sorting where both aggregate
+   endpoints fit in `u32`;
+2. reusable coarse-contraction buffers that do not increase retained hierarchy
+   memory or compromise concurrent builders;
+3. compact aggregation-label storage only if the public API can remain
+   compatible without eagerly duplicating native-width labels;
+4. retain each change only after serial and four-thread timing, exact hierarchy,
+   peak-memory, and full numerical gates pass.
 
 ## Remaining major work
 
-- Complete ordinary Ubuntu/macOS/Windows qualification of the retained planned
-  PCG source.
-- Add user-facing examples and memory/performance guidance for serial,
-  within-solve, and across-RHS execution.
-- Qualify the prepared/hybrid repeated-RHS strategy.
+- Complete ordinary Ubuntu/macOS/Windows qualification of the retained prepared
+  solver source.
+- Add user-facing examples and memory/performance guidance for automatic,
+  explicit within-solve, and explicit across-RHS execution.
 - Profile packed contraction keys and reusable contraction buffers.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
   hardware; ordinary hosted runners currently expose only four logical CPUs.
