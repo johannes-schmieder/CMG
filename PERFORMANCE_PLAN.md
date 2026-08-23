@@ -855,11 +855,11 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ### Fused merge-diagonal checkpoint — 2026-08-23
 
-- Diagonal accumulation during canonical duplicate merging was **not retained**.
-- Validation: `failure`.
-- Geometric graph-build / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
-- Decision: experiment failed safely: command failed (101): /usr/bin/time -v -o /tmp/cmg-fused-diagonal-graph-path-1m-baseline-0.time /tmp/cmg-fused-diagonal-baseline/release/graph-build path 1000000 3.
+- Diagonal accumulation during canonical duplicate merging was **retained**.
+- Validation: `success`.
+- Geometric graph-build / hierarchy-build ratios: `0.982x` / `0.982x`.
+- Worst peak-RSS ratio: `1.002x`.
+- Decision: full qualification passed; one canonical edge pass was removed with stable end-to-end setup gains.
 - Evidence: `.ci/performance/fused-merge-diagonal-latest.json`.
 
 ## Current next action

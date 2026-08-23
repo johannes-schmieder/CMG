@@ -409,8 +409,8 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 ## Fused merge-diagonal gate
 
-- Decision: `not retained`.
-- Validation: `failure`.
-- Graph-build / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
+- Decision: `retained`.
+- Validation: `success`.
+- Graph-build / hierarchy-build ratios: `0.982x` / `0.982x`.
+- Worst peak-RSS ratio: `1.002x`.
 - Evidence: `.ci/performance/fused-merge-diagonal-latest.json`.

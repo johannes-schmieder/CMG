@@ -143,7 +143,10 @@ impl Laplacian {
     fn from_sorted_raw_edges(vertex_count: usize, mut raw: Vec<Edge>) -> Result<Self, CmgError> {
         // Equal endpoint pairs are contiguous after sorting. Merge them into
         // the front of the compact input buffer so graph construction does not
-        // allocate a separate full-capacity canonical vector.
+        // allocate a separate full-capacity canonical vector. Accumulate the
+        // diagonal in the same canonical edge order while each merged edge is
+        // already hot, avoiding a second full edge pass.
+        let mut diagonal = vec![0.0; vertex_count];
         let mut read_index = 0;
         let mut write_index = 0;
         while read_index < raw.len() {
@@ -164,6 +167,8 @@ impl Laplacian {
                 });
             }
             raw[write_index] = Edge { u, v, weight };
+            diagonal[u as usize] += weight;
+            diagonal[v as usize] += weight;
             write_index += 1;
         }
         raw.truncate(write_index);
@@ -172,12 +177,6 @@ impl Laplacian {
         // capacity in every hierarchy level.
         if raw.capacity() != raw.len() {
             raw.shrink_to_fit();
-        }
-
-        let mut diagonal = vec![0.0; vertex_count];
-        for edge in &raw {
-            diagonal[edge.u()] += edge.weight;
-            diagonal[edge.v()] += edge.weight;
         }
 
         let diagonal_nnz = diagonal.iter().filter(|degree| **degree != 0.0).count();
@@ -526,5 +525,43 @@ mod one_pass_merge_arithmetic_tests {
             compensated_add(&mut sum, &mut correction, value);
         }
         assert_eq!((sum + correction).to_bits(), expected.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod fused_merge_diagonal_tests {
+    use super::Laplacian;
+
+    #[test]
+    fn fused_diagonal_matches_canonical_edge_scan_bitwise() {
+        let graph = Laplacian::from_edges(
+            6,
+            [
+                (4, 1, 0.25),
+                (0, 3, 7.0),
+                (1, 4, 1.5),
+                (2, 5, 3.0),
+                (3, 0, 0.125),
+                (4, 1, 2.25),
+                (5, 2, 0.75),
+            ],
+        )
+        .unwrap();
+        let mut scanned = vec![0.0_f64; graph.vertex_count()];
+        for edge in graph.edges() {
+            scanned[edge.u()] += edge.weight();
+            scanned[edge.v()] += edge.weight();
+        }
+        assert_eq!(
+            graph
+                .diagonal()
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            scanned
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
     }
 }
