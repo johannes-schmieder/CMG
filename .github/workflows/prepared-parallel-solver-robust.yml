@@ -1,0 +1,29 @@
+name: Robust prepared parallel PCG solver
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/prepared-parallel-solver-robust.yml'
+      - 'scripts/prepared_solver_robust_gate.py'
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify repaired prepared solver with robust interleaved timing
+        run: python scripts/prepared_solver_robust_gate.py
+
+      - name: Show decision record
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/prepared-parallel-solver-robust-latest.json || true
