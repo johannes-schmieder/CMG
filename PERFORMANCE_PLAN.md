@@ -636,7 +636,7 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Profiler synchronization was **not retained**.
 - Validation: `not_run`.
-- Decision: profiler synchronization failed: expected local helper missing from removal block: fn compensated_sum.
+- Decision: profiler synchronization failed: expected local helper missing from block: fn compensated_sum.
 - Representative bitwise-parity cases completed: `none`.
 - Machine-readable evidence: `.ci/performance/pcg-profiler-sync.json`.
 

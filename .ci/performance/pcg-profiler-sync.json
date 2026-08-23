@@ -1,10 +1,10 @@
 {
   "cases": {},
-  "decision_reason": "profiler synchronization failed: expected local helper missing from removal block: fn compensated_sum",
-  "error": "RuntimeError('expected local helper missing from removal block: fn compensated_sum')",
+  "decision_reason": "profiler synchronization failed: expected local helper missing from block: fn compensated_sum",
+  "error": "RuntimeError('expected local helper missing from block: fn compensated_sum')",
   "experiment": "pcg-profiler-production-reduction-sync",
   "retained": false,
-  "schema_version": 2,
-  "source_sha": "74dc1647ae9ad07527736c22da11f5107917d3bc",
+  "schema_version": 3,
+  "source_sha": "208372b05c48516a55c9e550c6ff67721da02aa2",
   "validation": "not_run"
 }
