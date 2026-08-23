@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use cmg::{
     CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions, PcgPhaseProfile,
-    PcgPhaseSample, PcgWorkspace, profile_pcg_with_plan, solve_pcg_with_plan_and_workspace,
+    PcgWorkspace, profile_pcg_with_plan, solve_pcg_with_plan_and_workspace,
 };
 
 struct BenchGraph {
@@ -130,15 +130,14 @@ fn assert_same_solution(expected: &[f64], actual: &[f64]) {
     }
 }
 
-fn phase_json(name: &str, sample: PcgPhaseSample, median_ns: u128, total_ns: u128) -> String {
+fn phase_json(name: &str, calls: usize, median_ns: u128, total_ns: u128) -> String {
     let share = if total_ns == 0 {
         0.0
     } else {
         median_ns as f64 / total_ns as f64
     };
     format!(
-        "\"{name}\":{{\"median_ns\":{median_ns},\"calls\":{},\"share\":{share:.17e}}}",
-        sample.calls()
+        "\"{name}\":{{\"median_ns\":{median_ns},\"calls\":{calls},\"share\":{share:.17e}}}"
     )
 }
 
@@ -250,7 +249,10 @@ fn main() {
         reference_backward_bits.get_or_insert(production.backward_error().to_bits());
         assert_eq!(reference_iterations, Some(production.iterations()));
         assert_eq!(reference_restarts, Some(production.restarts()));
-        assert_eq!(reference_residual_bits, Some(production.residual_norm().to_bits()));
+        assert_eq!(
+            reference_residual_bits,
+            Some(production.residual_norm().to_bits())
+        );
         assert_eq!(
             reference_backward_bits,
             Some(production.backward_error().to_bits())
@@ -307,39 +309,23 @@ fn main() {
     let serial_outer_share = serial_outer_ns as f64 / total_ns.max(1) as f64;
     let profile_overhead = total_ns as f64 / production_median_ns.max(1) as f64;
 
-    let phase_samples = [
-        PcgPhaseSample::from_raw(setup_ns, calls[0]),
-        PcgPhaseSample::from_raw(preconditioner_ns, calls[1]),
-        PcgPhaseSample::from_raw(matvec_ns, calls[2]),
-        PcgPhaseSample::from_raw(dot_ns, calls[3]),
-        PcgPhaseSample::from_raw(update_ns, calls[4]),
-        PcgPhaseSample::from_raw(centering_ns, calls[5]),
-        PcgPhaseSample::from_raw(norms_ns, calls[6]),
-        PcgPhaseSample::from_raw(recompute_ns, calls[7]),
-        PcgPhaseSample::from_raw(certification_ns, calls[8]),
-    ];
     let phase_json = [
-        phase_json("setup", phase_samples[0], setup_ns, total_ns),
-        phase_json(
-            "preconditioner",
-            phase_samples[1],
-            preconditioner_ns,
-            total_ns,
-        ),
-        phase_json("matvec", phase_samples[2], matvec_ns, total_ns),
-        phase_json("dot_products", phase_samples[3], dot_ns, total_ns),
-        phase_json("vector_updates", phase_samples[4], update_ns, total_ns),
-        phase_json("centering", phase_samples[5], centering_ns, total_ns),
-        phase_json("norms", phase_samples[6], norms_ns, total_ns),
+        phase_json("setup", calls[0], setup_ns, total_ns),
+        phase_json("preconditioner", calls[1], preconditioner_ns, total_ns),
+        phase_json("matvec", calls[2], matvec_ns, total_ns),
+        phase_json("dot_products", calls[3], dot_ns, total_ns),
+        phase_json("vector_updates", calls[4], update_ns, total_ns),
+        phase_json("centering", calls[5], centering_ns, total_ns),
+        phase_json("norms", calls[6], norms_ns, total_ns),
         phase_json(
             "residual_recompute",
-            phase_samples[7],
+            calls[7],
             recompute_ns,
             total_ns,
         ),
         phase_json(
             "certification",
-            phase_samples[8],
+            calls[8],
             certification_ns,
             total_ns,
         ),
