@@ -18,8 +18,9 @@ replacements = [
         'LEGACY_SCRIPT_PATH = ROOT / "scripts/parallel_cmg_plan_gate.py"\n',
     ),
     (
-        '    "benchmarks/Cargo.toml",\n',
-        '    "benchmarks/Cargo.toml",\n    "benchmarks/Cargo.lock",\n',
+        'TOUCHED_EXISTING = [\n    "benchmarks/Cargo.toml",\n',
+        'TOUCHED_EXISTING = [\n    "benchmarks/Cargo.toml",\n'
+        '    "benchmarks/Cargo.lock",\n',
     ),
     (
         '    SCRIPT_PATH.unlink(missing_ok=True)\n',
