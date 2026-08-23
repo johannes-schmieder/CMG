@@ -447,3 +447,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Exact retained-hierarchy ratio: `1.019x`.
 - Worst peak-RSS ratio: `1.016x`.
 - Evidence: `.ci/performance/routed-edge-buffer-shrink-latest.json`.
+
+## Cache-local duplicate merge gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/local-duplicate-merge-latest.json`.

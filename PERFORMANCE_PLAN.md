@@ -899,6 +899,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but setup gains or retained/peak memory limits were not all met.
 - Evidence: `.ci/performance/routed-edge-buffer-shrink-latest.json`.
 
+### Cache-local duplicate merge checkpoint — 2026-08-23
+
+- Sorting and summing duplicate compact edges within one local group traversal was **not retained**.
+- Validation: `failure`.
+- Geometric production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/local-duplicate-merge-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

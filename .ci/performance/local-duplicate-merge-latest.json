@@ -1,0 +1,17 @@
+{
+  "accepted": false,
+  "contraction_cases": {},
+  "contraction_geometric_time_ratio": 1.0,
+  "decision_reason": "experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "cache-local-duplicate-merge",
+  "hierarchy_cases": {},
+  "hierarchy_geometric_time_ratio": 1.0,
+  "improved_contraction_case_count": 0,
+  "schema_version": 1,
+  "source_sha": "9489a7327253718f3a1bfd4b107406e9212c5fb7",
+  "validation": "failure",
+  "worst_contraction_time_ratio": 1.0,
+  "worst_hierarchy_time_ratio": 1.0,
+  "worst_peak_rss_ratio": 1.0
+}
