@@ -398,3 +398,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Exact additional-peak ratio: `1.000x`.
 - Worst process peak-RSS ratio: `1.002x`.
 - Evidence: `.ci/performance/sampled-contraction-capacity-latest.json`.
+
+## Parallel endpoint-first sort gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Worker/dense geometric ratio: `1.000x`.
+- Worst setup / peak-RSS ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/parallel-two-stage-sort-latest.json`.

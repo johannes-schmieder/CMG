@@ -844,6 +844,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but timing or exact/process memory gates were not all met.
 - Evidence: `.ci/performance/sampled-contraction-capacity-latest.json`.
 
+### Parallel endpoint-first sort checkpoint — 2026-08-23
+
+- Parallel endpoint-first compact-edge ordering was **not retained**.
+- Validation: `failure`.
+- Active worker/dense geometric setup ratio: `1.000x`.
+- Worst setup ratio: `1.000x`; worst peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: parallel compact sort site changed unexpectedly.
+- Evidence: `.ci/performance/parallel-two-stage-sort-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

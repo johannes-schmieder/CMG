@@ -1,0 +1,14 @@
+{
+  "accepted": false,
+  "active_geometric_time_ratio": 1.0,
+  "cases": {},
+  "decision_reason": "experiment failed safely: parallel compact sort site changed unexpectedly",
+  "error": "RuntimeError('parallel compact sort site changed unexpectedly')",
+  "experiment": "parallel-endpoint-first-weight-sort",
+  "improved_active_case_count": 0,
+  "schema_version": 1,
+  "source_sha": "b9fe155908a55e5589a95e760275a9d3625cfbce",
+  "validation": "failure",
+  "worst_peak_rss_ratio": 1.0,
+  "worst_time_ratio": 1.0
+}
