@@ -337,14 +337,21 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/contraction-survival-profile.json`.
 
+### Routed exact-capacity contraction checkpoint — 2026-08-23
+
+- Reserving the exact number of surviving coarse-edge contributions on routed
+  large, strongly contracting serial levels was **not retained**. Serial geometric time ratio: 1.011; exact additional-peak ratio: 0.977.
+- Validation status: `success`.
+- Decision: qualification passed, but timing, exact allocation, or parallel regression gates were not all met.
+- Parallel mapping remained unchanged and was included as a regression gate.
+- Machine-readable evidence:
+  `.ci/performance/exact-capacity-contraction-latest.json`.
+
 ## Current next action
 
-1. Benchmark an exact-capacity serial contraction path when the fine edge count
-   is at least 250,000 and the coarse/fine vertex ratio is at most 0.5.
-2. For executor builds, test the same routed counting pass followed by serial
-   exact-capacity mapping and deterministic parallel sorting; retain it only if
-   four-thread timing stays within the existing gate and memory improves.
-3. Audit and remove obsolete one-shot workflows and staging scripts after the
-   routed contraction decision is closed.
+1. If the serial exact-capacity route is retained, profile a safe executor-side
+   equivalent; otherwise retain the existing one-pass parallel mapper.
+2. Audit and remove obsolete one-shot workflows and staging scripts.
+3. Extend user-facing memory/performance guidance and benchmark commands.
 4. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
    is available.

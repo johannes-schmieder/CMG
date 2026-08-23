@@ -89,10 +89,10 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Latest resolved benchmark gate
 
-The packed endpoint-key exact-allocation recheck completed with validation
-`success` and was **retained**. Standard timing ratio: 0.970. Exact-gate geometric timing ratio: 0.981; maximum additional-peak/retained ratios: 1.000000/1.000000.
-The controlling decision record is
-`.ci/performance/packed-endpoint-key-exact-latest.json`.
+The routed exact-capacity serial contraction gate completed with validation
+`success` and was **not retained**. Serial geometric time ratio: 1.011; exact additional-peak ratio: 0.977.
+The decision record is
+`.ci/performance/exact-capacity-contraction-latest.json`.
 
 ## Next prepared optimization
 
