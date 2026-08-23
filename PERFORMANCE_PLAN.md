@@ -708,9 +708,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Worst hierarchy-time / exact additional-peak ratios: `1.0359722535557985` / `1.1231767791030263`.
 - Evidence: `.ci/performance/routed-radix-compact-sort-latest.json`.
 
+### Moderate-density compact-edge radix sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Worker-firm geometric hierarchy-time ratio: `0.958719162116395`.
+- Worst hierarchy-time / exact additional-peak ratios: `0.9966956961782049` / `1.0610772414320586`.
+- Evidence: `.ci/performance/moderate-radix-compact-sort-latest.json`.
+
 ## Current next action
 
 1. Re-profile contraction subphases after the radix decision.
-2. If routed radix is retained, re-profile contraction sorting and verify the full certified PCG routing matrix.
+2. If moderate-density radix is retained, re-profile contraction sorting and verify the full certified PCG routing matrix.
 3. Re-run full certified PCG routing after any retained hierarchy change.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

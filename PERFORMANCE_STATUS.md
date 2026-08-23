@@ -225,3 +225,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst exact additional-peak ratio: `1.1231767791030263`.
 - Parallel sorting is unchanged; scratch radix is restricted to large moderate-density or bounded small-dense serial/fallback levels.
 - Evidence: `.ci/performance/routed-radix-compact-sort-latest.json`.
+
+## Moderate-density compact-edge radix sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Worker-firm geometric hierarchy-time ratio: `0.958719162116395`.
+- Worst hierarchy-time ratio: `0.9966956961782049`.
+- Worst exact additional-peak ratio: `1.0610772414320586`.
+- Parallel sorting is unchanged; scratch radix is restricted to large serial/fallback levels with two to eight mapped edges per coarse vertex.
+- Evidence: `.ci/performance/moderate-radix-compact-sort-latest.json`.
