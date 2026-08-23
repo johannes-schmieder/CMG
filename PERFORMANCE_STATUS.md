@@ -406,3 +406,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worker/dense geometric ratio: `0.990x`.
 - Worst setup / peak-RSS ratios: `1.026x` / `1.092x`.
 - Evidence: `.ci/performance/parallel-two-stage-sort-latest.json`.
+
+## Fused merge-diagonal gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Graph-build / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/fused-merge-diagonal-latest.json`.

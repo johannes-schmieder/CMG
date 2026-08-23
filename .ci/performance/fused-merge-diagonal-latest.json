@@ -1,0 +1,17 @@
+{
+  "accepted": false,
+  "combined_geometric_time_ratio": 1.0,
+  "decision_reason": "experiment failed safely: command failed (101): /usr/bin/time -v -o /tmp/cmg-fused-diagonal-graph-path-1m-baseline-0.time /tmp/cmg-fused-diagonal-baseline/release/graph-build path 1000000 3",
+  "error": "RuntimeError('command failed (101): /usr/bin/time -v -o /tmp/cmg-fused-diagonal-graph-path-1m-baseline-0.time /tmp/cmg-fused-diagonal-baseline/release/graph-build path 1000000 3')",
+  "experiment": "fused-canonical-merge-diagonal",
+  "graph_cases": {},
+  "graph_geometric_time_ratio": 1.0,
+  "hierarchy_cases": {},
+  "hierarchy_geometric_time_ratio": 1.0,
+  "improved_metric_count": 0,
+  "schema_version": 1,
+  "source_sha": "fc9a263bb704ecaf7d6e82272a2045d72032df60",
+  "validation": "failure",
+  "worst_peak_rss_ratio": 1.0,
+  "worst_time_ratio": 1.0
+}

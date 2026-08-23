@@ -853,6 +853,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but parallel setup timing or memory gates were not met.
 - Evidence: `.ci/performance/parallel-two-stage-sort-latest.json`.
 
+### Fused merge-diagonal checkpoint — 2026-08-23
+
+- Diagonal accumulation during canonical duplicate merging was **not retained**.
+- Validation: `failure`.
+- Geometric graph-build / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: command failed (101): /usr/bin/time -v -o /tmp/cmg-fused-diagonal-graph-path-1m-baseline-0.time /tmp/cmg-fused-diagonal-baseline/release/graph-build path 1000000 3.
+- Evidence: `.ci/performance/fused-merge-diagonal-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
