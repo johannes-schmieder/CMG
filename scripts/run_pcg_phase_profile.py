@@ -1,0 +1,142 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+
+ROOT = Path.cwd()
+
+
+def run(command, timeout=4200):
+    print('+', ' '.join(command), flush=True)
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+    print(completed.stdout, end='')
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({completed.returncode}): {' '.join(command)}"
+        )
+    return completed
+
+
+result = {
+    'schema_version': 3,
+    'experiment': 'certified-pcg-phase-profile',
+    'source_sha': subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], text=True
+    ).strip(),
+    'run_id': os.environ.get('GITHUB_RUN_ID'),
+    'status': 'not_run',
+    'cases': {},
+}
+
+try:
+    run([
+        'cargo', 'build', '--manifest-path', 'benchmarks/Cargo.toml',
+        '--bin', 'pcg-phase-profile', '--release',
+    ])
+    binary = Path('benchmarks/target/release/pcg-phase-profile')
+    specs = [
+        ('path-150k', ['path', '150000', '2', '4']),
+        ('worker-firm-300k', ['worker-firm', '100000', '2', '4']),
+        ('dense-worker-firm-400k', ['dense-worker-firm', '25000', '2', '4']),
+    ]
+    for name, arguments in specs:
+        completed = run([str(binary), *arguments])
+        payloads = [
+            json.loads(line)
+            for line in completed.stdout.splitlines()
+            if line.strip().startswith('{')
+        ]
+        if len(payloads) != 1:
+            raise RuntimeError(
+                f'unexpected profiler output for {name}: {payloads}'
+            )
+        result['cases'][name] = payloads[0]
+
+    result['minimum_parallel_core_share'] = min(
+        case['parallel_core_share'] for case in result['cases'].values()
+    )
+    result['maximum_serial_outer_share'] = max(
+        case['serial_outer_share'] for case in result['cases'].values()
+    )
+    result['maximum_vector_update_share'] = max(
+        case['phases']['vector_updates']['share']
+        for case in result['cases'].values()
+    )
+    result['maximum_dot_product_share'] = max(
+        case['phases']['dot_products']['share']
+        for case in result['cases'].values()
+    )
+    result['status'] = 'success'
+except Exception as error:
+    result['status'] = 'failure'
+    result['error'] = repr(error)
+    print(f'PCG phase profiling failed: {error}', flush=True)
+
+record = Path('.ci/performance/pcg-phase-profile-latest.json')
+record.parent.mkdir(parents=True, exist_ok=True)
+record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+plan_path = Path('PERFORMANCE_PLAN.md')
+plan = plan_path.read_text()
+marker = '## Current next action\n'
+if result['status'] == 'success':
+    rows = []
+    for name, case in result['cases'].items():
+        phases = case['phases']
+        rows.append(
+            f"| {name} | {case['iterations']} | "
+            f"{case['parallel_core_share']:.1%} | "
+            f"{case['serial_outer_share']:.1%} | "
+            f"{phases['preconditioner']['share']:.1%} | "
+            f"{phases['dot_products']['share']:.1%} | "
+            f"{phases['vector_updates']['share']:.1%} |"
+        )
+    checkpoint = '''### Certified PCG phase profile — 2026-08-23
+
+| Case | Iterations | CMG/matvec share | Serial outer share | Preconditioner | Dot products | Vector updates |
+|---|---:|---:|---:|---:|---:|---:|
+''' + '\n'.join(rows) + '''
+
+- The profiler verifies bitwise equality with the ordinary planned solver.
+- Machine-readable evidence: `.ci/performance/pcg-phase-profile-latest.json`.
+
+'''
+else:
+    checkpoint = f'''### Certified PCG phase profile — 2026-08-23
+
+- Status: **failure**.
+- Error: `{result.get('error')}`.
+- Machine-readable evidence: `.ci/performance/pcg-phase-profile-latest.json`.
+
+'''
+if '### Certified PCG phase profile — 2026-08-23' not in plan:
+    plan = plan.replace(marker, checkpoint + marker, 1)
+plan_path.write_text(plan)
+
+status_path = Path('PERFORMANCE_STATUS.md')
+status = status_path.read_text().rstrip()
+if '## Certified PCG phase profile' not in status:
+    if result['status'] == 'success':
+        status += (
+            '\n\n## Certified PCG phase profile\n\n'
+            f"- Minimum CMG/matvec share: `{result['minimum_parallel_core_share']:.1%}`.\n"
+            f"- Maximum serial outer-PCG share: `{result['maximum_serial_outer_share']:.1%}`.\n"
+            f"- Maximum vector-update share: `{result['maximum_vector_update_share']:.1%}`.\n"
+            '- Evidence: `.ci/performance/pcg-phase-profile-latest.json`.\n'
+        )
+    else:
+        status += (
+            '\n\n## Certified PCG phase profile\n\n'
+            '- Status: `failure`; see the machine-readable record.\n'
+        )
+    status_path.write_text(status + '\n')
+
+Path('.github/workflows/pcg-phase-profile.yml').unlink(missing_ok=True)
+Path('scripts/run_pcg_phase_profile.py').unlink(missing_ok=True)
