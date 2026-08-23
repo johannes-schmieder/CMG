@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "baseline_sha": "23727a222c30f9f6ab4724c7069412f0d5ea3fc2",
+  "cases": {},
+  "decision_reason": "experiment failed: Edge weight anchor was not unique",
+  "error": "RuntimeError('Edge weight anchor was not unique')",
+  "experiment": "direct-compact-coarse-contraction",
+  "schema_version": 1,
+  "validation": "not_run"
+}

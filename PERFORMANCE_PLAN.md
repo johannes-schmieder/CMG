@@ -242,6 +242,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/compact-edge-build-buffer-trim-latest.json`.
 
+### Direct compact contraction checkpoint — 2026-08-22
+
+- Building coarse levels directly in the retained 16-byte `Edge` layout was
+  **not retained**.
+- Full serial/all-feature formatting, Clippy, rustdoc, debug/release tests, and
+  release build status: `not_run`.
+- Machine-readable evidence:
+  `.ci/performance/direct-compact-contraction-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
