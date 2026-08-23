@@ -358,15 +358,23 @@ After in-place level output and recursive centering, the accepted recursive-cent
   serial performance, parallel performance, and pinned-C comparison.
 - Production numerical source was unchanged.
 
+### Hierarchy phase-profile checkpoint — 2026-08-23
+
+    - Read-only benchmark status: `failure`.
+    - Aggregate dominant measured phase: `unresolved`
+      (0.0% of summed manual-profile time).
+    - No completed cases.
+    - The profiler reproduces and checks terminal reason, level vertex counts,
+      matrix nonzeros, and fill accounting against production hierarchy
+      construction before timing is interpreted.
+    - No numerical production behavior was changed by this checkpoint.
+    - Machine-readable evidence:
+      `.ci/performance/hierarchy-phase-profile.json`.
+
 ## Current next action
 
-1. Extend `README.md` and benchmark documentation with automatic, explicit
-   within-solve, and explicit across-RHS execution guidance, thread selection,
-   workspace budgeting, and reproducible benchmark commands.
-2. Add read-only per-phase hierarchy instrumentation to identify whether forest
-   construction, splitting, contraction, or terminal factorization dominates
-   the remaining setup cost on large worker–firm graphs.
-3. Begin another production optimization only after that profile identifies a
-   stable bottleneck and a baseline/candidate retain-revert gate is prepared.
-4. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
-   is available.
+    1. Repair and rerun the read-only hierarchy phase profiler.
+    2. Do not mutate production numerical source until the phase profile succeeds.
+    3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+       hardware is available.
+    

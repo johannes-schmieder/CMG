@@ -94,17 +94,10 @@ The decision record is
 
 ## Next prepared optimization
 
-No numerical candidate is currently staged. The next step is measurement and
-user-facing consolidation:
+    The read-only hierarchy phase profiler did not complete successfully. Repair
+    the profiler before staging another production numerical optimization.
 
-1. document the retained automatic and explicit parallel execution APIs,
-   memory budgeting, and benchmark commands;
-2. instrument hierarchy setup phases read-only on large path, sparse
-   worker–firm, and dense worker–firm graphs;
-3. prepare a retain/revert gate only for the phase that dominates measured
-   end-to-end setup time.
-
-## Remaining major work
+    ## Remaining major work
 
 - Extend user-facing memory/performance guidance for automatic, explicit
   within-solve, and explicit across-RHS execution.

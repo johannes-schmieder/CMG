@@ -1,0 +1,8 @@
+{
+  "cases": {},
+  "error": "error('Error -3 while decompressing data: invalid bit length repeat')",
+  "experiment": "hierarchy-phase-profile",
+  "profiled_base_sha": "0d060824d5dd1d499d3c88bd80974f6ec39795da",
+  "schema_version": 1,
+  "status": "failure"
+}
