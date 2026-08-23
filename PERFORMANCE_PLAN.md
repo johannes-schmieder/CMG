@@ -700,9 +700,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Worst hierarchy-time / exact additional-peak ratios: `1.0134175253014959` / `1.1128925174302333`.
 - Evidence: `.ci/performance/radix-compact-sort-latest.json`.
 
+### Density-routed compact-edge radix sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Worker-firm geometric hierarchy-time ratio: `0.9380082112784894`.
+- Worst hierarchy-time / exact additional-peak ratios: `1.0359722535557985` / `1.1231767791030263`.
+- Evidence: `.ci/performance/routed-radix-compact-sort-latest.json`.
+
 ## Current next action
 
 1. Re-profile contraction subphases after the radix decision.
-2. If radix is retained, evaluate caller-owned scratch reuse before widening its routing threshold.
+2. If routed radix is retained, re-profile contraction sorting and verify the full certified PCG routing matrix.
 3. Re-run full certified PCG routing after any retained hierarchy change.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.
