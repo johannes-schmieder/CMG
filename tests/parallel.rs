@@ -2,10 +2,10 @@
 
 use cmg::{
     Aggregation, CmgError, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan,
-    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, build_forest_grouping,
-    build_forest_grouping_with_executor, maximum_weight_forest,
-    maximum_weight_forest_with_executor, solve_pcg_batch, solve_pcg_batch_with_executor,
-    solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
+    ParallelExecutor, ParallelOptions, ParallelPcgExecution, ParallelPcgPolicy, ParallelPcgSolver,
+    PcgOptions, PcgWorkspace, build_forest_grouping, build_forest_grouping_with_executor,
+    maximum_weight_forest, maximum_weight_forest_with_executor, solve_pcg_batch,
+    solve_pcg_batch_with_executor, solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
 };
 
 fn worker_firm_problem(per_side: usize) -> (Laplacian, Vec<f64>) {
@@ -423,4 +423,185 @@ fn one_thread_planned_pcg_is_bitwise_serial() {
     .unwrap();
 
     assert_eq!(serial, planned);
+}
+
+fn routing_path_graph(vertices: usize) -> Laplacian {
+    let edges = (0..vertices.saturating_sub(1))
+        .map(|vertex| (vertex, vertex + 1, 0.5 + (vertex % 17) as f64 / 11.0));
+    Laplacian::from_edges(vertices, edges).unwrap()
+}
+
+fn routing_worker_firm_graph(per_side: usize, degree: usize) -> Laplacian {
+    let mut edges = Vec::with_capacity(per_side * degree);
+    for worker in 0..per_side {
+        for link in 0..degree {
+            let firm = if link == 0 {
+                worker
+            } else if link == 1 {
+                (worker + 1) % per_side
+            } else {
+                ((2 * link + 1) * worker + 17 * link + 3) % per_side
+            };
+            edges.push((worker, per_side + firm, 0.5 + (link % 5) as f64 / 3.0));
+        }
+    }
+    Laplacian::from_edges(2 * per_side, edges).unwrap()
+}
+
+fn routing_rhs(graph: &Laplacian, offset: usize) -> Vec<f64> {
+    let target: Vec<f64> = (0..graph.vertex_count())
+        .map(|vertex| ((vertex * 13 + offset * 17) % 101) as f64 - 50.0)
+        .collect();
+    graph.matvec(&target).unwrap()
+}
+
+fn routing_solver(graph: &Laplacian, threshold: usize) -> ParallelPcgSolver {
+    ParallelPcgSolver::build_with_policy(
+        graph,
+        CmgOptions {
+            direct_threshold: 32,
+            ..CmgOptions::default()
+        },
+        ParallelOptions {
+            threads: 4,
+            min_parallel_len: 1,
+            ..ParallelOptions::default()
+        },
+        ParallelPcgPolicy {
+            min_planned_edges: threshold,
+            min_across_rhs_concurrency: 2,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn prepared_solver_routes_single_and_batch_workloads() {
+    let path = routing_path_graph(1_001);
+    let path_solver = routing_solver(&path, 2_000);
+    assert_eq!(path_solver.plan().operator_count(), 0);
+    assert_eq!(
+        path_solver.select_batch_execution(1).unwrap().execution(),
+        ParallelPcgExecution::Serial
+    );
+    assert_eq!(
+        path_solver.select_batch_execution(2).unwrap().execution(),
+        ParallelPcgExecution::AcrossRightHandSides
+    );
+
+    let small = routing_worker_firm_graph(500, 3);
+    let small_solver = routing_solver(&small, 2_000);
+    assert!(small_solver.plan().operator_count() > 0);
+    assert_eq!(
+        small_solver.select_batch_execution(1).unwrap().execution(),
+        ParallelPcgExecution::Serial
+    );
+
+    let large = routing_worker_firm_graph(1_000, 3);
+    let large_solver = routing_solver(&large, 2_000);
+    assert!(large_solver.plan().operator_count() > 0);
+    assert_eq!(
+        large_solver.select_batch_execution(1).unwrap().execution(),
+        ParallelPcgExecution::Planned
+    );
+    let report = large_solver.select_batch_execution(4).unwrap();
+    assert_eq!(
+        report.execution(),
+        ParallelPcgExecution::AcrossRightHandSides
+    );
+    assert_eq!(report.concurrency(), 4);
+}
+
+#[test]
+fn prepared_solver_matches_explicit_certified_results() {
+    let graph = routing_worker_firm_graph(2_000, 3);
+    let solver = routing_solver(&graph, 2_000);
+    let rhs = routing_rhs(solver.graph(), 0);
+    let serial = solve_pcg_with_workspace(
+        solver.graph(),
+        solver.preconditioner(),
+        &rhs,
+        PcgOptions::default(),
+        &mut PcgWorkspace::new(solver.preconditioner()),
+    )
+    .unwrap();
+    let planned = solver.solve(&rhs, PcgOptions::default()).unwrap();
+    assert_eq!(serial.iterations(), planned.iterations());
+    assert_eq!(serial.restarts(), planned.restarts());
+    assert_eq!(serial.residual_norm(), planned.residual_norm());
+    assert_eq!(serial.backward_error(), planned.backward_error());
+    for (serial_value, planned_value) in serial.solution().iter().zip(planned.solution()) {
+        let scale = 1.0_f64.max(serial_value.abs()).max(planned_value.abs());
+        assert!((serial_value - planned_value).abs() <= 5.0e-10 * scale);
+    }
+
+    let right_hand_sides: Vec<Vec<f64>> = (0..3)
+        .map(|index| routing_rhs(solver.graph(), index))
+        .collect();
+    let expected = solve_pcg_batch(
+        solver.graph(),
+        solver.preconditioner(),
+        &right_hand_sides,
+        PcgOptions::default(),
+    )
+    .unwrap();
+    let mut workspace = solver.workspace();
+    let actual = solver
+        .solve_batch_with_workspace(&right_hand_sides, PcgOptions::default(), &mut workspace)
+        .unwrap();
+    assert_eq!(
+        actual.report().execution(),
+        ParallelPcgExecution::AcrossRightHandSides
+    );
+    assert_eq!(actual.results(), expected);
+    assert_eq!(workspace.workspace_count(), 3);
+}
+
+#[test]
+fn prepared_solver_obeys_workspace_budget() {
+    let graph = routing_worker_firm_graph(1_000, 3);
+    let preconditioner = CmgPreconditioner::build(
+        &graph,
+        CmgOptions {
+            direct_threshold: 32,
+            ..CmgOptions::default()
+        },
+    )
+    .unwrap();
+    let workspace_bytes = PcgWorkspace::new(&preconditioner).byte_len();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 4,
+        min_parallel_len: 1,
+        workspace_memory_budget_bytes: Some(workspace_bytes),
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+    let solver = ParallelPcgSolver::from_preconditioner(
+        preconditioner,
+        executor,
+        ParallelPcgPolicy {
+            min_planned_edges: 0,
+            min_across_rhs_concurrency: 2,
+        },
+    )
+    .unwrap();
+    let report = solver.select_batch_execution(4).unwrap();
+    assert_eq!(report.execution(), ParallelPcgExecution::Planned);
+    assert_eq!(report.concurrency(), 1);
+    assert_eq!(report.workspace_pool_bytes(), workspace_bytes);
+}
+
+#[test]
+fn prepared_solver_empty_batch_is_observable_and_allocation_free() {
+    let graph = routing_path_graph(128);
+    let solver = routing_solver(&graph, 2_000);
+    let mut workspace = solver.workspace();
+    let initial_bytes = workspace.byte_len();
+    let result = solver
+        .solve_batch_with_workspace(&[], PcgOptions::default(), &mut workspace)
+        .unwrap();
+    assert!(result.results().is_empty());
+    assert_eq!(result.report().rhs_count(), 0);
+    assert_eq!(result.report().concurrency(), 0);
+    assert_eq!(workspace.byte_len(), initial_bytes);
 }

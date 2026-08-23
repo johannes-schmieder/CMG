@@ -293,22 +293,22 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ### Prepared parallel solver robust checkpoint — 2026-08-23
 
-- The memory-aware prepared solver candidate was **not retained** after robust,
+- The memory-aware prepared solver candidate was **retained** after robust,
   interleaved seven-sample timing.
-- Validation status: `not_run`.
+- Validation status: `success`.
 - Geometric/worst automatic-to-best explicit timing ratios:
-  `nanx` /
-  `nanx`.
+  `0.989x` /
+  `1.054x`.
 - Geometric/worst automatic-to-selected explicit timing ratios:
-  `nanx` /
-  `nanx`.
+  `0.986x` /
+  `0.999x`.
 - Machine-readable evidence:
   `.ci/performance/prepared-parallel-solver-robust-latest.json`.
 
 ## Current next action
 
-1. Keep the explicit serial, planned, and across-RHS APIs; do not add automatic
-   routing until broader hardware evidence supports a stable rule.
+1. Complete ordinary Ubuntu/macOS/Windows qualification of the retained prepared
+   solver abstraction.
 2. Profile packed contraction keys and reusable contraction buffers.
 3. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
    is available.

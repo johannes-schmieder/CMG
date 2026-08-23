@@ -18,6 +18,8 @@ mod graph;
 mod hierarchy;
 mod ldl;
 mod options;
+#[cfg(feature = "parallel")]
+mod parallel_solver;
 mod pcg;
 mod preconditioner;
 mod sddm;
@@ -40,6 +42,11 @@ pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
 pub use ldl::GroundedLdl;
 pub use options::{CmgOptions, PcgOptions, ValidationOptions};
+#[cfg(feature = "parallel")]
+pub use parallel_solver::{
+    DEFAULT_MIN_PLANNED_EDGES, ParallelPcgBatchReport, ParallelPcgBatchResult,
+    ParallelPcgExecution, ParallelPcgPolicy, ParallelPcgSolver, ParallelPcgWorkspace,
+};
 pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_with_workspace};
 #[cfg(feature = "parallel")]
 pub use pcg::{
