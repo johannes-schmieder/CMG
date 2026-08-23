@@ -803,9 +803,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Active parallel setup / worst RSS ratios: `0.9891906343831914` / `1.0042045435660512`.
 - Evidence: `.ci/performance/dense-parallel-endpoint-sort-latest.json`.
 
+### Fused diagonal nonzero-count checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Graph / hierarchy timing ratios: `0.9956967888302344` / `1.0123246411133622`.
+- Evidence: `.ci/performance/fused-diagonal-nnz-latest.json`.
+
 ## Current next action
 
-1. Re-profile parallel hierarchy sorting after the endpoint-first decision.
-2. Re-run the full certified PCG routing matrix after any retained setup change.
-3. Continue contraction work only with candidates that preserve exact hierarchy bits and peak-memory limits.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Re-profile graph finalization and hierarchy contraction after the diagonal-metadata decision.
+2. Refresh cumulative performance and memory guidance from retained candidates only.
+3. Run the manual 1–32 thread qualification on suitable hardware when available.
+4. Defer additional sort variants unless new profiling exposes a larger stable opportunity.

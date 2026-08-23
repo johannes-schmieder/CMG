@@ -353,3 +353,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst parallel setup / peak-RSS ratios: `1.0101119524801792` / `1.0042045435660512`.
 - Serial endpoint-first ordering and public graph construction remain unchanged; the candidate routes only parallel compact levels with at least four edges per coarse vertex.
 - Evidence: `.ci/performance/dense-parallel-endpoint-sort-latest.json`.
+
+## Fused diagonal nonzero-count gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Graph / hierarchy geometric time ratios: `0.9956967888302344` / `1.0123246411133622`.
+- Worst exact additional-peak / retained ratios: `1.0` / `1.0`.
+- Edge ordering, compensated duplicate aggregation, and degree arithmetic are unchanged.
+- Evidence: `.ci/performance/fused-diagonal-nnz-latest.json`.
