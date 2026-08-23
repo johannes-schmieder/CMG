@@ -1,0 +1,85 @@
+name: Repair PCG phase benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-pcg-phase-benchmark.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Replace benchmark-only phase serialization
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('benchmarks/src/bin/pcg-phase-profile.rs')
+          text = path.read_text()
+          text = text.replace(
+              'PcgOptions, PcgPhaseProfile,\n    PcgPhaseSample, PcgWorkspace,',
+              'PcgOptions, PcgPhaseProfile, PcgWorkspace,',
+          )
+          text = text.replace(
+              'fn phase_json(name: &str, sample: PcgPhaseSample, median_ns: u128, total_ns: u128) -> String {',
+              'fn phase_json(name: &str, calls: usize, median_ns: u128, total_ns: u128) -> String {',
+          )
+          text = text.replace('        sample.calls()\n', '        calls\n')
+
+          start = text.index('    let phase_samples = [')
+          end = text.index('    println!(', start)
+          replacement = '''    let phase_json = [
+              phase_json("setup", calls[0], setup_ns, total_ns),
+              phase_json("preconditioner", calls[1], preconditioner_ns, total_ns),
+              phase_json("matvec", calls[2], matvec_ns, total_ns),
+              phase_json("dot_products", calls[3], dot_ns, total_ns),
+              phase_json("vector_updates", calls[4], update_ns, total_ns),
+              phase_json("centering", calls[5], centering_ns, total_ns),
+              phase_json("norms", calls[6], norms_ns, total_ns),
+              phase_json("residual_recompute", calls[7], recompute_ns, total_ns),
+              phase_json("certification", calls[8], certification_ns, total_ns),
+          ]
+          .join(",");
+
+'''
+          path.write_text(text[:start] + replacement + text[end:])
+
+      - name: Format and qualify benchmark checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+          cargo test --all-targets --all-features
+          cargo build --manifest-path benchmarks/Cargo.toml --bin pcg-phase-profile --release
+
+      - name: Remove one-shot workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/fix-pcg-phase-benchmark.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: qualify exact PCG phase benchmark'
+          for attempt in 1 2 3 4; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          exit 1
