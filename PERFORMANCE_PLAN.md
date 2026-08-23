@@ -817,9 +817,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Hierarchy / planned-PCG geometric ratios: `0.980289811480986` / `0.984276942977803`.
 - Evidence: `.ci/performance/trusted-forest-validation-latest.json`.
 
+### Owned trusted forest split checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `failure`.
+- Hierarchy / planned-PCG geometric ratios: `n/a` / `n/a`.
+- Evidence: `.ci/performance/owned-trusted-split-latest.json`.
+
 ## Current next action
 
-1. Re-profile forest splitting/component labeling after the trusted-validation decision.
+1. Re-profile forest splitting/component labeling after the ownership decision.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
 4. Defer further sort variants unless a materially larger stable opportunity appears.
