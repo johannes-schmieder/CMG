@@ -402,7 +402,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Parallel endpoint-first sort gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Worker/dense geometric ratio: `1.000x`.
-- Worst setup / peak-RSS ratios: `1.000x` / `1.000x`.
+- Validation: `success`.
+- Worker/dense geometric ratio: `0.990x`.
+- Worst setup / peak-RSS ratios: `1.026x` / `1.092x`.
 - Evidence: `.ci/performance/parallel-two-stage-sort-latest.json`.

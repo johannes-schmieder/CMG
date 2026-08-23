@@ -847,10 +847,10 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Parallel endpoint-first sort checkpoint — 2026-08-23
 
 - Parallel endpoint-first compact-edge ordering was **not retained**.
-- Validation: `failure`.
-- Active worker/dense geometric setup ratio: `1.000x`.
-- Worst setup ratio: `1.000x`; worst peak-RSS ratio: `1.000x`.
-- Decision: experiment failed safely: parallel compact sort site changed unexpectedly.
+- Validation: `success`.
+- Active worker/dense geometric setup ratio: `0.990x`.
+- Worst setup ratio: `1.026x`; worst peak-RSS ratio: `1.092x`.
+- Decision: qualification passed, but parallel setup timing or memory gates were not met.
 - Evidence: `.ci/performance/parallel-two-stage-sort-latest.json`.
 
 ## Current next action

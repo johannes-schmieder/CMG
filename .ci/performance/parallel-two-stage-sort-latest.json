@@ -1,14 +1,226 @@
 {
+  "acceptance_limits": {
+    "active_geometric_time_ratio_max": 0.985,
+    "improved_active_case_count_min": 3,
+    "worst_peak_rss_ratio_max": 1.03,
+    "worst_time_ratio_max": 1.04
+  },
   "accepted": false,
-  "active_geometric_time_ratio": 1.0,
-  "cases": {},
-  "decision_reason": "experiment failed safely: parallel compact sort site changed unexpectedly",
-  "error": "RuntimeError('parallel compact sort site changed unexpectedly')",
+  "active_geometric_time_ratio": 0.9904188943695227,
+  "cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "2",
+        "4"
+      ],
+      "baseline_median_ns": 480296333.0,
+      "baseline_peak_rss_kib": 267428,
+      "candidate_median_ns": 478630950.0,
+      "candidate_over_baseline_peak_rss": 1.092241650088996,
+      "candidate_over_baseline_time": 0.9965325927233344,
+      "candidate_peak_rss_kib": 292096,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1599978,
+        "matrix_nonzeros": [
+          3399956,
+          3101231,
+          2964889,
+          2888014,
+          2841296,
+          2808138
+        ],
+        "repetitions": 2,
+        "scale": 100000,
+        "threads": 4,
+        "vertex_counts": [
+          200000,
+          107569,
+          78693,
+          68060,
+          63944,
+          61764
+        ],
+        "vertices": 200000
+      }
+    },
+    "dense-worker-firm-3.2m": {
+      "arguments": [
+        "dense-worker-firm",
+        "200000",
+        "2",
+        "4"
+      ],
+      "baseline_median_ns": 1017161124.0,
+      "baseline_peak_rss_kib": 531636,
+      "candidate_median_ns": 980626430.5,
+      "candidate_over_baseline_peak_rss": 1.0191032962402846,
+      "candidate_over_baseline_time": 0.9640817048174956,
+      "candidate_peak_rss_kib": 541792,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 3199978,
+        "matrix_nonzeros": [
+          6799956,
+          6191145,
+          5920761,
+          5780610,
+          5700653,
+          5644445
+        ],
+        "repetitions": 2,
+        "scale": 200000,
+        "threads": 4,
+        "vertex_counts": [
+          400000,
+          212659,
+          154925,
+          134510,
+          126989,
+          123207
+        ],
+        "vertices": 400000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "2",
+        "4"
+      ],
+      "baseline_median_ns": 72976174.0,
+      "baseline_peak_rss_kib": 105740,
+      "candidate_median_ns": 68994866.0,
+      "candidate_over_baseline_peak_rss": 1.0094193304331378,
+      "candidate_over_baseline_time": 0.9454437279762022,
+      "candidate_peak_rss_kib": 106736,
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "matrix_nonzeros": [
+          2999998,
+          749998,
+          187498,
+          46873,
+          11716,
+          2926,
+          730
+        ],
+        "repetitions": 2,
+        "scale": 1000000,
+        "threads": 4,
+        "vertex_counts": [
+          1000000,
+          250000,
+          62500,
+          15625,
+          3906,
+          976,
+          244
+        ],
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "2",
+        "4"
+      ],
+      "baseline_median_ns": 199253876.5,
+      "baseline_peak_rss_kib": 160864,
+      "candidate_median_ns": 194589622.5,
+      "candidate_over_baseline_peak_rss": 0.9947533320071613,
+      "candidate_over_baseline_time": 0.9765914014726835,
+      "candidate_peak_rss_kib": 160020,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1499996,
+        "matrix_nonzeros": [
+          3999992,
+          1859979,
+          756874,
+          423975,
+          259888,
+          162389,
+          99689,
+          59839,
+          35432
+        ],
+        "repetitions": 2,
+        "scale": 500000,
+        "threads": 4,
+        "vertex_counts": [
+          1000000,
+          326085,
+          63926,
+          19675,
+          7750,
+          3157,
+          1463,
+          805,
+          492
+        ],
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "2",
+        "4"
+      ],
+      "baseline_median_ns": 414666227.5,
+      "baseline_peak_rss_kib": 311064,
+      "candidate_median_ns": 425261521.0,
+      "candidate_over_baseline_peak_rss": 0.9764164287735,
+      "candidate_over_baseline_time": 1.0255513779452898,
+      "candidate_peak_rss_kib": 303728,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 2999996,
+        "matrix_nonzeros": [
+          7999992,
+          3719975,
+          1390513,
+          721444,
+          464405,
+          302731,
+          199676,
+          128116,
+          75384,
+          38171
+        ],
+        "repetitions": 2,
+        "scale": 1000000,
+        "threads": 4,
+        "vertex_counts": [
+          2000000,
+          652171,
+          115011,
+          28250,
+          11383,
+          5173,
+          2650,
+          1508,
+          908,
+          499
+        ],
+        "vertices": 2000000
+      }
+    }
+  },
+  "decision_reason": "qualification passed, but parallel setup timing or memory gates were not met",
   "experiment": "parallel-endpoint-first-weight-sort",
-  "improved_active_case_count": 0,
+  "improved_active_case_count": 3,
   "schema_version": 1,
-  "source_sha": "b9fe155908a55e5589a95e760275a9d3625cfbce",
-  "validation": "failure",
-  "worst_peak_rss_ratio": 1.0,
-  "worst_time_ratio": 1.0
+  "source_sha": "0225297d149a4c8de6d92e171d896ffe90411aaf",
+  "validation": "success",
+  "worst_peak_rss_ratio": 1.092241650088996,
+  "worst_time_ratio": 1.0255513779452898
 }
