@@ -1,0 +1,29 @@
+name: PCG parallel strategy matrix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pcg-strategy-matrix.yml'
+      - 'scripts/benchmark_pcg_strategy_matrix.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Build and run explicit PCG strategy matrix
+        run: python scripts/benchmark_pcg_strategy_matrix.py
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/pcg-strategy-matrix.json || true
