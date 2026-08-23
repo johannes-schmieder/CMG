@@ -1,0 +1,49 @@
+name: Gate compact hierarchy index storage v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-hierarchy-index-v2.yml'
+      - '.ci/performance/compact-hierarchy-index-analysis.json'
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate and benchmark compact index candidate
+        run: python scripts/compact_hierarchy_index_gate_v2.py
+
+      - name: Commit decision checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          if ! git diff --cached --quiet -- src; then
+            message='perf: compact retained hierarchy index storage'
+          else
+            message='perf: record compact hierarchy-index experiment'
+          fi
+          git commit -m "$message"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
