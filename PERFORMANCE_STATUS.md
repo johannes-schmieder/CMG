@@ -196,3 +196,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Duplicate-heavy geometric graph-build ratio: `0.9707700491430172`.
 - The parallel sort path remains unchanged.
 - Evidence: `.ci/performance/raw-two-stage-sort-latest.json`.
+
+## Sample-routed raw graph ordering gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Overall geometric graph-build ratio: `n/a`.
+- Duplicate-heavy geometric graph-build ratio: `n/a`.
+- The parallel sort path remains unchanged.
+- Evidence: `.ci/performance/routed-raw-sort-latest.json`.

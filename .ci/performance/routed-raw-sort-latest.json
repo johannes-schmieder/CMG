@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "cases": {},
+  "decision_reason": "experiment failed: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "sample-routed-raw-graph-sort",
+  "schema_version": 1,
+  "source_sha": "d2a22146ad774235ea0b345068766f88dac862be",
+  "validation": "failure"
+}

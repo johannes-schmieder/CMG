@@ -685,6 +685,13 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Overall/duplicate-heavy graph-build ratios: `1.00652839386318` / `0.9707700491430172`.
 - Evidence: `.ci/performance/raw-two-stage-sort-latest.json`.
 
+### Sample-routed raw graph sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `failure`.
+- Overall/duplicate-heavy graph-build ratios: `n/a` / `n/a`.
+- Evidence: `.ci/performance/routed-raw-sort-latest.json`.
+
 ## Current next action
 
 1. Benchmark the remaining contraction mapping kernel under the current sort and merge implementation.
