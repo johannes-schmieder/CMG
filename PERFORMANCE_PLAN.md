@@ -810,9 +810,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Graph / hierarchy timing ratios: `0.9956967888302344` / `1.0123246411133622`.
 - Evidence: `.ci/performance/fused-diagonal-nnz-latest.json`.
 
+### Trusted internal forest validation checkpoint — 2026-08-23
+
+- Candidate was **retained**.
+- Validation: `success`.
+- Hierarchy / planned-PCG geometric ratios: `0.980289811480986` / `0.984276942977803`.
+- Evidence: `.ci/performance/trusted-forest-validation-latest.json`.
+
 ## Current next action
 
-1. Re-profile graph finalization and hierarchy contraction after the diagonal-metadata decision.
-2. Refresh cumulative performance and memory guidance from retained candidates only.
+1. Re-profile forest splitting/component labeling after the trusted-validation decision.
+2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Defer additional sort variants unless new profiling exposes a larger stable opportunity.
+4. Defer further sort variants unless a materially larger stable opportunity appears.

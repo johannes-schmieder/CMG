@@ -155,7 +155,7 @@ fn finish_forest_aggregation_labels(
     heavy_parent: Vec<usize>,
     selected_weight: Vec<f64>,
 ) -> Result<(Vec<usize>, usize), CmgError> {
-    let mut final_parent = split_forest(&heavy_parent)?;
+    let mut final_parent = split_forest_trusted(&heavy_parent)?;
     drop(heavy_parent);
     apply_low_effective_degree_correction(
         graph,
@@ -164,7 +164,7 @@ fn finish_forest_aggregation_labels(
         &mut final_parent,
     );
     drop(selected_weight);
-    forest_component_labels(&final_parent)
+    Ok(forest_component_labels_trusted(&final_parent))
 }
 
 fn apply_low_effective_degree_correction(
@@ -282,7 +282,17 @@ fn consider_parent(
 
 /// Port the upstream `split_forest_` diameter and conductance cuts.
 pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
-    validate_parent(parent)?;
+    split_forest_impl(parent, true)
+}
+
+fn split_forest_trusted(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
+    split_forest_impl(parent, false)
+}
+
+fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, CmgError> {
+    if validate {
+        validate_parent(parent)?;
+    }
     let n = parent.len();
     let mut forest = parent.to_vec();
     let mut ancestors = vec![0_i64; n];
@@ -394,8 +404,7 @@ pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
     Ok(forest)
 }
 
-fn forest_component_labels(parent: &[usize]) -> Result<(Vec<usize>, usize), CmgError> {
-    validate_parent(parent)?;
+fn forest_component_labels_trusted(parent: &[usize]) -> (Vec<usize>, usize) {
     let n = parent.len();
     let mut disjoint_set: Vec<usize> = (0..n).collect();
     for (vertex, &target) in parent.iter().enumerate() {
@@ -419,7 +428,7 @@ fn forest_component_labels(parent: &[usize]) -> Result<(Vec<usize>, usize), CmgE
         };
         labels[vertex] = label;
     }
-    Ok((labels, aggregate_count))
+    (labels, aggregate_count)
 }
 
 /// Compute deterministic connected components of a functional forest.
@@ -518,5 +527,30 @@ mod lean_hierarchy_forest_tests {
         let (labels, aggregate_count) = build_forest_aggregation_labels(&graph, 0.125).unwrap();
         assert_eq!(labels, complete.labels());
         assert_eq!(aggregate_count, complete.aggregate_count());
+    }
+}
+
+#[cfg(test)]
+mod trusted_internal_forest_tests {
+    use super::{
+        forest_component_labels_trusted, forest_components, split_forest, split_forest_trusted,
+    };
+
+    #[test]
+    fn trusted_internal_paths_match_checked_public_paths() {
+        let parent = vec![1, 2, 2, 4, 3, 6, 6, 8, 9, 9, 11, 10];
+        let checked_split = split_forest(&parent).unwrap();
+        let trusted_split = split_forest_trusted(&parent).unwrap();
+        assert_eq!(trusted_split, checked_split);
+
+        let (trusted_labels, aggregate_count) = forest_component_labels_trusted(&checked_split);
+        let (checked_labels, sizes) = forest_components(&checked_split).unwrap();
+        assert_eq!(trusted_labels, checked_labels);
+        assert_eq!(aggregate_count, sizes.len());
+    }
+
+    #[test]
+    fn public_split_still_rejects_out_of_range_parent() {
+        assert!(split_forest(&[0, 2]).is_err());
     }
 }

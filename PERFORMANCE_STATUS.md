@@ -362,3 +362,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst exact additional-peak / retained ratios: `1.0` / `1.0`.
 - Edge ordering, compensated duplicate aggregation, and degree arithmetic are unchanged.
 - Evidence: `.ci/performance/fused-diagonal-nnz-latest.json`.
+
+## Trusted internal forest validation gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Hierarchy geometric / worst time ratios: `0.980289811480986` / `0.9962345609157709`.
+- Serial / planned PCG geometric ratios: `0.9830002420877726` / `0.984276942977803`.
+- Public `split_forest` and `forest_components` validation remain unchanged.
+- Evidence: `.ci/performance/trusted-forest-validation-latest.json`.
