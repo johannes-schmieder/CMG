@@ -82,7 +82,7 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 ## Latest resolved benchmark gate
 
 The packed endpoint-key experiment completed with validation
-`not_run` and was **not retained**.
+`success` and was **not retained**. Geometric time/RSS ratios: 0.970/1.009.
 The decision record is `.ci/performance/packed-endpoint-key-latest.json`.
 
 ## Next prepared optimization

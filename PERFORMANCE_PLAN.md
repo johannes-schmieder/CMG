@@ -308,9 +308,9 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Packed endpoint-key checkpoint — 2026-08-23
 
 - Replacing the two-endpoint comparator with one packed 64-bit endpoint key was
-  **not retained**.
-- Validation status: `not_run`.
-- Decision: experiment failed: benchmark dependency anchor was not unique.
+  **not retained**. Geometric time/RSS ratios: 0.970/1.009.
+- Validation status: `success`.
+- Decision: qualification passed, but packed endpoint ordering did not meet the material timing and memory gates.
 - Machine-readable evidence:
   `.ci/performance/packed-endpoint-key-latest.json`.
 
