@@ -1,10 +1,10 @@
 {
   "accepted": false,
-  "baseline_sha": "865261de77124a6a1431e480137560aabfd352cb",
+  "baseline_sha": "8585c59b498414daf0274fc42883d682965b813d",
   "cases": {},
-  "decision_reason": "experiment failed: Edge weight anchor was not unique",
-  "error": "RuntimeError('Edge weight anchor was not unique')",
+  "decision_reason": "experiment failed: command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check",
+  "error": "RuntimeError('command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check')",
   "experiment": "direct-compact-coarse-contraction",
-  "schema_version": 1,
+  "schema_version": 2,
   "validation": "not_run"
 }

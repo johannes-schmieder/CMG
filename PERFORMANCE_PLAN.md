@@ -242,12 +242,12 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/compact-edge-build-buffer-trim-latest.json`.
 
-### Direct compact contraction checkpoint — 2026-08-22
+### Direct compact contraction checkpoint — 2026-08-23
 
-- Building coarse levels directly in the retained 16-byte `Edge` layout was
+- Building coarse levels directly in retained 16-byte `Edge` storage was
   **not retained**.
-- Full serial/all-feature formatting, Clippy, rustdoc, debug/release tests, and
-  release build status: `not_run`.
+- Qualification status: `not_run`.
+- Decision: experiment failed: command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check.
 - Machine-readable evidence:
   `.ci/performance/direct-compact-contraction-latest.json`.
 

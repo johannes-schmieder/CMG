@@ -41,19 +41,12 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 - These values are directional hosted-runner evidence, not a claim about
   8–32-core or NUMA scaling.
 
-## Active benchmark gate
+## Latest resolved benchmark gate
 
-The corrected one-shot gate
-`.github/workflows/direct-compact-contraction.yml` is active. It evaluates
-constructing coarse levels directly in retained 16-byte `Edge` storage rather
-than first materializing 24-byte `(usize, usize, f64)` tuples. Its script is
-`scripts/direct_compact_contraction_gate.py`.
-
-Do not infer that this candidate was retained until
-`.ci/performance/direct-compact-contraction-latest.json` exists and the workflow
-and script have removed themselves. The gate must preserve hierarchy metadata,
-pass all serial/all-feature tests, and meet both serial and four-thread timing
-and peak-RSS limits.
+The corrected direct compact-contraction gate completed with status
+`not_run`. The candidate was **not retained**.
+The decision record is
+`.ci/performance/direct-compact-contraction-latest.json`.
 
 ## Next prepared optimization
 
