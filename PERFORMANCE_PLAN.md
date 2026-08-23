@@ -789,9 +789,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Hierarchy time / geometric exact-peak ratios: `0.9971156999848793` / `1.0`.
 - Evidence: `.ci/performance/owned-component-labels-latest.json`.
 
+### Parallel endpoint-first compact sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `failure`.
+- Active parallel setup / worst RSS ratios: `n/a` / `n/a`.
+- Evidence: `.ci/performance/parallel-endpoint-sort-latest.json`.
+
 ## Current next action
 
-1. Refresh cumulative large-graph hierarchy memory guidance after the component-label decision.
-2. Re-profile forest and contraction phases after retained memory changes.
-3. Continue sort-dominant contraction work only with a design that clears both speed and peak-memory gates.
+1. Re-profile parallel hierarchy sorting after the endpoint-first decision.
+2. Re-run the full certified PCG routing matrix after any retained setup change.
+3. Continue contraction work only with candidates that preserve exact hierarchy bits and peak-memory limits.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

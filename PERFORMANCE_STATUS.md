@@ -335,3 +335,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric / best exact additional-peak ratios: `1.0` / `1.0`.
 - Public `forest_components` diagnostic behavior is unchanged.
 - Evidence: `.ci/performance/owned-component-labels-latest.json`.
+
+## Parallel endpoint-first compact sort gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Active-case parallel setup geometric ratio: `n/a`.
+- Worst parallel setup / peak-RSS ratios: `n/a` / `n/a`.
+- Serial endpoint-first ordering and public graph construction remain unchanged.
+- Evidence: `.ci/performance/parallel-endpoint-sort-latest.json`.

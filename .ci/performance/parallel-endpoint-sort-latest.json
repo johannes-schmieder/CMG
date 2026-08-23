@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "cases": {},
+  "decision_reason": "experiment failed: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+  "error": "JSONDecodeError('Expecting property name enclosed in double quotes: line 1 column 2 (char 1)')",
+  "experiment": "parallel-compact-endpoint-first-sort",
+  "schema_version": 1,
+  "source_sha": "70dbceaedd4672707e5b94ec03036238dbadd56b",
+  "validation": "failure"
+}
