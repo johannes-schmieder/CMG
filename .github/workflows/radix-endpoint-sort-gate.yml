@@ -1,0 +1,38 @@
+name: Routed in-place endpoint radix gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/radix-endpoint-sort-gate.yml'
+      - 'scripts/radix_endpoint_sort_gate.py.gz.b64.part*'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reconstruct and run benchmark gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat scripts/radix_endpoint_sort_gate.py.gz.b64.part* \
+            | base64 --decode \
+            | gzip --decompress \
+            > scripts/radix_endpoint_sort_gate.py
+          rm scripts/radix_endpoint_sort_gate.py.gz.b64.part*
+          python scripts/radix_endpoint_sort_gate.py
+
+      - name: Show decision record
+        if: always()
+        shell: bash
+        run: |
+          git show origin/main:.ci/performance/radix-endpoint-sort-latest.json || true
