@@ -1,0 +1,30 @@
+name: Prepared parallel PCG solver gate v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/prepared-parallel-solver-gate-v2.yml'
+      - 'scripts/prepared_parallel_solver_gate_v2.py'
+      - 'scripts/add_prepared_parallel_solver_v2.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify repaired prepared parallel PCG solver
+        run: python scripts/prepared_parallel_solver_gate_v2.py
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/prepared-parallel-solver-latest.json || true
