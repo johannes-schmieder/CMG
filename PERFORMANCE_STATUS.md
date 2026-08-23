@@ -285,3 +285,14 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Serial/planned PCG geometric ratios: `0.9867773370546498` / `0.9951106963463812`.
 - Public aggregate sizes remain available through a thread-safe lazy compatibility cache.
 - Evidence: `.ci/performance/lazy-aggregation-sizes-latest.json`.
+
+## Post-lazy-size routing requalification
+
+- Status: `success`.
+- Source SHA: `b70ba28e8e06fa7e56c4f012c9e1ad40d2ca4aa9`.
+- Routing failures: `none`.
+- Metadata failures: `none`.
+- Numerical failures: `none`.
+- Planned-case geometric speedup: `1.312632282108527`.
+- Maximum scaled serial/planned solution difference: `5.605302390305238e-10`.
+- Evidence: `.ci/performance/post-lazy-size-routing.json`.

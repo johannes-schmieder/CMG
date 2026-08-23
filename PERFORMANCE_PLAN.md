@@ -753,8 +753,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Serial/planned PCG ratios: `0.9867773370546498` / `0.9951106963463812`.
 - Evidence: `.ci/performance/lazy-aggregation-sizes-latest.json`.
 
+### Post-lazy-size routing requalification — 2026-08-23
+
+- Status: `success`.
+- Routing / metadata / numerical failures: `0` / `0` / `0`.
+- Planned-case geometric speedup: `1.312632282108527`.
+- Evidence: `.ci/performance/post-lazy-size-routing.json`.
+
 ## Current next action
 
-1. Re-run the full routing matrix if lazy aggregate sizes are retained.
+1. Refresh cumulative hierarchy-memory accounting after compact labels and lazy aggregate sizes.
 2. Continue sort-dominant contraction work only with a design that clears both speed and peak-memory gates.
-3. Run the manual 1–32 thread qualification on suitable hardware when available.
+3. Audit public API documentation for the lazy compatibility caches.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.
