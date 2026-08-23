@@ -1,0 +1,220 @@
+{
+  "cases": {
+    "dense-worker-firm-400k": {
+      "backward_error": 6.156236952861186e-09,
+      "case": "dense-worker-firm",
+      "edges": 399930,
+      "input_edges": 400000,
+      "iterations": 9,
+      "operators": 5,
+      "parallel_core_median_ns": 54083989,
+      "parallel_core_share": 0.8097723358542376,
+      "phases": {
+        "centering": {
+          "calls": 26,
+          "median_ns": 5785531,
+          "share": 0.08662384263163546
+        },
+        "certification": {
+          "calls": 2,
+          "median_ns": 261459,
+          "share": 0.0039146939616475605
+        },
+        "dot_products": {
+          "calls": 18,
+          "median_ns": 1459442,
+          "share": 0.02185149023278923
+        },
+        "matvec": {
+          "calls": 9,
+          "median_ns": 4008601,
+          "share": 0.06001876443096001
+        },
+        "norms": {
+          "calls": 20,
+          "median_ns": 2308101,
+          "share": 0.03455803413756152
+        },
+        "preconditioner": {
+          "calls": 9,
+          "median_ns": 49438216,
+          "share": 0.7402135158851975
+        },
+        "residual_recompute": {
+          "calls": 1,
+          "median_ns": 637172,
+          "share": 0.009540055538080157
+        },
+        "setup": {
+          "calls": 1,
+          "median_ns": 1338194,
+          "share": 0.02003610497750315
+        },
+        "vector_updates": {
+          "calls": 19,
+          "median_ns": 576041,
+          "share": 0.008624771854713062
+        }
+      },
+      "production_median_ns": 65436106,
+      "profile_overhead_ratio": 1.020677009723042,
+      "profile_total_median_ns": 66789129,
+      "repetitions": 2,
+      "residual_norm": 0.0003279385605283138,
+      "restarts": 1,
+      "scale": 25000,
+      "serial_outer_median_ns": 10390574,
+      "serial_outer_share": 0.15557283281834683,
+      "threads": 4,
+      "unattributed_median_ns": 1208189,
+      "vertices": 50000
+    },
+    "path-150k": {
+      "backward_error": 7.551762186393004e-09,
+      "case": "path",
+      "edges": 149999,
+      "input_edges": 149999,
+      "iterations": 29,
+      "operators": 0,
+      "parallel_core_median_ns": 91449443,
+      "parallel_core_share": 0.47751422719096714,
+      "phases": {
+        "centering": {
+          "calls": 86,
+          "median_ns": 55738994,
+          "share": 0.2910478377031991
+        },
+        "certification": {
+          "calls": 2,
+          "median_ns": 800146,
+          "share": 0.004178058239566791
+        },
+        "dot_products": {
+          "calls": 58,
+          "median_ns": 13392338,
+          "share": 0.06992969799007111
+        },
+        "matvec": {
+          "calls": 29,
+          "median_ns": 7942568,
+          "share": 0.04147307075923585
+        },
+        "norms": {
+          "calls": 60,
+          "median_ns": 20284678,
+          "share": 0.10591887737345336
+        },
+        "preconditioner": {
+          "calls": 29,
+          "median_ns": 82226549,
+          "share": 0.42935578077074993
+        },
+        "residual_recompute": {
+          "calls": 2,
+          "median_ns": 1280326,
+          "share": 0.00668537566098136
+        },
+        "setup": {
+          "calls": 1,
+          "median_ns": 4536068,
+          "share": 0.023685622727146364
+        },
+        "vector_updates": {
+          "calls": 60,
+          "median_ns": 4987076,
+          "share": 0.026040615054184854
+        }
+      },
+      "production_median_ns": 189867566,
+      "profile_overhead_ratio": 1.0086580664335265,
+      "profile_total_median_ns": 191511452,
+      "repetitions": 2,
+      "residual_norm": 5.5120534666461645e-05,
+      "restarts": 2,
+      "scale": 150000,
+      "serial_outer_median_ns": 95203232,
+      "serial_outer_share": 0.4971150863604752,
+      "threads": 4,
+      "unattributed_median_ns": 602472,
+      "vertices": 150000
+    },
+    "worker-firm-300k": {
+      "backward_error": 6.1478852947836375e-09,
+      "case": "worker-firm",
+      "edges": 299996,
+      "input_edges": 300000,
+      "iterations": 20,
+      "operators": 5,
+      "parallel_core_median_ns": 86575691,
+      "parallel_core_share": 0.4738650629606334,
+      "phases": {
+        "centering": {
+          "calls": 59,
+          "median_ns": 51605434,
+          "share": 0.2824581813793529
+        },
+        "certification": {
+          "calls": 2,
+          "median_ns": 1062547,
+          "share": 0.005815765317468065
+        },
+        "dot_products": {
+          "calls": 40,
+          "median_ns": 12735230,
+          "share": 0.06970525439719732
+        },
+        "matvec": {
+          "calls": 20,
+          "median_ns": 9779920,
+          "share": 0.05352960343741245
+        },
+        "norms": {
+          "calls": 42,
+          "median_ns": 19123297,
+          "share": 0.10466982396848432
+        },
+        "preconditioner": {
+          "calls": 20,
+          "median_ns": 75687177,
+          "share": 0.4142676596646235
+        },
+        "residual_recompute": {
+          "calls": 1,
+          "median_ns": 1108594,
+          "share": 0.006067799858597495
+        },
+        "setup": {
+          "calls": 1,
+          "median_ns": 6212904,
+          "share": 0.03400582901646573
+        },
+        "vector_updates": {
+          "calls": 41,
+          "median_ns": 4915774,
+          "share": 0.026906092565986504
+        }
+      },
+      "production_median_ns": 179305394,
+      "profile_overhead_ratio": 1.0189383817421578,
+      "profile_total_median_ns": 182701148,
+      "repetitions": 2,
+      "residual_norm": 0.00010625731538737036,
+      "restarts": 1,
+      "scale": 100000,
+      "serial_outer_median_ns": 89442282,
+      "serial_outer_share": 0.48955511762848913,
+      "threads": 4,
+      "unattributed_median_ns": 814919,
+      "vertices": 200000
+    }
+  },
+  "experiment": "certified-pcg-phase-profile",
+  "maximum_dot_product_share": 0.06992969799007111,
+  "maximum_serial_outer_share": 0.4971150863604752,
+  "maximum_vector_update_share": 0.026906092565986504,
+  "minimum_parallel_core_share": 0.4738650629606334,
+  "run_id": "32652374083",
+  "schema_version": 3,
+  "source_sha": "7f6f8509f86241834ed4092bf3feb530a31242f1",
+  "status": "success"
+}

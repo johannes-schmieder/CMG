@@ -69,3 +69,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Continue coarse-contraction/setup profiling, particularly reusable contraction buffers and routed temporary capacity.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable hardware.
 - Defer panel Krylov, aggressive SIMD, and NUMA-specific tuning until ordinary deterministic paths are fully profiled.
+
+## Certified PCG phase profile
+
+- Minimum CMG/matvec share: `47.4%`.
+- Maximum serial outer-PCG share: `49.7%`.
+- Maximum vector-update share: `2.7%`.
+- Evidence: `.ci/performance/pcg-phase-profile-latest.json`.
+

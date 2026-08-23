@@ -517,6 +517,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/full-pcg-routing-latest.json`.
 
+### Certified PCG phase profile — 2026-08-23
+
+| Case | Iterations | CMG/matvec share | Serial outer share | Preconditioner | Dot products | Vector updates |
+|---|---:|---:|---:|---:|---:|---:|
+| path-150k | 29 | 47.8% | 49.7% | 42.9% | 7.0% | 2.6% |
+| worker-firm-300k | 20 | 47.4% | 49.0% | 41.4% | 7.0% | 2.7% |
+| dense-worker-firm-400k | 9 | 81.0% | 15.6% | 74.0% | 2.2% | 0.9% |
+
+- The profiler verifies bitwise equality with the ordinary planned solver.
+- Machine-readable evidence: `.ci/performance/pcg-phase-profile-latest.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest
