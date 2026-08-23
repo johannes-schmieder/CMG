@@ -6,7 +6,7 @@ rust-version = "1.85"
 publish = false
 
 [dependencies]
-cmg = { path = "..", features = ["parallel"] }
+cmg = { path = "..", features = ["parallel", "profiling"] }
 
 [[bin]]
 name = "graph-build"
