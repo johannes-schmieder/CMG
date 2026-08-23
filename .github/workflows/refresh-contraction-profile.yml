@@ -1,3 +1,4 @@
+# Armed after the workflow existed on the default branch.
 name: Refresh current-kernel contraction profile
 
 on:
