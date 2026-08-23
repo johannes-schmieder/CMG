@@ -1,0 +1,35 @@
+name: Checkpoint contraction survival profile v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/checkpoint-contraction-profile-v2.yml'
+      - 'scripts/checkpoint_contraction_profile.py'
+
+permissions:
+  contents: write
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update live recovery documents
+        run: python scripts/checkpoint_contraction_profile.py
+
+      - name: Commit live checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: checkpoint packed-key and contraction profile'
+          git pull --rebase origin main
+          git push origin HEAD:main
