@@ -792,8 +792,8 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Parallel endpoint-first compact sort checkpoint — 2026-08-23
 
 - Candidate was **not retained**.
-- Validation: `failure`.
-- Active parallel setup / worst RSS ratios: `n/a` / `n/a`.
+- Validation: `success`.
+- Active parallel setup / worst RSS ratios: `0.9957837547352953` / `1.0016806860478462`.
 - Evidence: `.ci/performance/parallel-endpoint-sort-latest.json`.
 
 ## Current next action

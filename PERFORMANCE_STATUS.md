@@ -339,8 +339,8 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Parallel endpoint-first compact sort gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Active-case parallel setup geometric ratio: `n/a`.
-- Worst parallel setup / peak-RSS ratios: `n/a` / `n/a`.
+- Validation: `success`.
+- Active-case parallel setup geometric ratio: `0.9957837547352953`.
+- Worst parallel setup / peak-RSS ratios: `1.0254294870933098` / `1.0016806860478462`.
 - Serial endpoint-first ordering and public graph construction remain unchanged.
 - Evidence: `.ci/performance/parallel-endpoint-sort-latest.json`.

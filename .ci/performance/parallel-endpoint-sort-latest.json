@@ -1,10 +1,147 @@
 {
+  "acceptance_limits": {
+    "active_parallel_setup_geometric_ratio_max": 0.985,
+    "parallel_batch_geometric_ratio_max": 1.03,
+    "parallel_batch_worst_ratio_max": 1.08,
+    "parallel_setup_worst_ratio_max": 1.03,
+    "serial_setup_geometric_ratio_max": 1.025,
+    "serial_setup_worst_ratio_max": 1.05,
+    "worst_peak_rss_ratio_max": 1.03
+  },
   "accepted": false,
-  "cases": {},
-  "decision_reason": "experiment failed: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
-  "error": "JSONDecodeError('Expecting property name enclosed in double quotes: line 1 column 2 (char 1)')",
+  "active_parallel_setup_geometric_ratio": 0.9957837547352953,
+  "cases": {
+    "dense-worker-firm-200k": {
+      "baseline_parallel_batch_ns": 760622431.5,
+      "baseline_parallel_setup_ns": 784712021.0,
+      "baseline_peak_rss_kib": 1023104,
+      "baseline_serial_setup_ns": 716472584.5,
+      "candidate_over_baseline_parallel_batch": 1.0096255733420347,
+      "candidate_over_baseline_parallel_setup": 0.9803245718342322,
+      "candidate_over_baseline_peak_rss": 1.0007584761666457,
+      "candidate_over_baseline_serial_setup": 1.006500848882097,
+      "candidate_parallel_batch_ns": 767943858.5,
+      "candidate_parallel_setup_ns": 769272476.0,
+      "candidate_peak_rss_kib": 1023880,
+      "candidate_serial_setup_ns": 721130264.5,
+      "metadata": {
+        "backward_errors": [
+          8.600286183783656e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 2560000,
+        "case": "dense-worker-firm",
+        "executor_threads": 4,
+        "iterations": [
+          8
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 200000,
+        "workspace_bytes": 30493848
+      }
+    },
+    "grid-600k": {
+      "baseline_parallel_batch_ns": 659879690.5,
+      "baseline_parallel_setup_ns": 133185521.5,
+      "baseline_peak_rss_kib": 288924,
+      "baseline_serial_setup_ns": 123983097.5,
+      "candidate_over_baseline_parallel_batch": 0.9990968300607215,
+      "candidate_over_baseline_parallel_setup": 1.0254294870933098,
+      "candidate_over_baseline_peak_rss": 0.993146986750841,
+      "candidate_over_baseline_serial_setup": 1.0053862987251145,
+      "candidate_parallel_batch_ns": 659283707.0,
+      "candidate_parallel_setup_ns": 136572361.0,
+      "candidate_peak_rss_kib": 286944,
+      "candidate_serial_setup_ns": 124650907.5,
+      "metadata": {
+        "backward_errors": [
+          9.887927078208579e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 1198450,
+        "case": "grid",
+        "executor_threads": 4,
+        "iterations": [
+          26
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 600000,
+        "workspace_bytes": 44628008
+      }
+    },
+    "path-500k": {
+      "baseline_parallel_batch_ns": 742109324.5,
+      "baseline_parallel_setup_ns": 65075197.0,
+      "baseline_peak_rss_kib": 171872,
+      "baseline_serial_setup_ns": 61963979.5,
+      "candidate_over_baseline_parallel_batch": 0.9886359007742127,
+      "candidate_over_baseline_parallel_setup": 0.9809336497283289,
+      "candidate_over_baseline_peak_rss": 0.999394898529138,
+      "candidate_over_baseline_serial_setup": 0.9642626406846577,
+      "candidate_parallel_batch_ns": 733675920.5,
+      "candidate_parallel_setup_ns": 63834450.5,
+      "candidate_peak_rss_kib": 171768,
+      "candidate_serial_setup_ns": 59749550.5,
+      "metadata": {
+        "backward_errors": [
+          6.718027950551265e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 499999,
+        "case": "path",
+        "executor_threads": 4,
+        "iterations": [
+          48
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 500000,
+        "workspace_bytes": 39519776
+      }
+    },
+    "worker-firm-1m": {
+      "baseline_parallel_batch_ns": 2168536215.0,
+      "baseline_parallel_setup_ns": 293352434.5,
+      "baseline_peak_rss_kib": 487896,
+      "baseline_serial_setup_ns": 276230117.0,
+      "candidate_over_baseline_parallel_batch": 0.9823469676294984,
+      "candidate_over_baseline_parallel_setup": 0.9822440812230587,
+      "candidate_over_baseline_peak_rss": 1.0016806860478462,
+      "candidate_over_baseline_serial_setup": 0.9763777133685969,
+      "candidate_parallel_batch_ns": 2130254975.0,
+      "candidate_parallel_setup_ns": 288143692.5,
+      "candidate_peak_rss_kib": 488716,
+      "candidate_serial_setup_ns": 269704930.0,
+      "metadata": {
+        "backward_errors": [
+          9.628206476042288e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 1714286,
+        "case": "worker-firm",
+        "executor_threads": 4,
+        "iterations": [
+          22
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 1000000,
+        "workspace_bytes": 70859432
+      }
+    }
+  },
+  "decision_reason": "qualification passed but the parallel setup signal was too small or a setup, solve, or RSS regression gate was exceeded",
   "experiment": "parallel-compact-endpoint-first-sort",
+  "parallel_batch_geometric_ratio": 0.9948722159764268,
+  "parallel_batch_worst_ratio": 1.0096255733420347,
+  "parallel_setup_geometric_ratio": 0.9920502841851985,
+  "parallel_setup_worst_ratio": 1.0254294870933098,
   "schema_version": 1,
-  "source_sha": "70dbceaedd4672707e5b94ec03036238dbadd56b",
-  "validation": "failure"
+  "serial_setup_geometric_ratio": 0.9879616268904099,
+  "serial_setup_worst_ratio": 1.006500848882097,
+  "source_sha": "ef31b06c9bf88b29a36e51b30e58a8051a43493a",
+  "validation": "success",
+  "worst_peak_rss_ratio": 1.0016806860478462
 }
