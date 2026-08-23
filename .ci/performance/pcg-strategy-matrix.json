@@ -617,10 +617,146 @@
       "workspace_bytes": 14770560
     }
   },
-  "error": "NameError(\"name 'math' is not defined\")",
+  "completed_case_count": 22,
   "experiment": "pcg-parallel-strategy-matrix",
+  "finalized_from_sha": "b29797fa77c1554de6b9b8c7fc6bd41e22115127",
   "maximum_auto_over_best": 1.0790537862219676,
+  "maximum_scaled_difference": 0.0,
+  "provisional_policy": {
+    "geometric_over_best": 1.0034643749981405,
+    "maximum_over_best": 1.0790537862219676
+  },
   "schema_version": 1,
   "source_sha": "4ca95c6d93030760e494e808895ce5d07b4b92c7",
-  "status": "failure"
+  "status": "success",
+  "strategy_wins": {
+    "across_rhs": 16,
+    "planned": 4,
+    "serial": 2
+  },
+  "threshold_search": {
+    "best": {
+      "decisions": {
+        "dense-worker-firm-400k-rhs1-t2": {
+          "over_best": 1.0,
+          "strategy": "planned"
+        },
+        "dense-worker-firm-400k-rhs1-t4": {
+          "over_best": 1.0,
+          "strategy": "planned"
+        },
+        "dense-worker-firm-400k-rhs2-t2": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "dense-worker-firm-400k-rhs2-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "dense-worker-firm-400k-rhs4-t2": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "dense-worker-firm-400k-rhs4-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "dense-worker-firm-400k-rhs8-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "path-100k-rhs1-t4": {
+          "over_best": 1.0,
+          "strategy": "serial"
+        },
+        "path-100k-rhs2-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "path-100k-rhs4-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "path-100k-rhs8-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-150k-rhs1-t4": {
+          "over_best": 1.0,
+          "strategy": "serial"
+        },
+        "worker-firm-150k-rhs2-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-150k-rhs4-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-150k-rhs8-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-300k-rhs1-t2": {
+          "over_best": 1.0,
+          "strategy": "planned"
+        },
+        "worker-firm-300k-rhs1-t4": {
+          "over_best": 1.0,
+          "strategy": "planned"
+        },
+        "worker-firm-300k-rhs2-t2": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-300k-rhs2-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-300k-rhs4-t2": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-300k-rhs4-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        },
+        "worker-firm-300k-rhs8-t4": {
+          "over_best": 1.0,
+          "strategy": "across_rhs"
+        }
+      },
+      "geometric_over_best": 1.0,
+      "maximum_over_best": 1.0,
+      "single_rhs_planned_edge_threshold": 150001
+    },
+    "candidate_count": 10,
+    "top_five": [
+      {
+        "geometric_over_best": 1.0,
+        "maximum_over_best": 1.0,
+        "single_rhs_planned_edge_threshold": 150001
+      },
+      {
+        "geometric_over_best": 1.0,
+        "maximum_over_best": 1.0,
+        "single_rhs_planned_edge_threshold": 300000
+      },
+      {
+        "geometric_over_best": 1.0001515065749311,
+        "maximum_over_best": 1.0028804008487957,
+        "single_rhs_planned_edge_threshold": 300001
+      },
+      {
+        "geometric_over_best": 1.0001515065749311,
+        "maximum_over_best": 1.0028804008487957,
+        "single_rhs_planned_edge_threshold": 400000
+      },
+      {
+        "geometric_over_best": 1.0034643749981405,
+        "maximum_over_best": 1.0790537862219676,
+        "single_rhs_planned_edge_threshold": 0
+      }
+    ]
+  }
 }

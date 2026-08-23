@@ -277,11 +277,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ### PCG strategy-matrix checkpoint — 2026-08-23
 
-- Benchmark-only strategy matrix status: `failure`.
+- Benchmark-only strategy matrix status: `success` across 22 cases.
 - Cases compare serial sequential, across-RHS parallel, and planned within-solve PCG.
-- The simple provisional auto policy had geometric/worst auto-to-best ratios of
-  `nanx` and
+- The provisional policy had geometric/worst auto-to-best ratios of
+  `1.003x` and
   `1.079x`.
+- Exhaustive observed-threshold search selected
+  `150001` original edges for
+  single-RHS planned execution, with geometric/worst ratios of
+  `1.000x` and
+  `1.000x`.
 - No production routing was changed by this checkpoint.
 - Machine-readable evidence:
   `.ci/performance/pcg-strategy-matrix.json`.
