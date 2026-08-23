@@ -7,8 +7,9 @@ M-matrices (SDDM), with certified preconditioned conjugate-gradient solves.
 The implementation follows the official `ikoutis/cmg-solver` source pinned at
 commit `19752fc102f8cae8e34f66457bfaccb1aaa60375`. Provenance and routine
 coverage are recorded in [`UPSTREAM.md`](UPSTREAM.md); numerical qualification
-is documented in [`PLAN.md`](PLAN.md), and the active optimization record is in
-[`PERFORMANCE_PLAN.md`](PERFORMANCE_PLAN.md).
+is documented in [`PLAN.md`](PLAN.md), the active optimization record is in
+[`PERFORMANCE_PLAN.md`](PERFORMANCE_PLAN.md), and deployment/tuning guidance is
+in [`PERFORMANCE_GUIDE.md`](PERFORMANCE_GUIDE.md).
 
 ## Status
 
