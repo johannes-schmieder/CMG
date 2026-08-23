@@ -917,6 +917,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but split or complete hierarchy timing did not improve consistently enough.
 - Evidence: `.ci/performance/compact-forest-indegree-latest.json`.
 
+### Compact forest-indegree exact-memory checkpoint — 2026-08-23
+
+- The compact `u32` forest-indegree candidate was **retained** after exact-memory requalification.
+- Validation: `success`.
+- Prior hierarchy timing ratio: `0.980x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst process peak-RSS ratio in the memory rerun: `1.017x`.
+- Decision: prior timing gains were confirmed against non-regressive exact hierarchy memory; compact forest indegrees retained.
+- Evidence: `.ci/performance/compact-forest-indegree-memory-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

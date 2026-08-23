@@ -289,18 +289,63 @@ fn split_forest_trusted(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
     split_forest_impl(parent, false)
 }
 
+trait ForestIndegree: Copy {
+    const ZERO: Self;
+
+    fn is_zero(self) -> bool;
+    fn increment(&mut self);
+    fn decrement(&mut self);
+}
+
+macro_rules! impl_forest_indegree {
+    ($type:ty) => {
+        impl ForestIndegree for $type {
+            const ZERO: Self = 0;
+
+            #[inline]
+            fn is_zero(self) -> bool {
+                self == 0
+            }
+
+            #[inline]
+            fn increment(&mut self) {
+                *self = self.checked_add(1).expect("forest indegree overflow");
+            }
+
+            #[inline]
+            fn decrement(&mut self) {
+                *self = self.checked_sub(1).expect("forest indegree invariant");
+            }
+        }
+    };
+}
+
+impl_forest_indegree!(u32);
+impl_forest_indegree!(usize);
+
 fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, CmgError> {
+    if parent.len() <= u32::MAX as usize {
+        split_forest_impl_with_indegree::<u32>(parent, validate)
+    } else {
+        split_forest_impl_with_indegree::<usize>(parent, validate)
+    }
+}
+
+fn split_forest_impl_with_indegree<I: ForestIndegree>(
+    parent: &[usize],
+    validate: bool,
+) -> Result<Vec<usize>, CmgError> {
     if validate {
         validate_parent(parent)?;
     }
     let n = parent.len();
     let mut forest = parent.to_vec();
     let mut ancestors = vec![0_i64; n];
-    let mut indegree = vec![0_usize; n];
+    let mut indegree = vec![I::ZERO; n];
     let mut visited = vec![false; n];
 
     for &target in &forest {
-        indegree[target] += 1;
+        indegree[target].increment();
     }
 
     let mut walk = Vec::new();
@@ -309,7 +354,7 @@ fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, Cmg
     for start in 0..n {
         let mut current = start;
         let mut continue_walk = true;
-        while continue_walk && indegree[current] == 0 && !visited[current] {
+        while continue_walk && indegree[current].is_zero() && !visited[current] {
             continue_walk = false;
             let mut ancestors_in_path = 0_i64;
             walk.clear();
@@ -338,9 +383,7 @@ fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, Cmg
                 let middle = k / 2;
                 forest[walk[middle]] = walk[middle];
                 let next = walk[middle + 1];
-                indegree[next] = indegree[next]
-                    .checked_sub(1)
-                    .expect("forest indegree invariant");
+                indegree[next].decrement();
                 let removed = ancestors[walk[middle]];
                 for &vertex in &walk[(middle + 1)..=k] {
                     ancestors[vertex] -= removed;
@@ -367,7 +410,7 @@ fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, Cmg
     for start in 0..n {
         let mut current = start;
         let mut continue_walk = true;
-        while continue_walk && indegree[current] == 0 {
+        while continue_walk && indegree[current].is_zero() {
             continue_walk = false;
             let mut previous = current;
             let mut cut_mode = false;
@@ -381,9 +424,7 @@ fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, Cmg
                 }
                 if !cut_mode && ancestors[current] > 2 && ancestors[next] - ancestors[current] > 2 {
                     forest[current] = current;
-                    indegree[next] = indegree[next]
-                        .checked_sub(1)
-                        .expect("forest indegree invariant");
+                    indegree[next].decrement();
                     removed_ancestors = ancestors[current];
                     new_front = next;
                     cut_mode = true;
@@ -552,5 +593,20 @@ mod trusted_internal_forest_tests {
     #[test]
     fn public_split_still_rejects_out_of_range_parent() {
         assert!(split_forest(&[0, 2]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod compact_forest_indegree_tests {
+    use super::split_forest;
+
+    #[test]
+    fn compact_indegree_path_preserves_split_result() {
+        let parent = vec![1, 2, 3, 4, 5, 6, 7, 7, 9, 10, 11, 11];
+        let result = split_forest(&parent).unwrap();
+        assert_eq!(result.len(), parent.len());
+        assert!(result.iter().enumerate().all(|(vertex, target)| {
+            *target < result.len() && (*target == vertex || parent[vertex] == *target)
+        }));
     }
 }
