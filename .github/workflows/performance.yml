@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'benchmarks/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'PERFORMANCE_PLAN.md'
       - '.github/workflows/performance.yml'
   workflow_dispatch:
@@ -33,6 +35,7 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     env:
       BASELINE_REF: b45b252f88925028e3ad9a73a3f75eeab05f6754
       TESTED_SHA: ${{ github.sha }}
@@ -45,6 +48,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: candidate
+          fetch-depth: 0
 
       - name: Checkout frozen benchmark baseline
         uses: actions/checkout@v4
@@ -76,8 +80,12 @@ jobs:
           CMG_BENCH_COMMIT="$TESTED_SHA" \
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-candidate" \
             cargo build --release --bin cmg-bench
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-routing" \
+            cargo build --release \
+              --manifest-path benchmarks/Cargo.toml \
+              --bin full-pcg-routing
 
-      - name: Run matched benchmarks
+      - name: Run matched frozen-baseline benchmarks
         shell: bash
         run: |
           mkdir -p results
@@ -96,7 +104,98 @@ jobs:
               --output "results/${CASE}-candidate.json"
           done
 
-      - name: Build comparison record
+      - name: Run full certified serial-versus-planned PCG matrix
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import statistics
+          import subprocess
+
+          binary = Path(os.environ['GITHUB_WORKSPACE']) / 'target-routing' / 'release' / 'full-pcg-routing'
+          specs = [
+              ('path-250k', ['path', 250000, 3, 4]),
+              ('worker-firm-300k', ['worker-firm', 100000, 3, 4]),
+              ('worker-firm-600k', ['worker-firm', 200000, 3, 4]),
+              ('dense-worker-firm-800k', ['dense-worker-firm', 50000, 3, 4]),
+              ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
+          ]
+          result = {
+              'schema_version': 3,
+              'experiment': 'full-certified-pcg-routing',
+              'tested_sha': os.environ['TESTED_SHA'],
+              'run_id': os.environ['RUN_ID'],
+              'cases': {},
+          }
+          speedups = []
+          numerical_failures = []
+          route_mismatches = []
+
+          for name, arguments in specs:
+              time_path = Path(f'/tmp/full-pcg-{name}.time')
+              completed = subprocess.run(
+                  ['/usr/bin/time', '-v', '-o', str(time_path), str(binary), *map(str, arguments)],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  check=True,
+              )
+              print(completed.stdout, end='')
+              payloads = [
+                  json.loads(line)
+                  for line in completed.stdout.splitlines()
+                  if line.strip().startswith('{')
+              ]
+              if len(payloads) != 1:
+                  raise RuntimeError(f'unexpected benchmark output for {name}: {payloads}')
+              case = payloads[0]
+              peak_line = next(
+                  line for line in time_path.read_text().splitlines()
+                  if 'Maximum resident set size (kbytes):' in line
+              )
+              case['peak_rss_kib'] = int(peak_line.rsplit(':', 1)[1].strip())
+              case['recommended_execution'] = (
+                  'Planned'
+                  if case['operators'] > 0 and case['speedup'] >= 1.03
+                  else 'Serial'
+              )
+              case['auto_matches_recommendation'] = (
+                  case['auto_execution'] == case['recommended_execution']
+              )
+              result['cases'][name] = case
+              speedups.append(case['speedup'])
+
+              numerical_ok = (
+                  case['max_scaled_difference'] <= 5e-11
+                  and abs(case['serial_iterations'] - case['planned_iterations']) <= 1
+                  and math.isfinite(case['serial_backward_error'])
+                  and math.isfinite(case['planned_backward_error'])
+              )
+              if not numerical_ok:
+                  numerical_failures.append(name)
+              if not case['auto_matches_recommendation']:
+                  route_mismatches.append(name)
+
+          result['geometric_speedup'] = math.exp(
+              statistics.fmean(math.log(value) for value in speedups)
+          )
+          result['minimum_speedup'] = min(speedups)
+          result['maximum_speedup'] = max(speedups)
+          result['maximum_scaled_difference'] = max(
+              case['max_scaled_difference'] for case in result['cases'].values()
+          )
+          result['numerical_failures'] = numerical_failures
+          result['route_mismatches'] = route_mismatches
+          result['status'] = 'success' if not numerical_failures else 'failure'
+          Path('results/full-pcg-routing.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n'
+          )
+          if numerical_failures:
+              raise RuntimeError(f'full-PCG numerical failures: {numerical_failures}')
+
+      - name: Build frozen-baseline comparison record
         shell: bash
         run: |
           python3 - <<'PY'
@@ -151,15 +250,19 @@ jobs:
           import json
           from pathlib import Path
 
-          data = json.loads(Path("results/latest.json").read_text())
+          frozen = json.loads(Path("results/latest.json").read_text())
+          routing = json.loads(Path("results/full-pcg-routing.json").read_text())
+
           print("## CMG performance checkpoint")
           print()
-          print(f"Candidate: `{data['tested_sha']}`")
-          print(f"Baseline: `{data['baseline_ref']}`")
+          print(f"Candidate: `{frozen['tested_sha']}`")
+          print(f"Baseline: `{frozen['baseline_ref']}`")
+          print()
+          print("### Frozen baseline ratios")
           print()
           print("| Case | Hierarchy | Apply | Solve/RHS |")
           print("|---|---:|---:|---:|")
-          for name, result in data["results"].items():
+          for name, result in frozen["results"].items():
               ratios = result["candidate_over_baseline"]
               print(
                   f"| {name} | "
@@ -168,7 +271,24 @@ jobs:
                   f"{ratios['solve_per_rhs_median_ns']:.3f}x |"
               )
           print()
-          print("Ratios below 1.0 favor the candidate. Hosted-runner timings are directional.")
+          print("Ratios below 1.0 favor the candidate.")
+          print()
+          print("### Full certified PCG routing")
+          print()
+          print("| Case | Operators | Iterations | Planned speedup | Auto | Recommended |")
+          print("|---|---:|---:|---:|---|---|")
+          for name, case in routing['cases'].items():
+              print(
+                  f"| {name} | {case['operators']} | "
+                  f"{case['serial_iterations']} / {case['planned_iterations']} | "
+                  f"{case['speedup']:.3f}x | {case['auto_execution']} | "
+                  f"{case['recommended_execution']} |"
+              )
+          print()
+          print(f"Maximum scaled solution difference: `{routing['maximum_scaled_difference']:.3e}`")
+          print(f"Routing mismatches: `{', '.join(routing['route_mismatches']) or 'none'}`")
+          print()
+          print("Hosted-runner timings are directional.")
           PY
 
       - name: Upload benchmark results
@@ -179,17 +299,22 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Persist latest comparison
+      - name: Persist latest records safely
         shell: bash
         run: |
+          set -euo pipefail
           git -C candidate config user.name 'github-actions[bot]'
           git -C candidate config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          for ATTEMPT in 1 2 3; do
+          for ATTEMPT in 1 2 3 4; do
             git -C candidate fetch origin main
             git -C candidate reset --hard origin/main
             mkdir -p candidate/.ci/performance
             cp results/latest.json candidate/.ci/performance/latest.json
-            git -C candidate add .ci/performance/latest.json
+            cp results/full-pcg-routing.json \
+              candidate/.ci/performance/full-pcg-routing-latest.json
+            git -C candidate add \
+              .ci/performance/latest.json \
+              .ci/performance/full-pcg-routing-latest.json
             if git -C candidate diff --cached --quiet; then
               exit 0
             fi
