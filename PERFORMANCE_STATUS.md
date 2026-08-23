@@ -169,3 +169,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst hierarchy-time ratio: `0.9802562268388151`.
 - Parallel sort behavior is unchanged.
 - Evidence: `.ci/performance/two-stage-sort-v4-latest.json`.
+
+## One-pass compensated duplicate merge gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Worker-firm geometric hierarchy-time ratio: `0.9775259095049927`.
+- Worst hierarchy-time ratio: `0.9835428271471965`.
+- Evidence: `.ci/performance/one-pass-merge-latest.json`.

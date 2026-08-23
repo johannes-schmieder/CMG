@@ -149,12 +149,13 @@ impl Laplacian {
         while read_index < raw.len() {
             let u = raw[read_index].u;
             let v = raw[read_index].v;
-            let group_start = read_index;
+            let mut sum = 0.0;
+            let mut correction = 0.0;
             while read_index < raw.len() && raw[read_index].u == u && raw[read_index].v == v {
+                compensated_add(&mut sum, &mut correction, raw[read_index].weight);
                 read_index += 1;
             }
-            let weight =
-                compensated_sum(raw[group_start..read_index].iter().map(|edge| edge.weight));
+            let weight = sum + correction;
             if !weight.is_finite() || weight <= 0.0 {
                 return Err(CmgError::InvalidEdgeWeight {
                     u: u as usize,
@@ -382,6 +383,17 @@ fn sort_compact_edges_two_stage(raw: &mut [Edge]) {
     }
 }
 
+#[inline]
+fn compensated_add(sum: &mut f64, correction: &mut f64, value: f64) {
+    let next = *sum + value;
+    *correction += if sum.abs() >= value.abs() {
+        (*sum - next) + value
+    } else {
+        (value - next) + *sum
+    };
+    *sum = next;
+}
+
 pub(crate) fn compensated_sum<I>(values: I) -> f64
 where
     I: IntoIterator<Item = f64>,
@@ -389,13 +401,7 @@ where
     let mut sum = 0.0;
     let mut correction = 0.0;
     for value in values {
-        let next = sum + value;
-        correction += if sum.abs() >= value.abs() {
-            (sum - next) + value
-        } else {
-            (value - next) + sum
-        };
-        sum = next;
+        compensated_add(&mut sum, &mut correction, value);
     }
     sum + correction
 }
@@ -503,5 +509,22 @@ mod two_stage_sort_equivalence_tests {
         reference.sort_unstable_by(compare_raw_edges);
         sort_compact_edges_two_stage(&mut candidate);
         assert_eq!(candidate, reference);
+    }
+}
+
+#[cfg(test)]
+mod one_pass_merge_arithmetic_tests {
+    use super::{compensated_add, compensated_sum};
+
+    #[test]
+    fn incremental_compensation_matches_iterator_helper_bitwise() {
+        let values = [1.0e100, 1.0, 2.0, 3.0, 1.0e-100, 7.0, 9.0];
+        let expected = compensated_sum(values);
+        let mut sum = 0.0;
+        let mut correction = 0.0;
+        for value in values {
+            compensated_add(&mut sum, &mut correction, value);
+        }
+        assert_eq!((sum + correction).to_bits(), expected.to_bits());
     }
 }
