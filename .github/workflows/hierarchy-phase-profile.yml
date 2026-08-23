@@ -110,18 +110,18 @@ jobs:
 
               checkpoint = f'''### Hierarchy phase-profile checkpoint — 2026-08-23
 
-- Read-only benchmark status: `{status}`.
-- Aggregate dominant measured phase: `{dominant}`
-  ({100.0 * share:.1f}% of summed manual-profile time).
-{cases_text}
-- The profiler reproduces and checks terminal reason, level vertex counts,
-  matrix nonzeros, and fill accounting against production hierarchy
-  construction before timing is interpreted.
-- No numerical production behavior was changed by this checkpoint.
-- Machine-readable evidence:
-  `.ci/performance/hierarchy-phase-profile.json`.
+              - Read-only benchmark status: `{status}`.
+              - Aggregate dominant measured phase: `{dominant}`
+                ({100.0 * share:.1f}% of summed manual-profile time).
+              {cases_text}
+              - The profiler reproduces and checks terminal reason, level vertex counts,
+                matrix nonzeros, and fill accounting against production hierarchy
+                construction before timing is interpreted.
+              - No numerical production behavior was changed by this checkpoint.
+              - Machine-readable evidence:
+                `.ci/performance/hierarchy-phase-profile.json`.
 
-'''
+              '''
               plan = plan_path.read_text()
               marker = '## Current next action\n'
               if marker not in plan:
@@ -132,22 +132,22 @@ jobs:
               if status == 'success':
                   actions = f'''## Current next action
 
-1. Prepare a baseline/candidate retain-or-revert gate targeting the measured
-   `{dominant}` setup phase; do not mutate production numerical source before
-   the gate is committed.
-2. Preserve the current packed-key, direct compact-contraction, automatic
-   parallel-routing, and residual-certification behavior as regression gates.
-3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
-   hardware is available.
-'''
+              1. Prepare a baseline/candidate retain-or-revert gate targeting the measured
+                 `{dominant}` setup phase; do not mutate production numerical source before
+                 the gate is committed.
+              2. Preserve the current packed-key, direct compact-contraction, automatic
+                 parallel-routing, and residual-certification behavior as regression gates.
+              3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+                 hardware is available.
+              '''
               else:
                   actions = '''## Current next action
 
-1. Repair and rerun the read-only hierarchy phase profiler.
-2. Do not mutate production numerical source until the phase profile succeeds.
-3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
-   hardware is available.
-'''
+              1. Repair and rerun the read-only hierarchy phase profiler.
+              2. Do not mutate production numerical source until the phase profile succeeds.
+              3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+                 hardware is available.
+              '''
               plan_path.write_text(prefix.rstrip() + '\n\n' + actions)
 
               status_text = status_path.read_text()
@@ -160,24 +160,24 @@ jobs:
               if status == 'success':
                   next_section = f'''## Next prepared optimization
 
-The read-only hierarchy phase profiler completed successfully. Across the
-retained large synthetic cases, the aggregate dominant measured setup phase was
-`{dominant}` at {100.0 * share:.1f}% of summed manual-profile time.
+              The read-only hierarchy phase profiler completed successfully. Across the
+              retained large synthetic cases, the aggregate dominant measured setup phase was
+              `{dominant}` at {100.0 * share:.1f}% of summed manual-profile time.
 
-The next numerical mutation must be a baseline/candidate retain-or-revert gate
-that targets this phase while preserving exact hierarchy diagnostics, terminal
-behavior, cross-platform tests, requested-allocation accounting, and serial and
-parallel timing limits. The profiler itself is retained under
-`benchmarks/src/bin/hierarchy-phase-profile.rs`.
+              The next numerical mutation must be a baseline/candidate retain-or-revert gate
+              that targets this phase while preserving exact hierarchy diagnostics, terminal
+              behavior, cross-platform tests, requested-allocation accounting, and serial and
+              parallel timing limits. The profiler itself is retained under
+              `benchmarks/src/bin/hierarchy-phase-profile.rs`.
 
-'''
+              '''
               else:
                   next_section = '''## Next prepared optimization
 
-The read-only hierarchy phase profiler did not complete successfully. Repair
-the profiler before staging another production numerical optimization.
+              The read-only hierarchy phase profiler did not complete successfully. Repair
+              the profiler before staging another production numerical optimization.
 
-'''
+              '''
               status_path.write_text(before + next_section + end + after)
 
           try:
@@ -287,7 +287,6 @@ the profiler before staging another production numerical optimization.
           run(['git', 'commit', '-m', message])
           run(['git', 'pull', '--rebase', 'origin', 'main'])
           run(['git', 'push', 'origin', 'HEAD:main'])
-
       - name: Show profile
         if: always()
         shell: bash
