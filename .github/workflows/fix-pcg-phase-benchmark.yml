@@ -1,4 +1,4 @@
-name: Repair PCG phase benchmark
+name: Finalize PCG phase benchmark formatting
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  finalize:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -19,109 +19,28 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Patch, format, and qualify transactionally
-        shell: python
-        run: |
-          import json
-          from pathlib import Path
-          import subprocess
-
-          root = Path.cwd()
-          source = Path('benchmarks/src/bin/pcg-phase-profile.rs')
-          original = source.read_text()
-          result = {
-              'schema_version': 1,
-              'experiment': 'pcg-phase-benchmark-repair',
-              'status': 'not_run',
-              'commands': [],
-          }
-
-          def run(command):
-              completed = subprocess.run(
-                  command,
-                  cwd=root,
-                  text=True,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.STDOUT,
-              )
-              print('+', ' '.join(command), flush=True)
-              print(completed.stdout, end='')
-              result['commands'].append({
-                  'command': command,
-                  'returncode': completed.returncode,
-                  'output_tail': completed.stdout[-12000:],
-              })
-              if completed.returncode != 0:
-                  raise RuntimeError(
-                      f"command failed ({completed.returncode}): {' '.join(command)}"
-                  )
-
-          try:
-              text = original
-              text = text.replace(
-                  'PcgOptions, PcgPhaseProfile,\n    PcgPhaseSample, PcgWorkspace,',
-                  'PcgOptions, PcgPhaseProfile, PcgWorkspace,',
-              )
-              text = text.replace(
-                  'fn phase_json(name: &str, sample: PcgPhaseSample, median_ns: u128, total_ns: u128) -> String {',
-                  'fn phase_json(name: &str, calls: usize, median_ns: u128, total_ns: u128) -> String {',
-              )
-              text = text.replace('        sample.calls()\n', '        calls\n')
-              start = text.index('    let phase_samples = [')
-              end = text.index('    println!(', start)
-              replacement = '''    let phase_json = [
-                  phase_json("setup", calls[0], setup_ns, total_ns),
-                  phase_json("preconditioner", calls[1], preconditioner_ns, total_ns),
-                  phase_json("matvec", calls[2], matvec_ns, total_ns),
-                  phase_json("dot_products", calls[3], dot_ns, total_ns),
-                  phase_json("vector_updates", calls[4], update_ns, total_ns),
-                  phase_json("centering", calls[5], centering_ns, total_ns),
-                  phase_json("norms", calls[6], norms_ns, total_ns),
-                  phase_json("residual_recompute", calls[7], recompute_ns, total_ns),
-                  phase_json("certification", calls[8], certification_ns, total_ns),
-              ]
-              .join(",");
-
-'''
-              source.write_text(text[:start] + replacement + text[end:])
-
-              for command in [
-                  ['cargo', 'fmt', '--all'],
-                  ['cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml', '--all'],
-                  ['cargo', 'fmt', '--all', '--', '--check'],
-                  ['cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml', '--all', '--', '--check'],
-                  ['cargo', 'clippy', '--all-targets', '--all-features', '--', '-D', 'warnings'],
-                  ['cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml', '--all-targets', '--', '-D', 'warnings'],
-                  ['cargo', 'test', '--all-targets', '--all-features'],
-                  ['cargo', 'test', '--all-targets', '--all-features', '--release'],
-                  ['cargo', 'build', '--manifest-path', 'benchmarks/Cargo.toml', '--bin', 'pcg-phase-profile', '--release'],
-              ]:
-                  run(command)
-              result['status'] = 'success'
-          except Exception as error:
-              source.write_text(original)
-              result['status'] = 'failure'
-              result['error'] = repr(error)
-
-          record = Path('.ci/performance/pcg-phase-benchmark-repair.json')
-          record.parent.mkdir(parents=True, exist_ok=True)
-          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
-          Path('.github/workflows/fix-pcg-phase-benchmark.yml').unlink()
-
-      - name: Commit qualified source or failure record safely
+      - name: Format and qualify benchmark crate
         shell: bash
         run: |
           set -euo pipefail
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+          cargo test --all-targets --all-features
+          cargo test --all-targets --all-features --release
+          cargo build --manifest-path benchmarks/Cargo.toml --bin pcg-phase-profile --release
+
+      - name: Commit formatted checkpoint and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-pcg-phase-benchmark.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          STATUS=$(python3 -c "import json; print(json.load(open('.ci/performance/pcg-phase-benchmark-repair.json'))['status'])")
-          if [ "$STATUS" = success ]; then
-            MESSAGE='perf: qualify exact PCG phase benchmark'
-          else
-            MESSAGE='perf: record PCG phase benchmark repair failure'
-          fi
-          git commit -m "$MESSAGE"
+          git commit -m 'perf: finalize qualified PCG phase benchmark'
           for attempt in 1 2 3 4; do
             git pull --rebase origin main
             if git push origin HEAD:main; then
