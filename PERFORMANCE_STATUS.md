@@ -81,9 +81,9 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Latest resolved benchmark gate
 
-The robust memory-aware prepared parallel PCG solver passed validation and was
-**retained**. Its decision record is
-`.ci/performance/prepared-parallel-solver-robust-latest.json`.
+The packed endpoint-key experiment completed with validation
+`not_run` and was **not retained**.
+The decision record is `.ci/performance/packed-endpoint-key-latest.json`.
 
 ## Next prepared optimization
 

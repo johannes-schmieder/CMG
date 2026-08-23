@@ -305,12 +305,20 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/prepared-parallel-solver-robust-latest.json`.
 
+### Packed endpoint-key checkpoint — 2026-08-23
+
+- Replacing the two-endpoint comparator with one packed 64-bit endpoint key was
+  **not retained**.
+- Validation status: `not_run`.
+- Decision: experiment failed: benchmark dependency anchor was not unique.
+- Machine-readable evidence:
+  `.ci/performance/packed-endpoint-key-latest.json`.
+
 ## Current next action
 
-1. Complete ordinary Ubuntu/macOS/Windows qualification of the retained prepared
-   solver abstraction.
-2. Profile packed contraction keys and reusable contraction buffers.
-3. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
+1. Keep the qualified direct compact-edge comparator and profile reusable
+   contraction buffers or compact aggregation labels instead.
+2. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
    is available.
-4. Remove obsolete one-shot workflows, staging scripts, and committed Python
+3. Remove obsolete one-shot workflows, staging scripts, and committed Python
    cache files after active gates are secure.

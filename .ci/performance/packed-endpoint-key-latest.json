@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "baseline_sha": "0366cfd971f1403041d250ab51a6d399a4e0d85f",
+  "cases": {},
+  "decision_reason": "experiment failed: benchmark dependency anchor was not unique",
+  "error": "RuntimeError('benchmark dependency anchor was not unique')",
+  "experiment": "packed-endpoint-key-ordering",
+  "schema_version": 1,
+  "validation": "not_run"
+}
