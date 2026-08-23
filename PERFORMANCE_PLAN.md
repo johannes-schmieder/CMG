@@ -672,9 +672,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Worst hierarchy-time ratio: `0.9835428271471965`.
 - Evidence: `.ci/performance/one-pass-merge-latest.json`.
 
+### Current-kernel contraction profile — 2026-08-23
+
+- Exact production equivalence passed at every level.
+- Mapping/sorting/merging/diagonal shares: `11.2%` / `74.8%` / `8.7%` / `4.9%`.
+- Evidence: `.ci/performance/contraction-subphase-profile-v2.json`.
+
 ## Current next action
 
-1. Re-profile contraction subphases after retained sorting and merge decisions.
-2. Evaluate infallible prevalidated coarse-edge construction if mapping remains material.
-3. Re-run full certified PCG routing after any retained hierarchy change.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Optimize the largest remaining current-kernel contraction phase under a full correctness and hierarchy-time gate.
+2. Re-run full certified PCG routing after any retained hierarchy change.
+3. Run the manual 1–32 thread qualification on suitable hardware when available.

@@ -177,3 +177,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worker-firm geometric hierarchy-time ratio: `0.9775259095049927`.
 - Worst hierarchy-time ratio: `0.9835428271471965`.
 - Evidence: `.ci/performance/one-pass-merge-latest.json`.
+
+## Current-kernel contraction subphase profile
+
+- Exact production equivalence: `passed`.
+- Mapping share: `11.2%`.
+- Sorting share: `74.8%`.
+- Duplicate-merging share: `8.7%`.
+- Diagonal share: `4.9%`.
+- Finalization share: `0.4%`.
+- Evidence: `.ci/performance/contraction-subphase-profile-v2.json`.

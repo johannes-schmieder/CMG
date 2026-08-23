@@ -35,10 +35,9 @@ fn endpoint_key(edge: &ProbeEdge) -> u64 {
     (u64::from(edge.u) << 32) | u64::from(edge.v)
 }
 
-fn compare_edges(left: &ProbeEdge, right: &ProbeEdge) -> core::cmp::Ordering {
-    endpoint_key(left)
-        .cmp(&endpoint_key(right))
-        .then_with(|| left.weight.total_cmp(&right.weight))
+fn sort_endpoint_then_weights(raw: &mut [ProbeEdge]) {
+    raw.sort_unstable_by_key(endpoint_key);
+    sort_weights_within_groups(raw);
 }
 
 const RADIX_BUCKETS: usize = 256;
@@ -103,7 +102,9 @@ fn sort_weights_within_groups(raw: &mut [ProbeEdge]) {
         while end < raw.len() && endpoint_key(&raw[end]) == key {
             end += 1;
         }
-        raw[start..end].sort_unstable_by(|left, right| left.weight.total_cmp(&right.weight));
+        if end - start > 1 {
+            raw[start..end].sort_unstable_by(|left, right| left.weight.total_cmp(&right.weight));
+        }
         start = end;
     }
 }
@@ -114,24 +115,19 @@ fn sort_edges(raw: &mut [ProbeEdge], vertex_count: usize, mode: SortMode) -> boo
         sort_weights_within_groups(raw);
         true
     } else {
-        raw.sort_unstable_by(compare_edges);
+        sort_endpoint_then_weights(raw);
         false
     }
 }
 
-fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
-    let mut sum = 0.0;
-    let mut correction = 0.0;
-    for value in values {
-        let next = sum + value;
-        if sum.abs() >= value.abs() {
-            correction += (sum - next) + value;
-        } else {
-            correction += (value - next) + sum;
-        }
-        sum = next;
-    }
-    sum + correction
+fn compensated_add(sum: &mut f64, correction: &mut f64, value: f64) {
+    let next = *sum + value;
+    *correction += if sum.abs() >= value.abs() {
+        (*sum - next) + value
+    } else {
+        (value - next) + *sum
+    };
+    *sum = next;
 }
 
 fn map_edges(graph: &Laplacian, aggregation: &Aggregation) -> Vec<ProbeEdge> {
@@ -163,14 +159,18 @@ fn merge_sorted_edges(raw: &mut Vec<ProbeEdge>) {
     while read < raw.len() {
         let u = raw[read].u;
         let v = raw[read].v;
-        let mut end = read + 1;
-        while end < raw.len() && raw[end].u == u && raw[end].v == v {
-            end += 1;
+        let mut sum = 0.0;
+        let mut correction = 0.0;
+        while read < raw.len() && raw[read].u == u && raw[read].v == v {
+            compensated_add(&mut sum, &mut correction, raw[read].weight);
+            read += 1;
         }
-        let weight = compensated_sum(raw[read..end].iter().map(|edge| edge.weight));
-        raw[write] = ProbeEdge { u, v, weight };
+        raw[write] = ProbeEdge {
+            u,
+            v,
+            weight: sum + correction,
+        };
         write += 1;
-        read = end;
     }
     raw.truncate(write);
     raw.shrink_to_fit();
