@@ -911,10 +911,10 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Compact forest-indegree checkpoint — 2026-08-23
 
 - Monomorphized `u32` forest indegrees with a native-width fallback were **not retained**.
-- Validation: `failure`.
-- Geometric split / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
-- Decision: experiment failed safely: expected two indegree decrements.
+- Validation: `success`.
+- Geometric split / hierarchy-build ratios: `0.947x` / `0.980x`.
+- Worst peak-RSS ratio: `1.018x`.
+- Decision: qualification passed, but split or complete hierarchy timing did not improve consistently enough.
 - Evidence: `.ci/performance/compact-forest-indegree-latest.json`.
 
 ## Current next action

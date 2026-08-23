@@ -459,7 +459,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Compact forest-indegree gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Split / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
+- Validation: `success`.
+- Split / hierarchy-build ratios: `0.947x` / `0.980x`.
+- Worst peak-RSS ratio: `1.018x`.
 - Evidence: `.ci/performance/compact-forest-indegree-latest.json`.
