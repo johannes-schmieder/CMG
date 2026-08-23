@@ -389,3 +389,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric hierarchy-build ratio: `1.172x`.
 - Worst peak-RSS ratio: `1.100x`.
 - Evidence: `.ci/performance/radix-endpoint-sort-latest.json`.
+
+## Sampled contraction-capacity gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Hierarchy-build ratio: `0.999x`.
+- Exact additional-peak ratio: `1.000x`.
+- Worst process peak-RSS ratio: `1.002x`.
+- Evidence: `.ci/performance/sampled-contraction-capacity-latest.json`.

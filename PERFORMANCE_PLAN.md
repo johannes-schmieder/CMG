@@ -834,6 +834,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but timing or temporary-memory limits were not met.
 - Evidence: `.ci/performance/radix-endpoint-sort-latest.json`.
 
+### Sampled contraction-capacity checkpoint — 2026-08-23
+
+- Deterministic sampled survivor capacity was **not retained**.
+- Validation: `success`.
+- Geometric hierarchy-build ratio: `0.999x`.
+- Geometric exact additional-peak ratio: `1.000x`.
+- Worst process peak-RSS ratio: `1.002x`.
+- Decision: qualification passed, but timing or exact/process memory gates were not all met.
+- Evidence: `.ci/performance/sampled-contraction-capacity-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
