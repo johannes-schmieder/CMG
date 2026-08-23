@@ -291,18 +291,26 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/pcg-strategy-matrix.json`.
 
-### Prepared parallel solver checkpoint — 2026-08-23
+### Prepared parallel solver robust checkpoint — 2026-08-23
 
-- The memory-aware prepared solver candidate was **not retained**.
+- The memory-aware prepared solver candidate was **not retained** after robust,
+  interleaved seven-sample timing.
 - Validation status: `not_run`.
 - Geometric/worst automatic-to-best explicit timing ratios:
   `nanx` /
   `nanx`.
+- Geometric/worst automatic-to-selected explicit timing ratios:
+  `nanx` /
+  `nanx`.
 - Machine-readable evidence:
-  `.ci/performance/prepared-parallel-solver-latest.json`.
+  `.ci/performance/prepared-parallel-solver-robust-latest.json`.
 
 ## Current next action
 
-1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
-2. Obtain 8–32-thread and high-memory evidence when a suitable runner is available.
-3. Remove remaining obsolete one-shot workflows and staging scripts after the active checkpoint is secure.
+1. Keep the explicit serial, planned, and across-RHS APIs; do not add automatic
+   routing until broader hardware evidence supports a stable rule.
+2. Profile packed contraction keys and reusable contraction buffers.
+3. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
+   is available.
+4. Remove obsolete one-shot workflows, staging scripts, and committed Python
+   cache files after active gates are secure.
