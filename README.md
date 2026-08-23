@@ -121,10 +121,67 @@ Run the worker--firm example with:
 cargo run --release --example parallel_pcg --features parallel
 ```
 
+## Prepared automatic parallel solver
+
+`ParallelPcgSolver` packages one immutable graph hierarchy, selectively routed
+parallel plan, package-owned thread pool, and explicit routing policy. It
+chooses among:
+
+- certified serial PCG;
+- within-solve planned PCG for one sufficiently large graph;
+- independent serial PCG solves distributed across right-hand sides.
+
+The router never nests the two forms of parallelism. Its report exposes the
+selected strategy, concurrency, plan storage, and retained workspace-pool
+bytes.
+
+```rust,ignore
+use cmg::{
+    CmgOptions, ParallelOptions, ParallelPcgSolver, PcgOptions,
+};
+
+let solver = ParallelPcgSolver::build(
+    &graph,
+    CmgOptions::default(),
+    ParallelOptions {
+        threads: 16,
+        workspace_memory_budget_bytes: Some(8 * 1024 * 1024 * 1024),
+        ..ParallelOptions::default()
+    },
+)?;
+let mut workspace = solver.workspace();
+let batch = solver.solve_batch_with_workspace(
+    &right_hand_sides,
+    PcgOptions::default(),
+    &mut workspace,
+)?;
+
+println!("execution = {:?}", batch.report().execution());
+println!("concurrency = {}", batch.report().concurrency());
+println!("plan bytes = {}", batch.report().plan_bytes());
+println!(
+    "workspace-pool bytes = {}",
+    batch.report().workspace_pool_bytes(),
+);
+```
+
+Run the compiled prepared-solver example with:
+
+```text
+cargo run --release --example prepared_parallel_pcg --features parallel
+```
+
+Reuse the same `ParallelPcgSolver` and `ParallelPcgWorkspace` whenever the graph
+and weights are unchanged. Set `workspace_memory_budget_bytes` when several
+large right-hand sides may otherwise retain more simultaneous workspaces than
+the machine should support. `select_batch_execution(rhs_count)` can inspect the
+router's decision before allocating or solving.
+
 ## Choosing a parallel strategy
 
+- **Automatic repeated-RHS use:** use `ParallelPcgSolver` and inspect its report.
 - **One large or relatively dense RHS:** build one `ParallelCmgPlan` and use the
-  planned PCG API.
+  explicit planned PCG API when direct control is preferred.
 - **Several independent RHSs:** `solve_pcg_batch_with_executor` runs independent
   certified serial solves concurrently and limits simultaneous workspaces with
   `workspace_memory_budget_bytes`.
@@ -135,8 +192,10 @@ cargo run --release --example parallel_pcg --features parallel
 On the available four-logical-CPU hosted runner, the qualified planned-PCG
 benchmark showed no change in iteration counts, residuals, backward errors, or
 measured solutions. Directional full-solve speedups ranged from near parity on
-a path graph to about 2.17x on the tested dense worker--firm graph. These are
-benchmark records, not a general hardware guarantee; see
+a path graph to about 2.17x on the tested dense worker--firm graph. The robust
+prepared-solver gate matched its selected explicit strategy within measurement
+noise and remained within 5.4% of the best explicit strategy in every qualified
+case. These are benchmark records, not a general hardware guarantee; see
 [`PERFORMANCE_PLAN.md`](PERFORMANCE_PLAN.md) for exact cases and gates.
 
 ## SDDM systems
