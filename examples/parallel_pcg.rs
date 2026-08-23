@@ -1,8 +1,7 @@
 #[cfg(feature = "parallel")]
 use cmg::{
-    CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan,
-    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace,
-    solve_pcg_with_plan_and_workspace,
+    CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
+    PcgOptions, PcgWorkspace, solve_pcg_with_plan_and_workspace,
 };
 
 #[cfg(feature = "parallel")]
@@ -13,16 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut edges = Vec::with_capacity(3 * per_side);
     for worker in 0..per_side {
         edges.push((worker, firm_offset + worker, 1.0));
-        edges.push((
-            worker,
-            firm_offset + (worker + 1) % per_side,
-            0.75,
-        ));
-        edges.push((
-            worker,
-            firm_offset + (5 * worker + 17) % per_side,
-            1.25,
-        ));
+        edges.push((worker, firm_offset + (worker + 1) % per_side, 0.75));
+        edges.push((worker, firm_offset + (5 * worker + 17) % per_side, 1.25));
     }
     let graph = Laplacian::from_edges(2 * per_side, edges)?;
 
@@ -35,8 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the hierarchy once. The optional plan retains row-oriented
     // operators only on hierarchy levels where parallel execution is expected
     // to pay for its extra memory.
-    let preconditioner =
-        CmgPreconditioner::build(&graph, CmgOptions::default())?;
+    let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default())?;
     let executor = ParallelExecutor::new(ParallelOptions {
         threads: 0, // detect available parallelism; set an explicit cap if desired
         ..ParallelOptions::default()
