@@ -716,9 +716,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Worst hierarchy-time / exact additional-peak ratios: `0.9966956961782049` / `1.0610772414320586`.
 - Evidence: `.ci/performance/moderate-radix-compact-sort-latest.json`.
 
+### Compact aggregation-label checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `failure`.
+- Geometric retained / hierarchy-time ratios: `n/a` / `n/a`.
+- Serial/planned PCG geometric ratios: `n/a` / `n/a`.
+- Evidence: `.ci/performance/compact-aggregation-labels-latest.json`.
+
 ## Current next action
 
-1. Re-profile contraction subphases after the radix decision.
-2. If moderate-density radix is retained, re-profile contraction sorting and verify the full certified PCG routing matrix.
-3. Re-run full certified PCG routing after any retained hierarchy change.
+1. Re-run the full certified routing matrix after any retained aggregation-label change.
+2. Re-profile contraction mapping and sorting with the retained layout.
+3. Evaluate compact aggregate-size storage only if it remains material after label compaction.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

@@ -235,3 +235,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst exact additional-peak ratio: `1.0610772414320586`.
 - Parallel sorting is unchanged; scratch radix is restricted to large serial/fallback levels with two to eight mapped edges per coarse vertex.
 - Evidence: `.ci/performance/moderate-radix-compact-sort-latest.json`.
+
+## Compact aggregation-label gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Geometric retained-memory ratio: `n/a`.
+- Geometric hierarchy-time ratio: `n/a`.
+- Serial/planned PCG geometric ratios: `n/a` / `n/a`.
+- Public native-width labels remain available through a lazy compatibility cache.
+- Evidence: `.ci/performance/compact-aggregation-labels-latest.json`.
