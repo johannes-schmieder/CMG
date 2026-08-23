@@ -543,6 +543,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - The candidate preserves the original vertex order and Neumaier operation order; all numerical and structural benchmark fields were required to match exactly.
 - Machine-readable evidence: `.ci/performance/single-component-centering-latest.json`.
 
+### Post-centering PCG profile — 2026-08-23
+
+| Case | Centering | Norms | Dot products | Vector updates | Preconditioner |
+|---|---:|---:|---:|---:|---:|
+| path-150k | 15.5% | 14.6% | 9.7% | 2.3% | 49.0% |
+| worker-firm-300k | 14.2% | 13.2% | 8.9% | 2.9% | 49.0% |
+| dense-worker-firm-400k | 3.8% | 3.7% | 2.6% | 1.0% | 78.9% |
+
+- Machine-readable evidence: `.ci/performance/pcg-phase-profile-post-centering.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest
