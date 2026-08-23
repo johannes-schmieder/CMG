@@ -1,0 +1,11 @@
+{
+  "accepted": false,
+  "baseline_sha": "829a82b1856b0e7c9d641ef3ae70de0ee397e2ec",
+  "cases": {},
+  "decision_reason": "experiment failed: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "prepared-parallel-pcg-solver",
+  "last_command_output": "$ python /home/runner/work/CMG/CMG/scripts/add_prepared_parallel_solver.py\n\n\n$ cargo fmt --all\n\n\n$ cargo fmt --manifest-path benchmarks/Cargo.toml --all\n\n\n$ cargo fmt --all -- --check\n\n\n$ cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check\n\n\n$ cargo clippy --all-targets --all-features -- -D warnings\n    Updating crates.io index\n Downloading crates ...\n  Downloaded crossbeam-deque v0.8.7\n  Downloaded crossbeam-utils v0.8.22\n  Downloaded either v1.18.0\n  Downloaded crossbeam-epoch v0.9.20\n  Downloaded rayon-core v1.13.0\n  Downloaded rayon v1.12.0\n   Compiling crossbeam-utils v0.8.22\n   Compiling crossbeam-epoch v0.9.20\n   Compiling crossbeam-deque v0.8.7\n   Compiling rayon-core v1.13.0\n    Checking either v1.18.0\n    Checking rayon v1.12.0\n    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)\nerror[E0425]: cannot find function `path_graph` in this scope\n   --> tests/parallel.rs:474:16\n    |\n474 |     let path = path_graph(1_001);\n    |                ^^^^^^^^^^ not found in this scope\n\nerror[E0425]: cannot find function `path_graph` in this scope\n   --> tests/parallel.rs:590:17\n    |\n590 |     let graph = path_graph(128);\n    |                 ^^^^^^^^^^ not found in this scope\n\nFor more information about this error, try `rustc --explain E0425`.\nerror: could not compile `cmg` (test \"parallel\") due to 2 previous errors\n",
+  "schema_version": 1,
+  "validation": "not_run"
+}

@@ -291,6 +291,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/pcg-strategy-matrix.json`.
 
+### Prepared parallel solver checkpoint — 2026-08-23
+
+- The memory-aware prepared solver candidate was **not retained**.
+- Validation status: `not_run`.
+- Geometric/worst automatic-to-best explicit timing ratios:
+  `nanx` /
+  `nanx`.
+- Machine-readable evidence:
+  `.ci/performance/prepared-parallel-solver-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
