@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use cmg::{
-    CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions, PcgResult,
-    PcgWorkspace, solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
+    CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions, PcgResult, PcgWorkspace,
+    solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
 };
 
 struct BenchGraph {
@@ -141,7 +141,11 @@ fn main() {
         .max(1);
     let threads = arguments
         .next()
-        .map(|argument| argument.parse::<usize>().expect("threads must be an integer"))
+        .map(|argument| {
+            argument
+                .parse::<usize>()
+                .expect("threads must be an integer")
+        })
         .unwrap_or(4)
         .max(1);
 
