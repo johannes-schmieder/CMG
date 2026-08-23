@@ -7,16 +7,17 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 ## Current recovery point
 
 - Repository head before this status refresh:
-  `ebc7b69a8b175edf7758e574ed32d36ef0fc6efb`.
+  `f3b3a7acd0181f5872ebf0d79ac7f9e67cffb8fa`.
 - Latest substantive numerical checkpoint:
-  `ebc7b69a8b175edf7758e574ed32d36ef0fc6efb`
-  (`perf: add selectively routed parallel CMG plan`).
-- The retain gate passed full serial/all-feature validation on Ubuntu. This
-  status refresh intentionally triggers ordinary formatting, Clippy, rustdoc,
+  `f3b3a7acd0181f5872ebf0d79ac7f9e67cffb8fa`
+  (`perf: add opt-in prebuilt-plan parallel PCG`).
+- The retain gate passed complete serial/all-feature qualification and
+  end-to-end certified-solve benchmarks on Ubuntu. This status refresh
+  intentionally triggers ordinary formatting, Clippy, rustdoc,
   benchmark-crate qualification, debug/release tests, release build, and
   Ubuntu/macOS/Windows testing on the exact retained source.
-- Do not begin the PCG integration mutation until `.ci/latest.json` records
-  this checkpoint with quality and cross-platform status `success`.
+- Do not begin another production numerical mutation until `.ci/latest.json`
+  records this checkpoint with quality and cross-platform status `success`.
 
 ## Retained performance work
 
@@ -38,10 +39,14 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 - The optional `ParallelCmgPlan` stores CSR operators only on routed
   nonterminal levels. Sparse path-like cases retain the serial hierarchy and
   build no parallel operators.
+- The opt-in planned PCG API reuses one validated plan and caller-owned
+  workspace through every Krylov iteration, including scheduled fresh residual
+  replacement and final original-system certification. The existing serial PCG
+  API and implementation remain unchanged.
 - The official pinned C matvec/restriction/prolongation/full-cycle kernels are
   compiled in the benchmark-only crate and checked for numerical agreement.
-- Stable stationary-apply and single-RHS solve benchmarks are retained in the
-  benchmark crate.
+- Stable stationary-apply, serial-solve, and planned-PCG benchmarks are retained
+  in the benchmark crate.
 
 ## Current measured evidence
 
@@ -57,6 +62,14 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
   speedup `1.279x` with zero scaled numerical difference. It built no path
   operator, measured `1.166x` on the 600,000-edge worker–firm case, and
   `2.358x` on the 800,000-edge dense worker–firm case.
+- Complete certified planned-PCG solves had four-thread geometric speedup
+  `1.237x`, with identical iteration counts, residuals, backward errors, and
+  zero measured solution difference in every retained case.
+- Full-solve speedups were `2.169x` on the 800,000-edge dense worker–firm case,
+  `1.066x` on the 600,000-edge worker–firm case, `1.026x` on the 300,000-edge
+  worker–firm case, and `0.988x` on the path, which built no parallel operator.
+- Measured plan-build break-even was below one RHS on the dense and larger
+  worker–firm cases and about 1.70 RHS on the smaller worker–firm case.
 - Optional plan storage remained below the configured 128 bytes per original
   edge, with a measured maximum of about 112.71 bytes per edge.
 - These values are directional hosted-runner evidence, not a claim about
@@ -64,32 +77,33 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Latest resolved benchmark gate
 
-The broad parallel-plan candidate was rejected because it slowed the path case
-below its hard floor. The refined router then passed validation and was
-**retained**. Its decision record is
-`.ci/performance/parallel-cmg-routed-plan-latest.json`.
+The opt-in prebuilt-plan PCG candidate passed validation and was **retained**.
+Its decision record is `.ci/performance/parallel-pcg-latest.json`.
 
 ## Next prepared optimization
 
-After the ordinary cross-platform checkpoint closes, integrate the optional
-plan into a separate parallel PCG path without changing the existing serial API:
+After ordinary cross-platform qualification closes, build a prepared solver
+abstraction and benchmark a memory-aware hybrid policy for repeated right-hand
+sides:
 
-1. reuse one immutable `ParallelCmgPlan` and caller-owned workspace throughout
-   all PCG iterations;
-2. retain fresh original-system residual replacement and final certification;
-3. route graph matvec and CMG application independently so sparse/path cases
-   can remain serial;
-4. benchmark full end-to-end solves, not only stationary applications;
-5. retain the new public path only if iteration counts, certificates, memory,
-   and per-family runtime gates all pass.
+1. combine one immutable preconditioner, executor, and optional parallel plan
+   behind a reusable solver object without hiding memory costs;
+2. choose between within-solve planned PCG and across-RHS serial PCG according
+   to RHS count, routed operator count, thread count, and workspace budget;
+3. prevent nested oversubscription by assigning each CPU to exactly one level
+   of parallelism;
+4. benchmark RHS counts 1, 2, 4, 8, and 32 at 1, 2, and 4 threads;
+5. preserve input order, original-system certification, and existing APIs;
+6. retain automatic routing only if it is never materially worse than the best
+   explicit strategy on the qualified workload matrix.
 
 ## Remaining major work
 
-- Complete ordinary Ubuntu/macOS/Windows qualification of the retained routed
-  plan.
-- Implement and qualify an opt-in single-RHS parallel PCG path.
-- Benchmark thread counts 1, 2, and 4 in the hosted environment and preserve an
-  explicit user thread-count control for future 8–32-core qualification.
+- Complete ordinary Ubuntu/macOS/Windows qualification of the retained planned
+  PCG source.
+- Add user-facing examples and memory/performance guidance for serial,
+  within-solve, and across-RHS execution.
+- Qualify the prepared/hybrid repeated-RHS strategy.
 - Profile packed contraction keys and reusable contraction buffers.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
   hardware; ordinary hosted runners currently expose only four logical CPUs.
