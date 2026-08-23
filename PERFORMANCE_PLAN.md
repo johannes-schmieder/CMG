@@ -251,6 +251,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/direct-compact-contraction-latest.json`.
 
+### Parallel CMG application checkpoint — 2026-08-23
+
+- The optional `ParallelCmgPlan` candidate was **not retained**. Four-thread geometric speedup: `1.231x`; minimum case speedup: `0.843x`.
+- Full serial/all-feature formatting, Clippy, rustdoc, debug/release tests,
+  release builds, and benchmark-crate qualification: `success`.
+- Machine-readable evidence:
+  `.ci/performance/parallel-cmg-plan-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.

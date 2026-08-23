@@ -1,0 +1,71 @@
+{
+  "acceptance_limits": {
+    "geometric_speedup_min": 1.08,
+    "maximum_scaled_difference": 5e-10,
+    "minimum_operator_count": 1,
+    "per_case_speedup_min": 0.85
+  },
+  "accepted": false,
+  "baseline_sha": "399c226e7e01ceb21d945a17c81648548ab86359",
+  "cases": {
+    "dense-worker-firm-800k": {
+      "case": "dense-worker-firm",
+      "edges": 800000,
+      "levels": 6,
+      "loops": 75,
+      "max_scaled_difference": 0.0,
+      "operators": 5,
+      "parallel_median_ns": 10870543.5,
+      "peak_rss_kib": 194896,
+      "plan_bytes": 90167320,
+      "scale": 50000,
+      "serial_median_ns": 25211666.5,
+      "speedup": 2.319264579549311,
+      "threads": 4,
+      "vertices": 100000,
+      "workspace_bytes": 6147048
+    },
+    "path-250k": {
+      "case": "path",
+      "edges": 249999,
+      "levels": 8,
+      "loops": 80,
+      "max_scaled_difference": 0.0,
+      "operators": 2,
+      "parallel_median_ns": 5159492.0,
+      "peak_rss_kib": 48784,
+      "plan_bytes": 10064480,
+      "scale": 250000,
+      "serial_median_ns": 4348726.0,
+      "speedup": 0.8428593357640636,
+      "threads": 4,
+      "vertices": 250000,
+      "workspace_bytes": 6193968
+    },
+    "worker-firm-300k": {
+      "case": "worker-firm",
+      "edges": 300000,
+      "levels": 8,
+      "loops": 80,
+      "max_scaled_difference": 0.0,
+      "operators": 2,
+      "parallel_median_ns": 3452125.0,
+      "peak_rss_kib": 51876,
+      "plan_bytes": 13002864,
+      "scale": 100000,
+      "serial_median_ns": 3297833.5,
+      "speedup": 0.9553053553970381,
+      "threads": 4,
+      "vertices": 200000,
+      "workspace_bytes": 5170504
+    }
+  },
+  "decision_reason": "qualification passed but numerical, operator, or speedup retention gate was not met",
+  "experiment": "parallel-cmg-plan",
+  "geometric_speedup": 1.2314474103203539,
+  "maximum_scaled_difference": 0.0,
+  "minimum_operator_count": 2,
+  "minimum_speedup": 0.8428593357640636,
+  "schema_version": 1,
+  "validation": "success"
+}
