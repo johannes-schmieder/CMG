@@ -889,6 +889,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but eliminating the final diagonal pass did not improve setup consistently enough.
 - Evidence: `.ci/performance/incremental-diagonal-metadata-latest.json`.
 
+### Routed edge-buffer shrink checkpoint — 2026-08-23
+
+- Skipping low-value coarse-edge `shrink_to_fit` copies was **not retained**.
+- Validation: `success`.
+- Geometric hierarchy-build ratio: `1.003x`.
+- Geometric exact retained-hierarchy ratio: `1.019x`.
+- Worst process peak-RSS ratio: `1.016x`.
+- Decision: qualification passed, but setup gains or retained/peak memory limits were not all met.
+- Evidence: `.ci/performance/routed-edge-buffer-shrink-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

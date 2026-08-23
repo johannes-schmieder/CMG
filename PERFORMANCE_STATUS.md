@@ -438,3 +438,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Graph-build / hierarchy-build ratios: `1.028x` / `1.009x`.
 - Worst peak-RSS ratio: `1.002x`.
 - Evidence: `.ci/performance/incremental-diagonal-metadata-latest.json`.
+
+## Routed edge-buffer shrink gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Hierarchy-build ratio: `1.003x`.
+- Exact retained-hierarchy ratio: `1.019x`.
+- Worst peak-RSS ratio: `1.016x`.
+- Evidence: `.ci/performance/routed-edge-buffer-shrink-latest.json`.
