@@ -1,7 +1,5 @@
 #[cfg(feature = "parallel")]
-use cmg::{
-    CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions,
-};
+use cmg::{CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions};
 
 #[cfg(feature = "parallel")]
 fn compatible_rhs(graph: &Laplacian, rhs_index: usize) -> Result<Vec<f64>, cmg::CmgError> {
