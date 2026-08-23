@@ -8,14 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rhs = [1.0, 0.0, -1.0];
 
     // Build once and reuse for every right-hand side on this graph.
-    let preconditioner =
-        CmgPreconditioner::build(&graph, CmgOptions::default())?;
-    let result = solve_pcg(
-        &graph,
-        &preconditioner,
-        &rhs,
-        PcgOptions::default(),
-    )?;
+    let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default())?;
+    let result = solve_pcg(&graph, &preconditioner, &rhs, PcgOptions::default())?;
 
     println!("solution: {:?}", result.solution());
     println!("iterations: {}", result.iterations());
