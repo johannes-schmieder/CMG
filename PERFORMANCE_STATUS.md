@@ -296,3 +296,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned-case geometric speedup: `1.312632282108527`.
 - Maximum scaled serial/planned solution difference: `5.605302390305238e-10`.
 - Evidence: `.ci/performance/post-lazy-size-routing.json`.
+
+## Lean forest hierarchy gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Geometric / best exact additional-peak ratios: `0.967716344563314` / `0.8769852824098516`.
+- Geometric hierarchy-time ratio: `0.9549888147228235`.
+- Serial/planned PCG ratios: `1.0105348490677508` / `1.0070062607771673`.
+- The complete public `ForestGrouping` diagnostic path is unchanged.
+- Evidence: `.ci/performance/lean-forest-hierarchy-latest.json`.

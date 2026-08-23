@@ -58,10 +58,8 @@ impl Aggregation {
         Ok(Self::from_validated_parts(labels, aggregate_count))
     }
 
-    pub(crate) fn from_forest_parts(labels: Vec<usize>, sizes: Vec<usize>) -> Self {
-        debug_assert_eq!(sizes.iter().sum::<usize>(), labels.len());
-        debug_assert!(labels.iter().all(|&label| label < sizes.len()));
-        let aggregate_count = sizes.len();
+    pub(crate) fn from_forest_labels(labels: Vec<usize>, aggregate_count: usize) -> Self {
+        debug_assert!(labels.iter().all(|&label| label < aggregate_count));
         Self::from_validated_parts(labels, aggregate_count)
     }
 

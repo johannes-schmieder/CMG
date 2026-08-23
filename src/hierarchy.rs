@@ -1,8 +1,11 @@
 //! Construction and diagnostics for the stationary CMG hierarchy.
 
-use crate::{Aggregation, CmgError, CmgOptions, ForestGrouping, Laplacian, build_forest_grouping};
 #[cfg(feature = "parallel")]
-use crate::{ParallelExecutor, build_forest_grouping_with_executor};
+use crate::ParallelExecutor;
+use crate::forest::build_forest_aggregation_labels;
+#[cfg(feature = "parallel")]
+use crate::forest::build_forest_aggregation_labels_with_executor;
+use crate::{Aggregation, CmgError, CmgOptions, Laplacian};
 
 /// The reason hierarchy construction terminated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,7 +133,7 @@ impl CmgHierarchy {
         Self::build_with_kernels(
             graph,
             options,
-            build_forest_grouping,
+            build_forest_aggregation_labels,
             |aggregation, current| aggregation.contract(current),
         )
     }
@@ -149,7 +152,9 @@ impl CmgHierarchy {
         Self::build_with_kernels(
             graph,
             options,
-            |current, threshold| build_forest_grouping_with_executor(current, threshold, executor),
+            |current, threshold| {
+                build_forest_aggregation_labels_with_executor(current, threshold, executor)
+            },
             |aggregation, current| aggregation.contract_with_executor(current, executor),
         )
     }
@@ -161,7 +166,7 @@ impl CmgHierarchy {
         mut contract: Contract,
     ) -> Result<Self, CmgError>
     where
-        Group: FnMut(&Laplacian, f64) -> Result<ForestGrouping, CmgError>,
+        Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
         let options = options.validate()?;
@@ -179,9 +184,9 @@ impl CmgHierarchy {
                 break;
             }
 
-            let grouping = group(&current, options.low_effective_degree_threshold)?;
-            let (labels, sizes) = grouping.into_aggregation_parts();
-            let aggregation = Aggregation::from_forest_parts(labels, sizes);
+            let (labels, aggregate_count) =
+                group(&current, options.low_effective_degree_threshold)?;
+            let aggregation = Aggregation::from_forest_labels(labels, aggregate_count);
             let coarse_count = aggregation.coarse_dimension();
 
             if coarse_count == 1 {

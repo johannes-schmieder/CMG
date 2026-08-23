@@ -760,9 +760,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Planned-case geometric speedup: `1.312632282108527`.
 - Evidence: `.ci/performance/post-lazy-size-routing.json`.
 
+### Lean forest hierarchy checkpoint — 2026-08-23
+
+- Candidate was **retained**.
+- Validation: `success`.
+- Geometric / best exact additional-peak ratios: `0.967716344563314` / `0.8769852824098516`.
+- Geometric hierarchy-time ratio: `0.9549888147228235`.
+- Evidence: `.ci/performance/lean-forest-hierarchy-latest.json`.
+
 ## Current next action
 
-1. Refresh cumulative hierarchy-memory accounting after compact labels and lazy aggregate sizes.
-2. Continue sort-dominant contraction work only with a design that clears both speed and peak-memory gates.
-3. Audit public API documentation for the lazy compatibility caches.
+1. Re-run the full routing matrix if the lean forest hierarchy path is retained.
+2. Refresh large hierarchy peak-memory guidance using the cumulative retained changes.
+3. Continue sorting work only with a design that clears both speed and peak-memory gates.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

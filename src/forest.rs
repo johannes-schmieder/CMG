@@ -50,10 +50,6 @@ impl ForestGrouping {
     pub fn aggregate_count(&self) -> usize {
         self.sizes.len()
     }
-
-    pub(crate) fn into_aggregation_parts(self) -> (Vec<usize>, Vec<usize>) {
-        (self.labels, self.sizes)
-    }
 }
 
 /// Construct the CMG heavy-edge forest and aggregate labels.
@@ -68,6 +64,21 @@ pub fn build_forest_grouping(
     validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
     let (heavy_parent, selected_weight) = maximum_weight_forest(graph);
     finish_forest_grouping(
+        graph,
+        low_effective_degree_threshold,
+        heavy_parent,
+        selected_weight,
+    )
+}
+
+/// Construct only the aggregation data needed by hierarchy construction.
+pub(crate) fn build_forest_aggregation_labels(
+    graph: &Laplacian,
+    low_effective_degree_threshold: f64,
+) -> Result<(Vec<usize>, usize), CmgError> {
+    validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
+    let (heavy_parent, selected_weight) = maximum_weight_forest(graph);
+    finish_forest_aggregation_labels(
         graph,
         low_effective_degree_threshold,
         heavy_parent,
@@ -96,6 +107,22 @@ pub fn build_forest_grouping_with_executor(
     )
 }
 
+#[cfg(feature = "parallel")]
+pub(crate) fn build_forest_aggregation_labels_with_executor(
+    graph: &Laplacian,
+    low_effective_degree_threshold: f64,
+    executor: &ParallelExecutor,
+) -> Result<(Vec<usize>, usize), CmgError> {
+    validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
+    let (heavy_parent, selected_weight) = maximum_weight_forest_with_executor(graph, executor)?;
+    finish_forest_aggregation_labels(
+        graph,
+        low_effective_degree_threshold,
+        heavy_parent,
+        selected_weight,
+    )
+}
+
 fn finish_forest_grouping(
     graph: &Laplacian,
     low_effective_degree_threshold: f64,
@@ -104,36 +131,13 @@ fn finish_forest_grouping(
 ) -> Result<ForestGrouping, CmgError> {
     let split_parent = split_forest(&heavy_parent)?;
     let mut final_parent = split_parent.clone();
-
-    let has_low_effective_degree =
-        graph
-            .diagonal()
-            .iter()
-            .zip(&selected_weight)
-            .any(|(degree, weight)| {
-                *degree > 0.0 && *weight / *degree < low_effective_degree_threshold
-            });
-
-    if has_low_effective_degree {
-        let mut selected_incident_weight = vec![0.0; graph.vertex_count()];
-        for (vertex, &parent) in split_parent.iter().enumerate() {
-            if parent != vertex {
-                let weight = selected_weight[vertex];
-                selected_incident_weight[vertex] += weight;
-                selected_incident_weight[parent] += weight;
-            }
-        }
-        for (vertex, (&degree, &tree_weight)) in graph
-            .diagonal()
-            .iter()
-            .zip(&selected_incident_weight)
-            .enumerate()
-        {
-            if degree > 0.0 && tree_weight / degree < low_effective_degree_threshold {
-                final_parent[vertex] = vertex;
-            }
-        }
-    }
+    apply_low_effective_degree_correction(
+        graph,
+        low_effective_degree_threshold,
+        &selected_weight,
+        &mut final_parent,
+    );
+    drop(selected_weight);
 
     let (labels, sizes) = forest_components(&final_parent)?;
     Ok(ForestGrouping {
@@ -143,6 +147,62 @@ fn finish_forest_grouping(
         labels,
         sizes,
     })
+}
+
+fn finish_forest_aggregation_labels(
+    graph: &Laplacian,
+    low_effective_degree_threshold: f64,
+    heavy_parent: Vec<usize>,
+    selected_weight: Vec<f64>,
+) -> Result<(Vec<usize>, usize), CmgError> {
+    let mut final_parent = split_forest(&heavy_parent)?;
+    drop(heavy_parent);
+    apply_low_effective_degree_correction(
+        graph,
+        low_effective_degree_threshold,
+        &selected_weight,
+        &mut final_parent,
+    );
+    drop(selected_weight);
+    forest_component_labels(&final_parent)
+}
+
+fn apply_low_effective_degree_correction(
+    graph: &Laplacian,
+    low_effective_degree_threshold: f64,
+    selected_weight: &[f64],
+    parent: &mut [usize],
+) {
+    let has_low_effective_degree =
+        graph
+            .diagonal()
+            .iter()
+            .zip(selected_weight)
+            .any(|(degree, weight)| {
+                *degree > 0.0 && *weight / *degree < low_effective_degree_threshold
+            });
+    if !has_low_effective_degree {
+        return;
+    }
+
+    let mut selected_incident_weight = vec![0.0; graph.vertex_count()];
+    for (vertex, &target) in parent.iter().enumerate() {
+        if target != vertex {
+            let weight = selected_weight[vertex];
+            selected_incident_weight[vertex] += weight;
+            selected_incident_weight[target] += weight;
+        }
+    }
+    for (vertex, (&degree, &tree_weight)) in graph
+        .diagonal()
+        .iter()
+        .zip(&selected_incident_weight)
+        .enumerate()
+    {
+        if degree > 0.0 && tree_weight / degree < low_effective_degree_threshold {
+            parent[vertex] = vertex;
+        }
+    }
 }
 
 fn validate_low_effective_degree_threshold(threshold: f64) -> Result<(), CmgError> {
@@ -334,6 +394,34 @@ pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
     Ok(forest)
 }
 
+fn forest_component_labels(parent: &[usize]) -> Result<(Vec<usize>, usize), CmgError> {
+    validate_parent(parent)?;
+    let n = parent.len();
+    let mut disjoint_set: Vec<usize> = (0..n).collect();
+    for (vertex, &target) in parent.iter().enumerate() {
+        union_min_root(&mut disjoint_set, vertex, target);
+    }
+    for vertex in 0..n {
+        disjoint_set[vertex] = find_root(&mut disjoint_set, vertex);
+    }
+
+    let mut root_to_label = vec![usize::MAX; n];
+    let mut labels = vec![0; n];
+    let mut aggregate_count = 0usize;
+    for (vertex, &root) in disjoint_set.iter().enumerate() {
+        let label = if root_to_label[root] == usize::MAX {
+            let next = aggregate_count;
+            aggregate_count += 1;
+            root_to_label[root] = next;
+            next
+        } else {
+            root_to_label[root]
+        };
+        labels[vertex] = label;
+    }
+    Ok((labels, aggregate_count))
+}
+
 /// Compute deterministic connected components of a functional forest.
 pub fn forest_components(parent: &[usize]) -> Result<(Vec<usize>, Vec<usize>), CmgError> {
     validate_parent(parent)?;
@@ -403,4 +491,32 @@ fn union_min_root(parent: &mut [usize], left: usize, right: usize) {
         (right_root, left_root)
     };
     parent[child] = root;
+}
+
+#[cfg(test)]
+mod lean_hierarchy_forest_tests {
+    use super::{build_forest_aggregation_labels, build_forest_grouping};
+    use crate::Laplacian;
+
+    #[test]
+    fn lean_labels_match_complete_diagnostics() {
+        let graph = Laplacian::from_edges(
+            8,
+            [
+                (0, 1, 3.0),
+                (1, 2, 2.0),
+                (2, 3, 1.0),
+                (3, 4, 4.0),
+                (4, 5, 1.5),
+                (5, 6, 2.5),
+                (6, 7, 0.75),
+                (0, 7, 0.5),
+            ],
+        )
+        .unwrap();
+        let complete = build_forest_grouping(&graph, 0.125).unwrap();
+        let (labels, aggregate_count) = build_forest_aggregation_labels(&graph, 0.125).unwrap();
+        assert_eq!(labels, complete.labels());
+        assert_eq!(aggregate_count, complete.aggregate_count());
+    }
 }
