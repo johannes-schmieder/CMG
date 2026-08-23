@@ -1,0 +1,123 @@
+name: Update hierarchy phase profile plan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/update-hierarchy-phase-plan.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update live performance recovery documents
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import subprocess
+
+          profile = json.loads(
+              Path('.ci/performance/hierarchy-phase-profile.json').read_text()
+          )
+          if profile.get('status') != 'success':
+              raise SystemExit('successful hierarchy phase profile required')
+
+          dominant = profile['dominant_phase']
+          share = profile['dominant_phase_share_of_manual_total']
+          cases = profile['cases']
+          case_lines = []
+          for name, case in cases.items():
+              case_lines.append(
+                  f"- `{name}`: `{case['dominant_phase']}` was "
+                  f"{100.0 * case['dominant_phase_share']:.1f}% of measured "
+                  f"hierarchy time; production/manual ratio "
+                  f"{case['production_hierarchy_over_manual']:.3f}."
+              )
+          checkpoint = f'''### Hierarchy phase-profile checkpoint — 2026-08-23
+
+- The read-only million-scale profiler completed successfully.
+- Aggregate dominant measured phase: `{dominant}`
+  ({100.0 * share:.1f}% of summed manual-profile time).
+{chr(10).join(case_lines)}
+- Terminal reason, level vertex counts, matrix nonzeros, and cumulative fill
+  matched the production hierarchy builder before timing was accepted.
+- No production numerical behavior changed in this checkpoint.
+- Machine-readable evidence:
+  `.ci/performance/hierarchy-phase-profile.json`.
+
+'''
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if marker not in plan:
+              raise SystemExit('PERFORMANCE_PLAN current-action marker missing')
+          prefix = plan.split(marker, 1)[0]
+          for heading in (
+              '### Hierarchy phase-profile checkpoint — 2026-08-23',
+              '### Hierarchy phase-profile rerun checkpoint — 2026-08-23',
+          ):
+              if heading in prefix:
+                  prefix = prefix.split(heading, 1)[0]
+          actions = f'''## Current next action
+
+1. Create a baseline/candidate retain-or-revert gate targeting `{dominant}`.
+   The first candidate is a safe deterministic radix ordering of compact
+   endpoint keys, followed by the unchanged per-duplicate weight ordering and
+   compensated summation.
+2. Require exact graph and hierarchy metadata, full debug/release tests,
+   cross-platform compilation, and same-host time plus requested-allocation
+   gates on path, sparse worker–firm, and dense worker–firm cases.
+3. Preserve the comparison-sort fallback for small contractions and reject the
+   candidate unless end-to-end hierarchy setup improves without a material
+   path or peak-memory regression.
+4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+   hardware is available.
+'''
+          plan_path.write_text(prefix.rstrip() + '\n\n' + checkpoint + actions)
+
+          status_path = Path('PERFORMANCE_STATUS.md')
+          status = status_path.read_text()
+          start = '## Next prepared optimization\n'
+          end = '## Remaining major work\n'
+          if start not in status or end not in status:
+              raise SystemExit('PERFORMANCE_STATUS markers missing')
+          before, remainder = status.split(start, 1)
+          _, after = remainder.split(end, 1)
+          next_section = f'''## Next prepared optimization
+
+The million-scale hierarchy profiler identifies `{dominant}` as the aggregate
+setup bottleneck at {100.0 * share:.1f}% of measured hierarchy time. It accounts
+for 85.6% on the dense worker–firm graph and 68.3% on the sparse worker–firm
+graph. The path case is different: forest splitting is its largest phase.
+
+The next numerical experiment is therefore a retain-or-revert contraction-sort
+gate. It will compare a safe deterministic radix ordering of packed endpoint
+keys against the current comparison sort, then perform the same within-pair
+weight ordering and compensated summation. It must preserve path performance,
+exact hierarchy diagnostics, and requested-allocation limits.
+
+'''
+          status_path.write_text(before + next_section + end + after)
+
+          Path('.github/workflows/update-hierarchy-phase-plan.yml').unlink()
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run([
+              'git', 'config', 'user.email',
+              '41898282+github-actions[bot]@users.noreply.github.com',
+          ], check=True)
+          subprocess.run(['git', 'add', '-A'], check=True)
+          subprocess.run([
+              'git', 'commit', '-m', 'docs: record hierarchy phase profile',
+          ], check=True)
+          subprocess.run(['git', 'pull', '--rebase', 'origin', 'main'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:main'], check=True)
