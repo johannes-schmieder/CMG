@@ -946,6 +946,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: timing or exact/process memory requalification limits were not all met.
 - Evidence: `.ci/performance/compact-forest-ancestors-memory-latest.json`.
 
+### Two-path compact forest-ancestor checkpoint — 2026-08-23
+
+- The two-monomorphization `i32`/`i64` ancestor candidate was **not retained**.
+- Validation: `success`.
+- Geometric split / hierarchy timing ratios: `0.972x` / `0.961x`.
+- Worst hierarchy process-RSS ratio: `1.085x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Decision: timing or exact/process memory limits were not all met.
+- Evidence: `.ci/performance/compact-forest-ancestors-two-path-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
