@@ -1,8 +1,8 @@
 {
-  "tested_sha": "5a5959513bf449083ed46e53212eea527b01ec59",
-  "run_id": "32638510372",
+  "tested_sha": "d64e194f236a7827ac20b02b10c3866ae698b5b6",
+  "run_id": "32638660934",
   "run_attempt": "1",
-  "quality": "failure",
+  "quality": "success",
   "cross_platform_tests": "success",
   "platforms": ["ubuntu-latest", "macos-latest", "windows-latest"],
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
