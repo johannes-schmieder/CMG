@@ -1,7 +1,11 @@
+# Armed after the workflow existed on the default branch.
 name: Density-routed parallel endpoint-first sort gate
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dense-parallel-endpoint-sort-gate.yml'
 
 permissions:
   contents: write
