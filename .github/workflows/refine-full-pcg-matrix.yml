@@ -18,22 +18,21 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Expand crossover cases and persist live documentation
+      - name: Expand crossover cases
         shell: python
         run: |
           from pathlib import Path
 
           path = Path('.github/workflows/performance.yml')
           text = path.read_text()
-
-          old_specs = '''          specs = [
+          old = '''          specs = [
               ('path-250k', ['path', 250000, 3, 4]),
               ('worker-firm-300k', ['worker-firm', 100000, 3, 4]),
               ('worker-firm-600k', ['worker-firm', 200000, 3, 4]),
               ('dense-worker-firm-800k', ['dense-worker-firm', 50000, 3, 4]),
               ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
           ]'''
-          new_specs = '''          specs = [
+          new = '''          specs = [
               ('path-250k', ['path', 250000, 3, 4]),
               ('worker-firm-300k', ['worker-firm', 100000, 3, 4]),
               ('worker-firm-375k', ['worker-firm', 125000, 3, 4]),
@@ -45,86 +44,9 @@ jobs:
               ('dense-worker-firm-800k', ['dense-worker-firm', 50000, 3, 4]),
               ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
           ]'''
-          if old_specs not in text:
+          if old not in text:
               raise SystemExit('full-PCG specs block not found')
-          text = text.replace(old_specs, new_specs, 1)
-
-          old_persist = '''            cp results/full-pcg-routing.json \\
-              candidate/.ci/performance/full-pcg-routing-latest.json
-            git -C candidate add \\
-              .ci/performance/latest.json \\
-              .ci/performance/full-pcg-routing-latest.json'''
-          new_persist = '''            cp results/full-pcg-routing.json \\
-              candidate/.ci/performance/full-pcg-routing-latest.json
-            python3 - <<'PYDOC'
-            import json
-            from pathlib import Path
-
-            routing = json.loads(Path('results/full-pcg-routing.json').read_text())
-            candidate = Path('candidate')
-
-            rows = []
-            for name, case in routing['cases'].items():
-                rows.append(
-                    f"| {name} | {case['operators']} | "
-                    f"{case['serial_iterations']} / {case['planned_iterations']} | "
-                    f"{case['speedup']:.3f}x | {case['auto_execution']} | "
-                    f"{case['recommended_execution']} |"
-                )
-            checkpoint = '''### Latest full certified PCG routing matrix
-
-| Case | Planned levels | Serial/planned iterations | Planned speedup | Current auto route | Measured recommendation |
-|---|---:|---:|---:|---|---|
-''' + '\\n'.join(rows) + f'''
-
-- Tested SHA: `{routing['tested_sha']}`.
-- Maximum scaled serial/planned solution difference: `{routing['maximum_scaled_difference']:.3e}`.
-- Geometric planned speedup: `{routing['geometric_speedup']:.3f}x`.
-- Routing mismatches: `{', '.join(routing['route_mismatches']) if routing['route_mismatches'] else 'none'}`.
-- Machine-readable evidence: `.ci/performance/full-pcg-routing-latest.json`.
-
-'''
-
-            plan_path = candidate / 'PERFORMANCE_PLAN.md'
-            plan = plan_path.read_text()
-            heading = '### Latest full certified PCG routing matrix'
-            marker = '## Current next action'
-            if heading in plan:
-                start = plan.index(heading)
-                end = plan.index(marker, start)
-                plan = plan[:start] + checkpoint + plan[end:]
-            else:
-                plan = plan.replace(marker, checkpoint + marker, 1)
-            plan_path.write_text(plan)
-
-            status_path = candidate / 'PERFORMANCE_STATUS.md'
-            status = status_path.read_text()
-            status_heading = '## Full-PCG routing measurement'
-            status_section = f'''## Full-PCG routing measurement
-
-- Tested SHA: `{routing['tested_sha']}`.
-- Geometric planned speedup: `{routing['geometric_speedup']:.3f}x`.
-- Minimum/maximum planned speedup: `{routing['minimum_speedup']:.3f}x` / `{routing['maximum_speedup']:.3f}x`.
-- Routing mismatches: `{', '.join(routing['route_mismatches']) if routing['route_mismatches'] else 'none'}`.
-- Numerical failures: `{', '.join(routing['numerical_failures']) if routing['numerical_failures'] else 'none'}`.
-- Evidence: `.ci/performance/full-pcg-routing-latest.json`.
-'''
-            if status_heading in status:
-                start = status.index(status_heading)
-                status = status[:start].rstrip() + '\\n\\n' + status_section
-            else:
-                status = status.rstrip() + '\\n\\n' + status_section
-            status_path.write_text(status)
-            PYDOC
-            git -C candidate add \\
-              .ci/performance/latest.json \\
-              .ci/performance/full-pcg-routing-latest.json \\
-              PERFORMANCE_PLAN.md \\
-              PERFORMANCE_STATUS.md'''
-          if old_persist not in text:
-              raise SystemExit('persist block not found')
-          text = text.replace(old_persist, new_persist, 1)
-          path.write_text(text)
+          path.write_text(text.replace(old, new, 1))
           Path('.github/workflows/refine-full-pcg-matrix.yml').unlink()
 
       - name: Commit refinement
