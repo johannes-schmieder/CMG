@@ -824,6 +824,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Hierarchy / planned-PCG geometric ratios: `1.0007042230394185` / `1.0022955841523074`.
 - Evidence: `.ci/performance/owned-trusted-split-latest.json`.
 
+### Radix endpoint-sort checkpoint — 2026-08-23
+
+- Adaptive sorted-input/radix endpoint ordering was **not retained**.
+- Validation: `success`.
+- Geometric hierarchy-build ratio: `1.172x`.
+- Worst per-case hierarchy-build ratio: `1.323x`.
+- Worst peak-RSS ratio: `1.100x`.
+- Decision: correctness passed, but timing or temporary-memory limits were not met.
+- Evidence: `.ci/performance/radix-endpoint-sort-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

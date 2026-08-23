@@ -381,3 +381,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Serial / planned PCG geometric ratios: `1.0014665533844995` / `1.0022955841523074`.
 - Public checked `split_forest` behavior remains unchanged.
 - Evidence: `.ci/performance/owned-trusted-split-latest.json`.
+
+## Radix endpoint-sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Geometric hierarchy-build ratio: `1.172x`.
+- Worst peak-RSS ratio: `1.100x`.
+- Evidence: `.ci/performance/radix-endpoint-sort-latest.json`.
