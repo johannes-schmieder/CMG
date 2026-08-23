@@ -1,3 +1,4 @@
+# Armed after the workflow existed on the default branch.
 name: Lazy aggregation-size gate
 
 on:
