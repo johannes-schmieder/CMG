@@ -326,3 +326,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric / best exact additional-peak ratios: `1.0` / `1.0`.
 - Public borrowed `split_forest` behavior is unchanged.
 - Evidence: `.ci/performance/owned-split-forest-latest.json`.
+
+## Owned internal component-label gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Hierarchy geometric time ratio: `0.9971156999848793`.
+- Geometric / best exact additional-peak ratios: `1.0` / `1.0`.
+- Public `forest_components` diagnostic behavior is unchanged.
+- Evidence: `.ci/performance/owned-component-labels-latest.json`.

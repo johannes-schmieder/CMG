@@ -782,9 +782,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Hierarchy time / geometric exact-peak ratios: `0.9942737661478971` / `1.0`.
 - Evidence: `.ci/performance/owned-split-forest-latest.json`.
 
+### Owned internal component-label checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Hierarchy time / geometric exact-peak ratios: `0.9971156999848793` / `1.0`.
+- Evidence: `.ci/performance/owned-component-labels-latest.json`.
+
 ## Current next action
 
-1. If owned splitting is retained, benchmark consuming component labeling that reuses the final-parent allocation as its returned label vector.
-2. Refresh cumulative large-graph hierarchy memory guidance.
+1. Refresh cumulative large-graph hierarchy memory guidance after the component-label decision.
+2. Re-profile forest and contraction phases after retained memory changes.
 3. Continue sort-dominant contraction work only with a design that clears both speed and peak-memory gates.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.
