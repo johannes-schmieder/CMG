@@ -1,10 +1,10 @@
 {
   "cases": {},
-  "decision_reason": "profiler sync failed: profile import marker was not unique",
-  "error": "RuntimeError('profile import marker was not unique')",
+  "decision_reason": "profiler synchronization failed: expected local helper missing from removal block: fn compensated_sum",
+  "error": "RuntimeError('expected local helper missing from removal block: fn compensated_sum')",
   "experiment": "pcg-profiler-production-reduction-sync",
   "retained": false,
-  "schema_version": 1,
-  "source_sha": "2639f7db54cb728740b0b47d610d671de9ae8bce",
+  "schema_version": 2,
+  "source_sha": "74dc1647ae9ad07527736c22da11f5107917d3bc",
   "validation": "not_run"
 }

@@ -124,6 +124,5 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 - Decision: `not retained`.
 - Validation: `not_run`.
-- The phase profiler now reuses the exact production planned-PCG dot and norm helpers rather than maintaining stale copies.
+- The phase profiler reuses the exact production planned-PCG dot and norm helpers.
 - Evidence: `.ci/performance/pcg-profiler-sync.json`.
-
