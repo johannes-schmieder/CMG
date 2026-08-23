@@ -174,6 +174,8 @@ impl CenteringPlan {
         match &self.labels {
             CenteringLabels::Single => {
                 if !self.sizes.is_empty() {
+                    let mut sum = 0.0;
+                    let mut correction = 0.0;
                     for (vertex, value) in values.iter().enumerate() {
                         if !value.is_finite() {
                             return Err(CmgError::NonFiniteMatrixValue {
@@ -182,12 +184,10 @@ impl CenteringPlan {
                                 value: *value,
                             });
                         }
-                        neumaier_add(
-                            &mut workspace.sums[0],
-                            &mut workspace.corrections[0],
-                            *value,
-                        );
+                        neumaier_add(&mut sum, &mut correction, *value);
                     }
+                    workspace.sums[0] = sum;
+                    workspace.corrections[0] = correction;
                 }
             }
             CenteringLabels::Compact(labels) => {
@@ -465,8 +465,15 @@ impl Components {
         for component in 0..self.count() {
             workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
         }
-        for (value, label) in values.iter_mut().zip(&self.labels) {
-            *value -= workspace.means[*label];
+        if self.count() == 1 {
+            let mean = workspace.means[0];
+            for value in values {
+                *value -= mean;
+            }
+        } else {
+            for (value, label) in values.iter_mut().zip(&self.labels) {
+                *value -= workspace.means[*label];
+            }
         }
         Ok(())
     }
@@ -572,6 +579,23 @@ impl Components {
         }
         sums.fill(0.0);
         corrections.fill(0.0);
+        if self.count() == 1 {
+            let mut sum = 0.0;
+            let mut correction = 0.0;
+            for (vertex, value) in values.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: vertex,
+                        column: 0,
+                        value: *value,
+                    });
+                }
+                neumaier_add(&mut sum, &mut correction, *value);
+            }
+            sums[0] = sum + correction;
+            corrections[0] = correction;
+            return Ok(());
+        }
         for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
             if !value.is_finite() {
                 return Err(CmgError::NonFiniteMatrixValue {

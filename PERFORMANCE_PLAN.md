@@ -528,6 +528,21 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - The profiler verifies bitwise equality with the ordinary planned solver.
 - Machine-readable evidence: `.ci/performance/pcg-phase-profile-latest.json`.
 
+### Single-component centering checkpoint — 2026-08-23
+
+- The scalar-label fast path was **retained**.
+- Qualification status: `success`.
+- Decision: full qualification passed and connected-graph solve time improved.
+
+| Case | Serial solve ratio | Planned solve ratio |
+|---|---:|---:|
+| path-150k | 0.757x | 0.767x |
+| worker-firm-300k | 0.783x | 0.795x |
+| dense-worker-firm-400k | 0.958x | 0.925x |
+
+- The candidate preserves the original vertex order and Neumaier operation order; all numerical and structural benchmark fields were required to match exactly.
+- Machine-readable evidence: `.ci/performance/single-component-centering-latest.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest

@@ -77,3 +77,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Maximum vector-update share: `2.7%`.
 - Evidence: `.ci/performance/pcg-phase-profile-latest.json`.
 
+## Single-component centering gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Geometric full-solve ratio: `0.827x`.
+- Evidence: `.ci/performance/single-component-centering-latest.json`.
+
