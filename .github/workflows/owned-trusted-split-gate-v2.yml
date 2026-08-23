@@ -1,7 +1,11 @@
+# Armed after the workflow existed on the default branch.
 name: Owned trusted forest split gate v2
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/owned-trusted-split-gate-v2.yml'
 
 permissions:
   contents: write
