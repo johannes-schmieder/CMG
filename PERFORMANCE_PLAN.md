@@ -553,6 +553,21 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Machine-readable evidence: `.ci/performance/pcg-phase-profile-post-centering.json`.
 
+### Fused centering and norm-scale checkpoint — 2026-08-23
+
+- The fused solution-centering/norm-scale pass was **not retained**.
+- Qualification status: `success`.
+- Decision: qualification passed but the full-solve timing gate was not met.
+
+| Case | Serial solve ratio | Planned solve ratio |
+|---|---:|---:|
+| path-150k | 1.003x | 0.998x |
+| worker-firm-300k | 0.995x | 1.000x |
+| dense-worker-firm-400k | 0.998x | 1.033x |
+
+- The candidate preserves the centering subtraction order and the norm maximum/squared-sum orders. Every non-timing benchmark field was required to match exactly.
+- Machine-readable evidence: `.ci/performance/fused-centering-norm-latest.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest

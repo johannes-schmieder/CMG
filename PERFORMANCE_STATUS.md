@@ -84,3 +84,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric full-solve ratio: `0.827x`.
 - Evidence: `.ci/performance/single-component-centering-latest.json`.
 
+## Fused centering and norm-scale gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Geometric full-solve ratio: `1.004x`.
+- Evidence: `.ci/performance/fused-centering-norm-latest.json`.
+
