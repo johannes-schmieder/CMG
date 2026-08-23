@@ -275,6 +275,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/parallel-pcg-latest.json`.
 
+### PCG strategy-matrix checkpoint — 2026-08-23
+
+- Benchmark-only strategy matrix status: `failure`.
+- Cases compare serial sequential, across-RHS parallel, and planned within-solve PCG.
+- The simple provisional auto policy had geometric/worst auto-to-best ratios of
+  `nanx` and
+  `1.079x`.
+- No production routing was changed by this checkpoint.
+- Machine-readable evidence:
+  `.ci/performance/pcg-strategy-matrix.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.
