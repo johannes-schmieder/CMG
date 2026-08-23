@@ -245,9 +245,9 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Direct compact contraction checkpoint — 2026-08-23
 
 - Building coarse levels directly in retained 16-byte `Edge` storage was
-  **not retained**.
-- Qualification status: `not_run`.
-- Decision: experiment failed: command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check.
+  **retained**. Geometric time/RSS ratios: 0.952/0.924; parallel time/RSS ratios: 0.942/0.883.
+- Qualification status: `success`.
+- Decision: full qualification passed; direct compact contraction met timing, memory, and parallel-signal gates.
 - Machine-readable evidence:
   `.ci/performance/direct-compact-contraction-latest.json`.
 

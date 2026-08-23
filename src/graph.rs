@@ -33,6 +33,30 @@ impl Edge {
     pub const fn weight(self) -> f64 {
         self.weight
     }
+
+    /// Construct an edge from already validated internal graph data.
+    pub(crate) fn from_internal_parts(
+        left: usize,
+        right: usize,
+        weight: f64,
+    ) -> Result<Self, CmgError> {
+        debug_assert!(left != right);
+        debug_assert!(weight.is_finite() && weight > 0.0);
+        let (u, v) = if left < right {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        let u = u32::try_from(u).map_err(|_| CmgError::VertexIndexTooWide {
+            vertex: u,
+            maximum: u32::MAX as usize,
+        })?;
+        let v = u32::try_from(v).map_err(|_| CmgError::VertexIndexTooWide {
+            vertex: v,
+            maximum: u32::MAX as usize,
+        })?;
+        Ok(Self { u, v, weight })
+    }
 }
 
 /// A deterministic edge-list representation of a weighted graph Laplacian.
@@ -86,6 +110,28 @@ impl Laplacian {
         I: IntoIterator<Item = (usize, usize, f64)>,
     {
         let mut raw = collect_validated_edges(vertex_count, edges)?;
+        if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
+            executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
+        } else {
+            raw.sort_by(compare_raw_edges);
+        }
+        Self::from_sorted_raw_edges(vertex_count, raw)
+    }
+
+    pub(crate) fn from_compact_edges(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+    ) -> Result<Self, CmgError> {
+        raw.sort_by(compare_raw_edges);
+        Self::from_sorted_raw_edges(vertex_count, raw)
+    }
+
+    #[cfg(feature = "parallel")]
+    pub(crate) fn from_compact_edges_with_executor(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
         if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
             executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
         } else {

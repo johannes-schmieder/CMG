@@ -44,7 +44,7 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 ## Latest resolved benchmark gate
 
 The corrected direct compact-contraction gate completed with status
-`not_run`. The candidate was **not retained**.
+`success`. The candidate was **retained**. Geometric time/RSS ratios: 0.952/0.924; parallel time/RSS ratios: 0.942/0.883.
 The decision record is
 `.ci/performance/direct-compact-contraction-latest.json`.
 

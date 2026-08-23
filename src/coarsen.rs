@@ -1,6 +1,6 @@
 //! Deterministic restriction, prolongation, and Galerkin graph contraction.
 
-use crate::{CmgError, Laplacian};
+use crate::{CmgError, Edge, Laplacian};
 #[cfg(feature = "parallel")]
 use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 #[cfg(feature = "parallel")]
@@ -111,12 +111,15 @@ impl Aggregation {
     /// Form the exact graph Laplacian `R L R^T`.
     pub fn contract(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;
-        let coarse_edges = graph.edges().iter().filter_map(|edge| {
+        let mut coarse_edges = Vec::with_capacity(graph.edge_count());
+        for edge in graph.edges() {
             let left = self.labels[edge.u()];
             let right = self.labels[edge.v()];
-            (left != right).then_some((left, right, edge.weight()))
-        });
-        Laplacian::from_edges(self.coarse_dimension(), coarse_edges)
+            if left != right {
+                coarse_edges.push(Edge::from_internal_parts(left, right, edge.weight())?);
+            }
+        }
+        Laplacian::from_compact_edges(self.coarse_dimension(), coarse_edges)
     }
 
     /// Form `R L R^T` using deterministic parallel edge mapping and sorting.
@@ -135,18 +138,22 @@ impl Aggregation {
         {
             return self.contract(graph);
         }
-        let coarse_edges: Vec<(usize, usize, f64)> = executor.install(|| {
+        let coarse_edges: Result<Vec<Edge>, CmgError> = executor.install(|| {
             graph
                 .edges()
                 .par_iter()
                 .filter_map(|edge| {
                     let left = self.labels[edge.u()];
                     let right = self.labels[edge.v()];
-                    (left != right).then_some((left, right, edge.weight()))
+                    (left != right).then(|| Edge::from_internal_parts(left, right, edge.weight()))
                 })
                 .collect()
         });
-        Laplacian::from_edges_with_executor(self.coarse_dimension(), coarse_edges, executor)
+        Laplacian::from_compact_edges_with_executor(
+            self.coarse_dimension(),
+            coarse_edges?,
+            executor,
+        )
     }
 
     fn validate_contract_graph(&self, graph: &Laplacian) -> Result<(), CmgError> {
