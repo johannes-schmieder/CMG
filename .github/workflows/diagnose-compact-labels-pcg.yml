@@ -1,0 +1,40 @@
+name: Diagnose compact-label PCG difference
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-compact-labels-pcg.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare baseline and candidate path solves
+        run: python scripts/diagnose_compact_labels_pcg.py
+
+      - name: Commit diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: diagnose compact-label PCG difference'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
