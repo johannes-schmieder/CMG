@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "checkpoint": "stale-optimization-staging-cleanup",
+  "source_sha": "fa5498f7c54eb86c5dc342a344515e845741954c",
+  "production_source_changed": false,
+  "removed_count": 23,
+  "removed_paths": [
+    ".github/workflows/analyze-compact-hierarchy-indices.yml",
+    ".github/workflows/analyze-packed-edge-sort.yml",
+    ".github/workflows/compact-hierarchy-index-metadata-fallback.yml",
+    ".github/workflows/compact-hierarchy-index-v2.yml",
+    ".github/workflows/consolidate-optimization-chain.yml",
+    ".github/workflows/fixed-chunk-norm-sum.yml",
+    ".github/workflows/packed-edge-sort-gate.yml",
+    ".github/workflows/parallel-pcg-vector-updates.yml",
+    ".github/workflows/profile-post-reductions.yml",
+    ".github/workflows/resolve-failed-optimization-gates.yml",
+    ".github/workflows/snapshot-continued-optimization.yml",
+    ".github/workflows/resolve-stale-optimization-staging.yml",
+    "scripts/analyze_compact_hierarchy_indices.py",
+    "scripts/analyze_packed_edge_sort.py",
+    "scripts/compact_hierarchy_index_metadata_fallback.py",
+    "scripts/compact_hierarchy_index_gate_v2.py",
+    "scripts/consolidate_optimization_chain.py",
+    "scripts/fixed_chunk_norm_sum_gate.py",
+    "scripts/packed_edge_sort_gate.py",
+    "scripts/parallel_pcg_vector_updates_gate.py",
+    "scripts/profile_post_reductions.py",
+    "scripts/resolve_failed_optimization_gates.py",
+    "scripts/snapshot_continued_optimization.py"
+  ],
+  "next_gate": "forest-backed-contraction-capacity-hint"
+}
