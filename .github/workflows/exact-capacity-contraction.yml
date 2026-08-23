@@ -1,0 +1,29 @@
+name: Routed exact-capacity contraction
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/exact-capacity-contraction.yml'
+      - 'scripts/exact_capacity_contraction_gate.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify routed exact-capacity coarse-edge construction
+        run: python scripts/exact_capacity_contraction_gate.py
+
+      - name: Show decision record
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/exact-capacity-contraction-latest.json || true
