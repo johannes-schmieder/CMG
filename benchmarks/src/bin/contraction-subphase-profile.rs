@@ -143,7 +143,11 @@ fn map_edges(graph: &Laplacian, aggregation: &Aggregation) -> Vec<ProbeEdge> {
         if left == right {
             continue;
         }
-        let (u, v) = if left < right { (left, right) } else { (right, left) };
+        let (u, v) = if left < right {
+            (left, right)
+        } else {
+            (right, left)
+        };
         mapped.push(ProbeEdge {
             u: u32::try_from(u).expect("coarse endpoint fits u32"),
             v: u32::try_from(v).expect("coarse endpoint fits u32"),
@@ -206,7 +210,7 @@ fn profile_level(
     let mut merged_count = 0usize;
     let mut used_radix = false;
 
-    for repetition in 0..repetitions {
+    for _ in 0..repetitions {
         let map_start = Instant::now();
         let mut mapped = map_edges(graph, aggregation);
         timings.mapping.push(map_start.elapsed().as_nanos());
@@ -228,11 +232,7 @@ fn profile_level(
         let finalize_start = Instant::now();
         let diagonal_nonzeros = diagonal.iter().filter(|value| **value != 0.0).count();
         let matrix_nonzeros = diagonal_nonzeros + 2 * mapped.len();
-        let operator_norm_bound = diagonal
-            .iter()
-            .copied()
-            .fold(0.0_f64, f64::max)
-            * 2.0;
+        let operator_norm_bound = diagonal.iter().copied().fold(0.0_f64, f64::max) * 2.0;
         timings.finalize.push(finalize_start.elapsed().as_nanos());
         assert_eq!(matrix_nonzeros, expected.matrix_nnz());
         assert_eq!(
@@ -247,7 +247,9 @@ fn profile_level(
         let production = aggregation
             .contract(black_box(graph))
             .expect("production contraction should succeed");
-        timings.production.push(production_start.elapsed().as_nanos());
+        timings
+            .production
+            .push(production_start.elapsed().as_nanos());
         assert_eq!(&production, expected);
         black_box(production);
     }
@@ -326,8 +328,8 @@ fn main() {
     };
 
     let bench = build_case(&case, scale);
-    let hierarchy = CmgHierarchy::build(&bench.graph, CmgOptions::default())
-        .expect("hierarchy should build");
+    let hierarchy =
+        CmgHierarchy::build(&bench.graph, CmgOptions::default()).expect("hierarchy should build");
 
     let mut total_mapping = 0u128;
     let mut total_sorting = 0u128;
@@ -343,13 +345,8 @@ fn main() {
         let Some(aggregation) = fine.aggregation() else {
             continue;
         };
-        let (mut timings, mapped_count, merged_count, used_radix) = profile_level(
-            fine.graph(),
-            aggregation,
-            coarse.graph(),
-            repetitions,
-            mode,
-        );
+        let (mut timings, mapped_count, merged_count, used_radix) =
+            profile_level(fine.graph(), aggregation, coarse.graph(), repetitions, mode);
         let mapping = median(&mut timings.mapping);
         let sorting = median(&mut timings.sorting);
         let merging = median(&mut timings.merging);

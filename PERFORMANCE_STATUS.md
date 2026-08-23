@@ -97,19 +97,21 @@ contraction profile rather than from unmeasured micro-optimization.
 
 ## Latest contraction subphase evidence
 
-The read-only contraction profiler completed with status `failure`. The
-aggregate dominant phase is `unresolved` at `0.0%` of
-manual contraction time. Exact coarse-graph equivalence is checked before every
-timing is accepted. See `.ci/performance/contraction-subphase-profile.json`.
+The read-only contraction profiler completed with status
+`success`. The aggregate dominant phase is `sorting` at
+`78.0%` of attributed manual contraction time across `3`
+million-scale cases. Exact coarse-graph equivalence was checked before
+every timing was accepted. See
+`.ci/performance/contraction-subphase-profile.json`.
 
 ## Remaining major work
 
-- Refresh the hierarchy profile if the radix route is retained; otherwise add a
-  contraction subphase profiler before another source mutation.
-- Extend user-facing memory/performance guidance for automatic, explicit
-  within-solve, and explicit across-RHS execution.
-- Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
-  hardware; ordinary hosted runners currently expose only four logical CPUs.
+- Benchmark-gate a narrowly scoped `sorting` optimization selected
+  from the successful subphase profile.
+- Extend user-facing memory/performance guidance for automatic,
+  explicit within-solve, and explicit across-RHS execution.
+- Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on
+  suitable hardware; ordinary hosted runners expose only four logical CPUs.
 
 ## Recovery rule
 

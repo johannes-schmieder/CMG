@@ -453,11 +453,25 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/contraction-subphase-profile.json`.
 
+### Contraction subphase profile rerun — 2026-08-23
+
+- Read-only benchmark status: `success`.
+- Aggregate dominant contraction phase: `sorting`
+  (`78.0%` of attributed manual contraction time).
+- Completed cases: `3`.
+- Every reconstructed coarse graph was checked exactly against production
+  endpoint order, weight bits, diagonal bits, matrix nonzeros, operator
+  bound, and `Aggregation::contract` output before timing was accepted.
+- Production numerical behavior was unchanged.
+- Machine-readable evidence:
+  `.ci/performance/contraction-subphase-profile.json`.
 ## Current next action
 
-1. Use the profile record to select the next benchmark-gated contraction candidate.
-2. Retain ordinary comparison sorting for dense contraction; routed radix was
-   numerically valid but slower and memory-neutral.
-3. Obtain controlled 8–32-thread/high-memory evidence when suitable hardware is available.
-4. Keep production source unchanged until the next candidate passes full numerical,
-   timing, and exact-allocation gates.
+1. Use the successful contraction subphase profile to benchmark-gate the
+   next `sorting` optimization; do not change unrelated numerical code.
+2. Preserve exact coarse-graph ordering, compensated duplicate summation,
+   hierarchy metadata, and original-system solve certification.
+3. Extend user-facing guidance for automatic, within-solve, and
+   across-RHS parallel execution.
+4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when
+   suitable hardware is available.
