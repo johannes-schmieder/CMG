@@ -9,7 +9,8 @@ use cmg::{
 struct BenchGraph {
     graph: Laplacian,
     vertices: usize,
-    edges: usize,
+    input_edges: usize,
+    canonical_edges: usize,
 }
 
 fn median(mut values: Vec<u128>) -> u128 {
@@ -21,11 +22,14 @@ fn path_graph(vertices: usize) -> BenchGraph {
     let edges: Vec<_> = (0..vertices.saturating_sub(1))
         .map(|vertex| (vertex, vertex + 1, 0.5 + (vertex % 31) as f64 / 17.0))
         .collect();
-    let edge_count = edges.len();
+    let input_edges = edges.len();
+    let graph = Laplacian::from_edges(vertices, edges).expect("valid path graph");
+    let canonical_edges = graph.edges().len();
     BenchGraph {
-        graph: Laplacian::from_edges(vertices, edges).expect("valid path graph"),
+        graph,
         vertices,
-        edges: edge_count,
+        input_edges,
+        canonical_edges,
     }
 }
 
@@ -47,11 +51,14 @@ fn worker_firm_graph(per_side: usize, degree: usize) -> BenchGraph {
             edges.push((worker, firm_offset + firm, weight));
         }
     }
-    let edge_count = edges.len();
+    let input_edges = edges.len();
+    let graph = Laplacian::from_edges(vertices, edges).expect("valid worker-firm graph");
+    let canonical_edges = graph.edges().len();
     BenchGraph {
-        graph: Laplacian::from_edges(vertices, edges).expect("valid worker-firm graph"),
+        graph,
         vertices,
-        edges: edge_count,
+        input_edges,
+        canonical_edges,
     }
 }
 
@@ -205,9 +212,10 @@ fn main() {
     );
 
     println!(
-        "{{\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"edges\":{},\"levels\":{},\"repetitions\":{repetitions},\"threads\":{threads},\"operators\":{},\"plan_bytes\":{},\"workspace_bytes\":{},\"auto_execution\":\"{execution}\",\"serial_median_ns\":{serial_median_ns},\"planned_median_ns\":{planned_median_ns},\"speedup\":{speedup:.17e},\"serial_iterations\":{},\"planned_iterations\":{},\"serial_backward_error\":{:.17e},\"planned_backward_error\":{:.17e},\"serial_residual_norm\":{:.17e},\"planned_residual_norm\":{:.17e},\"max_scaled_difference\":{difference:.17e}}}",
+        "{{\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"input_edges\":{},\"edges\":{},\"levels\":{},\"repetitions\":{repetitions},\"threads\":{threads},\"operators\":{},\"plan_bytes\":{},\"workspace_bytes\":{},\"auto_execution\":\"{execution}\",\"serial_median_ns\":{serial_median_ns},\"planned_median_ns\":{planned_median_ns},\"speedup\":{speedup:.17e},\"serial_iterations\":{},\"planned_iterations\":{},\"serial_backward_error\":{:.17e},\"planned_backward_error\":{:.17e},\"serial_residual_norm\":{:.17e},\"planned_residual_norm\":{:.17e},\"max_scaled_difference\":{difference:.17e}}}",
         bench_graph.vertices,
-        bench_graph.edges,
+        bench_graph.input_edges,
+        bench_graph.canonical_edges,
         solver.preconditioner().hierarchy().levels().len(),
         solver.plan().operator_count(),
         solver.plan().byte_len(),
