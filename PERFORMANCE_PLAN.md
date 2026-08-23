@@ -901,11 +901,11 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ### Cache-local duplicate merge checkpoint — 2026-08-23
 
-- Sorting and summing duplicate compact edges within one local group traversal was **not retained**.
-- Validation: `failure`.
-- Geometric production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
-- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Sorting and summing duplicate compact edges within one local group traversal was **retained**.
+- Validation: `success`.
+- Geometric production-contraction / hierarchy-build ratios: `0.972x` / `0.976x`.
+- Worst peak-RSS ratio: `1.003x`.
+- Decision: full qualification passed; endpoint groups were sorted and summed cache-locally with stable hierarchy gains.
 - Evidence: `.ci/performance/local-duplicate-merge-latest.json`.
 
 ## Current next action

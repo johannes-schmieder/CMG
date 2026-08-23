@@ -122,8 +122,8 @@ impl Laplacian {
         vertex_count: usize,
         mut raw: Vec<Edge>,
     ) -> Result<Self, CmgError> {
-        sort_compact_edges_two_stage(&mut raw);
-        Self::from_sorted_raw_edges(vertex_count, raw)
+        sort_compact_edge_endpoints(&mut raw);
+        Self::from_endpoint_sorted_raw_edges(vertex_count, raw)
     }
 
     #[cfg(feature = "parallel")]
@@ -135,41 +135,71 @@ impl Laplacian {
         if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
             executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
         } else {
-            sort_compact_edges_two_stage(&mut raw);
+            sort_compact_edge_endpoints(&mut raw);
+            return Self::from_endpoint_sorted_raw_edges(vertex_count, raw);
         }
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
-    fn from_sorted_raw_edges(vertex_count: usize, mut raw: Vec<Edge>) -> Result<Self, CmgError> {
+    fn from_endpoint_sorted_raw_edges(
+        vertex_count: usize,
+        raw: Vec<Edge>,
+    ) -> Result<Self, CmgError> {
+        Self::from_sorted_raw_edges_with_mode(vertex_count, raw, false)
+    }
+
+    fn from_sorted_raw_edges(vertex_count: usize, raw: Vec<Edge>) -> Result<Self, CmgError> {
+        Self::from_sorted_raw_edges_with_mode(vertex_count, raw, true)
+    }
+
+    fn from_sorted_raw_edges_with_mode(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+        weights_are_sorted: bool,
+    ) -> Result<Self, CmgError> {
         // Equal endpoint pairs are contiguous after sorting. Merge them into
         // the front of the compact input buffer so graph construction does not
         // allocate a separate full-capacity canonical vector. Accumulate the
         // diagonal in the same canonical edge order while each merged edge is
         // already hot, avoiding a second full edge pass.
         let mut diagonal = vec![0.0; vertex_count];
-        let mut read_index = 0;
         let mut write_index = 0;
-        while read_index < raw.len() {
-            let u = raw[read_index].u;
-            let v = raw[read_index].v;
-            let mut sum = 0.0;
-            let mut correction = 0.0;
-            while read_index < raw.len() && raw[read_index].u == u && raw[read_index].v == v {
-                compensated_add(&mut sum, &mut correction, raw[read_index].weight);
-                read_index += 1;
+        if weights_are_sorted {
+            let mut read_index = 0;
+            while read_index < raw.len() {
+                let u = raw[read_index].u;
+                let v = raw[read_index].v;
+                let mut sum = 0.0;
+                let mut correction = 0.0;
+                while read_index < raw.len() && raw[read_index].u == u && raw[read_index].v == v {
+                    compensated_add(&mut sum, &mut correction, raw[read_index].weight);
+                    read_index += 1;
+                }
+                write_merged_edge(&mut raw, &mut diagonal, write_index, u, v, sum + correction)?;
+                write_index += 1;
             }
-            let weight = sum + correction;
-            if !weight.is_finite() || weight <= 0.0 {
-                return Err(CmgError::InvalidEdgeWeight {
-                    u: u as usize,
-                    v: v as usize,
-                    weight,
-                });
+        } else {
+            let mut group_start = 0;
+            while group_start < raw.len() {
+                let u = raw[group_start].u;
+                let v = raw[group_start].v;
+                let mut group_end = group_start + 1;
+                while group_end < raw.len() && raw[group_end].u == u && raw[group_end].v == v {
+                    group_end += 1;
+                }
+                if group_end - group_start > 1 {
+                    raw[group_start..group_end]
+                        .sort_unstable_by(|left, right| left.weight.total_cmp(&right.weight));
+                }
+                let mut sum = 0.0;
+                let mut correction = 0.0;
+                for edge in &raw[group_start..group_end] {
+                    compensated_add(&mut sum, &mut correction, edge.weight);
+                }
+                write_merged_edge(&mut raw, &mut diagonal, write_index, u, v, sum + correction)?;
+                write_index += 1;
+                group_start = group_end;
             }
-            raw[write_index] = Edge { u, v, weight };
-            diagonal[u as usize] += weight;
-            diagonal[v as usize] += weight;
-            write_index += 1;
         }
         raw.truncate(write_index);
         // Filtered coarse-edge iterators have a zero lower size hint, so their
@@ -371,8 +401,13 @@ fn compare_raw_edges(left: &Edge, right: &Edge) -> core::cmp::Ordering {
         .then_with(|| left.weight.total_cmp(&right.weight))
 }
 
-fn sort_compact_edges_two_stage(raw: &mut [Edge]) {
+fn sort_compact_edge_endpoints(raw: &mut [Edge]) {
     raw.sort_unstable_by_key(endpoint_key);
+}
+
+#[cfg(test)]
+fn sort_compact_edges_two_stage(raw: &mut [Edge]) {
+    sort_compact_edge_endpoints(raw);
     let mut start = 0;
     while start < raw.len() {
         let key = endpoint_key(&raw[start]);
@@ -385,6 +420,27 @@ fn sort_compact_edges_two_stage(raw: &mut [Edge]) {
         }
         start = end;
     }
+}
+
+fn write_merged_edge(
+    raw: &mut [Edge],
+    diagonal: &mut [f64],
+    write_index: usize,
+    u: u32,
+    v: u32,
+    weight: f64,
+) -> Result<(), CmgError> {
+    if !weight.is_finite() || weight <= 0.0 {
+        return Err(CmgError::InvalidEdgeWeight {
+            u: u as usize,
+            v: v as usize,
+            weight,
+        });
+    }
+    raw[write_index] = Edge { u, v, weight };
+    diagonal[u as usize] += weight;
+    diagonal[v as usize] += weight;
+    Ok(())
 }
 
 #[inline]
@@ -580,5 +636,30 @@ mod fused_diagonal_statistics_tests {
         let graph = Laplacian::from_edges(4, [(0, 1, 2.0), (1, 2, 3.0)]).unwrap();
         assert_eq!(graph.matrix_nnz(), 7);
         assert_eq!(graph.operator_norm_bound().to_bits(), 10.0_f64.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod local_duplicate_merge_tests {
+    use super::{Laplacian, sort_compact_edge_endpoints};
+
+    #[test]
+    fn endpoint_only_compact_path_matches_public_total_order_path() {
+        let edges = vec![
+            (4, 1, 4.0),
+            (1, 4, 0.25),
+            (3, 0, 8.0),
+            (4, 1, 2.0),
+            (0, 3, 0.5),
+            (2, 5, 1.0),
+        ];
+        let public = Laplacian::from_edges(6, edges.clone()).unwrap();
+        let mut compact = edges
+            .into_iter()
+            .map(|(u, v, weight)| super::Edge::from_internal_parts(u, v, weight).unwrap())
+            .collect::<Vec<_>>();
+        sort_compact_edge_endpoints(&mut compact);
+        let local = Laplacian::from_endpoint_sorted_raw_edges(6, compact).unwrap();
+        assert_eq!(local, public);
     }
 }

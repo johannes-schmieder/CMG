@@ -450,8 +450,8 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 ## Cache-local duplicate merge gate
 
-- Decision: `not retained`.
-- Validation: `failure`.
-- Production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
+- Decision: `retained`.
+- Validation: `success`.
+- Production-contraction / hierarchy-build ratios: `0.972x` / `0.976x`.
+- Worst peak-RSS ratio: `1.003x`.
 - Evidence: `.ci/performance/local-duplicate-merge-latest.json`.
