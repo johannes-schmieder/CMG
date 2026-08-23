@@ -1,0 +1,174 @@
+name: Refresh performance recovery state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-performance-recovery.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Refresh live records and remove resolved one-shot machinery
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+          tested = json.loads(Path('.ci/latest.json').read_text())
+          source_head = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+
+          def replace_section(text, heading, next_heading, body):
+              start = text.index(heading)
+              end = text.index(next_heading, start)
+              return text[:start] + heading + '\n\n' + body.strip() + '\n\n' + text[end:]
+
+          phase_body = '''| Phase | Status | Gate |
+          |---|---|---|
+          | P0 Measurement | COMPLETE | Matched baseline/current records are retained |
+          | P1 Repeated overhead | COMPLETE | Graph metadata and compatible stationary application are reused |
+          | P2 Terminal/workspace memory | COMPLETE | Factor compression and scratch aliasing pass qualification |
+          | P3 Frozen CSR | COMPLETE | Deterministic CSR agrees with edge matvec; measured routing is documented |
+          | P4 Parallel solve kernels | COMPLETE | Selective row-parallel CMG and plan-aware certified PCG pass qualification |
+          | P5 Multi-RHS scheduler | COMPLETE | Ordered memory-bounded concurrent solves pass cross-platform tests |
+          | P6 Parallel setup | COMPLETE | Sorting, direct compact contraction, and heavy-edge routing passed large hosted gates |
+          | P7 Pinned C comparison | COMPLETE | Matvec, restriction, prolongation, and full iterative cycle agree and are timed |
+          | P8 Large qualification | PARTIAL | Hosted 1–4-thread evidence exists; controlled 8–32-thread/high-memory evidence remains |
+          | P9 Panel/SIMD/NUMA work | DEFERRED | Begin only after full-PCG profiles justify the complexity |'''
+          plan = replace_section(
+              plan,
+              '## Phase status',
+              '## Implemented performance work',
+              phase_body,
+          )
+
+          hot_spots = '''1. Full certified single-RHS PCG needs an end-to-end routing matrix; stationary-cycle speed alone is not sufficient.
+          2. Sparse path-like levels should remain on the compact serial edge kernel, while sufficiently dense large levels benefit from CSR parallelism.
+          3. Aggregation maps still use native-width indices; further compaction must preserve the public API and show an end-to-end memory win.
+          4. Controlled 8-, 16-, and 32-thread plus high-memory evidence is unavailable on ordinary hosted runners.
+          5. Packed contraction keys, reusable contraction buffers, and fixed-order parallel PCG reductions remain candidates for measurement.'''
+          plan = replace_section(
+              plan,
+              '## Current hot spots',
+              '## Rejected or deferred experiments',
+              hot_spots,
+          )
+
+          checkpoint = '''### Direct compact contraction and prepared parallel PCG checkpoint — 2026-08-23
+
+          - Direct construction of coarse graphs in retained 16-byte `Edge` storage was **retained** after full serial/all-feature qualification. Across six large serial and parallel cases, geometric hierarchy-build time was `0.952x` and geometric peak RSS was `0.924x`; the worst observed timing ratio was `0.974x`.
+          - The optional `ParallelCmgPlan`, plan-aware certified PCG path, and memory-aware `ParallelPcgSolver` are present in production source. The default dependency-free serial APIs remain unchanged.
+          - A four-thread stationary-application routing probe showed exact serial/parallel agreement and speedups from `0.96x` on sparse path-like work to `2.23x` on a dense worker–firm case. This confirms selective routing rather than unconditional parallelization.
+          - Machine-readable evidence: `.ci/performance/direct-compact-contraction-latest.json` and `.ci/performance/parallel-cmg-routing-probe.json`.
+          - Full certified PCG timing, not only stationary application timing, is the next numerical-performance gate.
+
+          '''
+          marker = '## Current next action\n'
+          if '### Direct compact contraction and prepared parallel PCG checkpoint — 2026-08-23' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+
+          next_actions = '''1. Add a stable full-PCG serial-versus-planned benchmark and record routing decisions, iterations, residual certificates, plan bytes, and peak RSS.
+          2. Tune the planned single-RHS routing floor only from same-host full-solve evidence; keep sparse/path cases serial when parallel overhead does not pay.
+          3. Evaluate fixed-chunk deterministic parallel dot products, norms, and Krylov vector updates if full-PCG profiling shows the outer loop is material.
+          4. Profile packed contraction keys and reusable contraction buffers on million-edge sparse and dense worker–firm graphs.
+          5. Obtain controlled 8–32-thread/high-memory qualification on a larger or self-hosted runner.'''
+          start = plan.index('## Current next action')
+          plan = plan[:start] + '## Current next action\n\n' + next_actions + '\n'
+          plan_path.write_text(plan)
+
+          status = f'''# CMG performance status
+
+          This is the concise recovery record for the active optimization phase. Read it together with `PERFORMANCE_PLAN.md` and the machine-readable records in `.ci/performance/` before modifying numerical source.
+
+          ## Qualified repository state
+
+          - Source state entering this documentation refresh: `{source_head}`.
+          - Latest recorded fully tested SHA: `{tested['tested_sha']}`.
+          - Recorded quality and Ubuntu/macOS/Windows status: `{tested['quality']}` / `{tested['cross_platform_tests']}`.
+          - The serial dependency-free build and the optional `parallel` feature are both maintained.
+
+          ## Retained implementation
+
+          - Deterministic complete stationary CMG hierarchy and certified quotient-space PCG.
+          - Reused immutable graph/component metadata and allocation-free repeated stationary application.
+          - Compressed direct terminal factors and reduced CMG/PCG workspaces.
+          - Checked compact `u32` retained edge endpoints with public `usize` dimensions.
+          - Trimmed compact graph-build buffers and direct compact coarse contraction.
+          - Deterministic CSR row operators for selected parallel hierarchy levels.
+          - Package-owned optional Rayon executor, plan-aware certified PCG, and memory-bounded multi-RHS scheduling.
+          - Benchmark-only differential comparison against the pinned official C kernels.
+
+          ## Current evidence
+
+          - Direct compact contraction: geometric hierarchy time `0.952x`; geometric peak RSS `0.924x` across large serial/parallel cases.
+          - Accepted stationary cycle versus pinned C: about `0.866x` on a path case and `1.008x` on a worker–firm case, with quotient-space differences around `2.1e-12` and `1.0e-15`.
+          - Eight-RHS throughput on the available four-logical-CPU runner: approximately `2.0x` with two threads and `2.5–2.7x` with four threads.
+          - Selective four-thread stationary application: approximately `2.23x` on dense worker–firm, `1.13x` on a larger sparse worker–firm graph, and no win on smaller/path-like cases.
+          - These are directional hosted-runner results, not a claim about 8–32-core or NUMA scaling.
+
+          ## Active recovery point
+
+          The direct compact-contraction experiment is resolved and retained. The prepared parallel PCG implementation is present in production source. Stale one-shot compact-index and patch-staging workflows have been removed. The next gate is an end-to-end certified PCG comparison of serial and planned execution, followed by deterministic outer-PCG parallel reductions only if profiling justifies them.
+
+          ## Remaining major work
+
+          - Full-solve routing and threshold qualification.
+          - Potential parallel PCG reductions/vector kernels.
+          - Further contraction-buffer/setup profiling.
+          - Controlled 8-, 16-, and 32-thread/high-memory tests.
+          - Later panel/SIMD/NUMA work only when supported by profiles.
+          '''
+          Path('PERFORMANCE_STATUS.md').write_text('\n'.join(line.strip() for line in status.splitlines()) + '\n')
+
+          stale = [
+              '.github/workflows/analyze-csr-index-layout.yml',
+              '.github/workflows/assess-compact-csr-feasibility.yml',
+              '.github/workflows/assess-compact-label-feasibility.yml',
+              '.github/workflows/compact-csr-columns.yml',
+              '.github/workflows/compact-label-vector.yml',
+              '.github/workflows/direct-compact-contraction.yml',
+              '.github/workflows/inplace-edge-compaction.yml',
+              '.github/workflows/record-benchmark-interface.yml',
+              '.github/workflows/record-hierarchy-build-baseline.yml',
+              '.github/workflows/reuse-forest-split-scratch.yml',
+              '.github/workflows/summarize-hierarchy-baseline.yml',
+              'scripts/compact_csr_columns.py',
+              'scripts/compact_label_vector.py',
+              'scripts/direct_compact_contraction_gate.py',
+              'scripts/reuse_forest_split_scratch.py',
+              'scripts/parallel_cmg_plan.patch.gz.b64',
+              'scripts/parallel_cmg_plan_gate.py',
+              'scripts/parallel_cmg_routing.patch.gz.b64',
+          ]
+          for name in stale:
+              Path(name).unlink(missing_ok=True)
+          shutil.rmtree('scripts/__pycache__', ignore_errors=True)
+          Path('.github/workflows/refresh-performance-recovery.yml').unlink()
+
+      - name: Commit recovery checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: refresh performance recovery and remove stale gates'
+          git pull --rebase origin main
+          git push origin HEAD:main
