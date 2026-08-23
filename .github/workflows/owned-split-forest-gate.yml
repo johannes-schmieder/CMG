@@ -1,7 +1,11 @@
+# Armed after the workflow existed on the default branch.
 name: Owned internal forest split gate
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/owned-split-forest-gate.yml'
 
 permissions:
   contents: write
