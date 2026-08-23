@@ -1,0 +1,8 @@
+{
+  "cases": {},
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "parallel-cmg-routing-probe",
+  "schema_version": 1,
+  "source_sha": "cd4a08f682442271e5716ae66528c7b8f276e3ca",
+  "status": "failure"
+}
