@@ -89,17 +89,45 @@ impl ParallelCmgPlan {
         workspace: &mut CmgWorkspace,
         executor: &ParallelExecutor,
     ) -> Result<(), CmgError> {
-        preconditioner.apply_compatible_into_with_plan(
+        self.apply_compatible_into_with_validation(
+            preconditioner,
             rhs,
             output,
             workspace,
             ValidationOptions::default(),
-            self,
             executor,
         )
     }
 
-    fn validate(&self, preconditioner: &CmgPreconditioner) -> Result<(), CmgError> {
+    /// Apply a compatible right-hand side with explicit validation tolerances.
+    pub fn apply_compatible_into_with_validation(
+        &self,
+        preconditioner: &CmgPreconditioner,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
+        preconditioner
+            .apply_compatible_into_with_plan(rhs, output, workspace, validation, self, executor)
+    }
+
+    pub(crate) fn apply_compatible_into_prevalidated(
+        &self,
+        preconditioner: &CmgPreconditioner,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
+        preconditioner.apply_compatible_into_with_prevalidated_plan(
+            rhs, output, workspace, validation, self, executor,
+        )
+    }
+
+    pub(crate) fn validate(&self, preconditioner: &CmgPreconditioner) -> Result<(), CmgError> {
         if self.level_operators.len() != preconditioner.hierarchy.levels().len()
             || self.level_lineages.len() != preconditioner.hierarchy.levels().len()
         {
@@ -132,6 +160,16 @@ impl ParallelCmgPlan {
         self.level_operators
             .get(level_index)
             .and_then(Option::as_ref)
+    }
+
+    pub(crate) fn finest_matvec_into(
+        &self,
+        graph: &Laplacian,
+        input: &[f64],
+        output: &mut [f64],
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
+        self.matvec_into(0, graph, input, output, executor)
     }
 
     fn matvec_into(
@@ -366,6 +404,22 @@ impl CmgPreconditioner {
         plan: &ParallelCmgPlan,
         executor: &ParallelExecutor,
     ) -> Result<(), CmgError> {
+        plan.validate(self)?;
+        self.apply_compatible_into_with_prevalidated_plan(
+            rhs, output, workspace, validation, plan, executor,
+        )
+    }
+
+    #[cfg(feature = "parallel")]
+    fn apply_compatible_into_with_prevalidated_plan(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
+        plan: &ParallelCmgPlan,
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
         let dimension = self.hierarchy.levels()[0].graph().vertex_count();
         if rhs.len() != dimension {
             return Err(CmgError::dimension(
@@ -388,7 +442,6 @@ impl CmgPreconditioner {
             &self.coarse_centering,
         )?;
         validation.validate()?;
-        plan.validate(self)?;
         self.apply_level_with_plan(0, rhs, output, workspace, 1, plan, executor)
     }
 

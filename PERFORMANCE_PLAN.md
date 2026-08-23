@@ -267,6 +267,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/parallel-cmg-routed-plan-latest.json`.
 
+### Parallel PCG checkpoint — 2026-08-23
+
+- The opt-in prebuilt-plan PCG candidate was **retained**. Full-solve four-thread geometric speedup: `1.237x`; minimum case speedup: `0.988x`.
+- Validation status: `success`.
+- Existing serial PCG remained unchanged throughout the experiment.
+- Machine-readable evidence:
+  `.ci/performance/parallel-pcg-latest.json`.
+
 ## Current next action
 
 1. Profile packed endpoint keys, contraction-buffer reuse, and parallel sort on larger sparse and denser worker–firm cases.

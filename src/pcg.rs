@@ -4,7 +4,7 @@ use crate::components::ComponentWorkspace;
 use crate::graph::compensated_sum;
 use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, PcgOptions};
 #[cfg(feature = "parallel")]
-use crate::{ParallelExecutor, ParallelOptions};
+use crate::{ParallelCmgPlan, ParallelExecutor, ParallelOptions};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -366,6 +366,249 @@ pub fn solve_pcg_with_workspace(
     })
 }
 
+/// Solve with a prebuilt optional parallel CMG plan and a newly allocated workspace.
+#[cfg(feature = "parallel")]
+pub fn solve_pcg_with_plan(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    plan: &ParallelCmgPlan,
+    rhs: &[f64],
+    options: PcgOptions,
+    executor: &ParallelExecutor,
+) -> Result<PcgResult, CmgError> {
+    let mut workspace = PcgWorkspace::new(preconditioner);
+    solve_pcg_with_plan_and_workspace(
+        graph,
+        preconditioner,
+        plan,
+        rhs,
+        options,
+        &mut workspace,
+        executor,
+    )
+}
+
+/// Solve with a prebuilt optional parallel CMG plan and caller-owned workspace.
+///
+/// The submitted right-hand side is projected and the final residual is
+/// certified against the original system exactly as in [`solve_pcg_with_workspace`].
+#[cfg(feature = "parallel")]
+pub fn solve_pcg_with_plan_and_workspace(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    plan: &ParallelCmgPlan,
+    rhs: &[f64],
+    options: PcgOptions,
+    workspace: &mut PcgWorkspace,
+    executor: &ParallelExecutor,
+) -> Result<PcgResult, CmgError> {
+    let options = options.validate()?;
+    let dimension = graph.vertex_count();
+    if !preconditioner.matches_graph(graph) {
+        return Err(CmgError::InvalidHierarchy {
+            context: "PCG graph differs from the preconditioner's finest graph",
+        });
+    }
+    if rhs.len() != dimension {
+        return Err(CmgError::dimension("solve_pcg rhs", dimension, rhs.len()));
+    }
+    workspace.validate(dimension)?;
+    plan.validate(preconditioner)?;
+
+    let components = preconditioner.finest_components();
+    workspace.projected_rhs.copy_from_slice(rhs);
+    let rhs_projection_norm = components.project_rhs_in_place_with_workspace(
+        &mut workspace.projected_rhs,
+        options.validation,
+        &mut workspace.component,
+    )?;
+    workspace.solution.fill(0.0);
+    workspace.residual.copy_from_slice(&workspace.projected_rhs);
+    workspace.preconditioned.fill(0.0);
+    workspace.direction.fill(0.0);
+    workspace.matrix_direction.fill(0.0);
+
+    let initial_residual_norm = euclidean_norm(rhs);
+    let projected_initial_norm = euclidean_norm(&workspace.projected_rhs);
+    let operator_bound = graph.operator_norm_bound();
+    let initial_tolerance = allowed_residual(options, initial_residual_norm, operator_bound, 0.0);
+    if initial_residual_norm <= initial_tolerance {
+        return Ok(make_result(
+            workspace.solution.clone(),
+            0,
+            initial_residual_norm,
+            initial_residual_norm,
+            initial_tolerance,
+            operator_bound,
+            0,
+            rhs_projection_norm,
+        ));
+    }
+    if projected_initial_norm == 0.0 {
+        return Err(CmgError::ResidualVerificationFailed {
+            iteration: 0,
+            residual_norm: initial_residual_norm,
+            tolerance: initial_tolerance,
+        });
+    }
+
+    plan.apply_compatible_into_prevalidated(
+        preconditioner,
+        &workspace.residual,
+        &mut workspace.preconditioned,
+        &mut workspace.cmg,
+        options.validation,
+        executor,
+    )?;
+    components
+        .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)?;
+    let mut rho = dot(&workspace.residual, &workspace.preconditioned);
+    validate_positive_pcg(0, "r^T M r", rho)?;
+    workspace
+        .direction
+        .copy_from_slice(&workspace.preconditioned);
+
+    let mut restarts = 0_usize;
+    let mut last_tolerance = initial_tolerance;
+
+    for iteration in 1..=options.max_iterations {
+        plan.finest_matvec_into(
+            graph,
+            &workspace.direction,
+            &mut workspace.matrix_direction,
+            executor,
+        )?;
+        let direction_curvature = dot(&workspace.direction, &workspace.matrix_direction);
+        validate_positive_pcg(iteration, "p^T A p", direction_curvature)?;
+        let alpha = rho / direction_curvature;
+        validate_finite_pcg(iteration, "alpha", alpha)?;
+
+        for (((solution, residual), direction), matrix_direction) in workspace
+            .solution
+            .iter_mut()
+            .zip(&mut workspace.residual)
+            .zip(&workspace.direction)
+            .zip(&workspace.matrix_direction)
+        {
+            *solution += alpha * *direction;
+            *residual -= alpha * *matrix_direction;
+        }
+        components
+            .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
+
+        let solution_norm = euclidean_norm(&workspace.solution);
+        last_tolerance = allowed_residual(
+            options,
+            initial_residual_norm,
+            operator_bound,
+            solution_norm,
+        );
+        let recursive_residual_norm = euclidean_norm(&workspace.residual);
+        let candidate = recursive_residual_norm <= last_tolerance;
+        let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
+        let mut restarted = false;
+
+        if candidate || scheduled_recompute {
+            let projected_fresh_norm = recompute_residual_with_plan(
+                plan,
+                executor,
+                graph,
+                &workspace.projected_rhs,
+                &workspace.solution,
+                &mut workspace.matrix_direction,
+            )?;
+            workspace
+                .residual
+                .copy_from_slice(&workspace.matrix_direction);
+            restarted = true;
+            restarts += 1;
+            if projected_fresh_norm <= last_tolerance {
+                let original_norm = original_residual_norm(
+                    rhs,
+                    &workspace.projected_rhs,
+                    &workspace.matrix_direction,
+                );
+                if original_norm <= last_tolerance {
+                    return Ok(make_result(
+                        workspace.solution.clone(),
+                        iteration,
+                        initial_residual_norm,
+                        original_norm,
+                        last_tolerance,
+                        operator_bound,
+                        restarts,
+                        rhs_projection_norm,
+                    ));
+                }
+                if iteration == options.max_iterations {
+                    return Err(CmgError::ResidualVerificationFailed {
+                        iteration,
+                        residual_norm: original_norm,
+                        tolerance: last_tolerance,
+                    });
+                }
+            }
+        }
+
+        if iteration == options.max_iterations {
+            break;
+        }
+
+        // The public solver projected the submitted RHS once. Remove only the
+        // component-nullspace roundoff accumulated by Krylov updates before
+        // reusing the compatible stationary core.
+        components
+            .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)?;
+        plan.apply_compatible_into_prevalidated(
+            preconditioner,
+            &workspace.residual,
+            &mut workspace.preconditioned,
+            &mut workspace.cmg,
+            options.validation,
+            executor,
+        )?;
+        components.center_in_place_with_workspace(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+        )?;
+        let new_rho = dot(&workspace.residual, &workspace.preconditioned);
+        validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
+
+        if restarted {
+            workspace
+                .direction
+                .copy_from_slice(&workspace.preconditioned);
+        } else {
+            let beta = new_rho / rho;
+            validate_finite_pcg(iteration, "beta", beta)?;
+            for (direction, preconditioned) in workspace
+                .direction
+                .iter_mut()
+                .zip(&workspace.preconditioned)
+            {
+                *direction = *preconditioned + beta * *direction;
+            }
+        }
+        rho = new_rho;
+    }
+
+    recompute_residual_with_plan(
+        plan,
+        executor,
+        graph,
+        &workspace.projected_rhs,
+        &workspace.solution,
+        &mut workspace.matrix_direction,
+    )?;
+    let residual_norm =
+        original_residual_norm(rhs, &workspace.projected_rhs, &workspace.matrix_direction);
+    Err(CmgError::MaximumIterations {
+        iterations: options.max_iterations,
+        residual_norm,
+        tolerance: last_tolerance,
+    })
+}
+
 /// Solve multiple right-hand sides sequentially while reusing all work arrays.
 pub fn solve_pcg_batch(
     graph: &Laplacian,
@@ -492,6 +735,22 @@ fn allowed_residual(
 ) -> f64 {
     options.absolute_tolerance
         + options.relative_tolerance * (rhs_norm + operator_bound * solution_norm)
+}
+
+#[cfg(feature = "parallel")]
+fn recompute_residual_with_plan(
+    plan: &ParallelCmgPlan,
+    executor: &ParallelExecutor,
+    graph: &Laplacian,
+    rhs: &[f64],
+    solution: &[f64],
+    residual: &mut [f64],
+) -> Result<f64, CmgError> {
+    plan.finest_matvec_into(graph, solution, residual, executor)?;
+    for (value, rhs_value) in residual.iter_mut().zip(rhs) {
+        *value = *rhs_value - *value;
+    }
+    Ok(euclidean_norm(residual))
 }
 
 fn recompute_residual(

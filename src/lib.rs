@@ -42,7 +42,10 @@ pub use ldl::GroundedLdl;
 pub use options::{CmgOptions, PcgOptions, ValidationOptions};
 pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_with_workspace};
 #[cfg(feature = "parallel")]
-pub use pcg::{solve_pcg_batch_parallel, solve_pcg_batch_with_executor};
+pub use pcg::{
+    solve_pcg_batch_parallel, solve_pcg_batch_with_executor, solve_pcg_with_plan,
+    solve_pcg_with_plan_and_workspace,
+};
 pub use preconditioner::CmgPreconditioner;
 #[cfg(feature = "parallel")]
 pub use preconditioner::ParallelCmgPlan;

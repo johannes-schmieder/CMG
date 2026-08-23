@@ -5,6 +5,7 @@ use cmg::{
     ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, build_forest_grouping,
     build_forest_grouping_with_executor, maximum_weight_forest,
     maximum_weight_forest_with_executor, solve_pcg_batch, solve_pcg_batch_with_executor,
+    solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
 };
 
 fn worker_firm_problem(per_side: usize) -> (Laplacian, Vec<f64>) {
@@ -333,4 +334,93 @@ fn one_thread_parallel_cmg_plan_is_bitwise_serial() {
     .unwrap();
 
     assert_eq!(serial_output, parallel_output);
+}
+
+#[test]
+fn planned_parallel_pcg_matches_serial_certification() {
+    let (graph, rhs) = worker_firm_problem(20_000);
+    let cmg_options = CmgOptions {
+        direct_threshold: 64,
+        ..CmgOptions::default()
+    };
+    let preconditioner = CmgPreconditioner::build(&graph, cmg_options).unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 4,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+    let plan = ParallelCmgPlan::build(&preconditioner, &executor).unwrap();
+    assert!(plan.operator_count() > 0);
+
+    let mut serial_workspace = PcgWorkspace::new(&preconditioner);
+    let serial = solve_pcg_with_workspace(
+        &graph,
+        &preconditioner,
+        &rhs,
+        PcgOptions::default(),
+        &mut serial_workspace,
+    )
+    .unwrap();
+    let mut parallel_workspace = PcgWorkspace::new(&preconditioner);
+    let parallel = solve_pcg_with_plan_and_workspace(
+        &graph,
+        &preconditioner,
+        &plan,
+        &rhs,
+        PcgOptions::default(),
+        &mut parallel_workspace,
+        &executor,
+    )
+    .unwrap();
+
+    assert_eq!(serial.iterations(), parallel.iterations());
+    assert_eq!(serial.restarts(), parallel.restarts());
+    assert!(parallel.backward_error() <= parallel.tolerance());
+    for (serial_value, parallel_value) in serial.solution().iter().zip(parallel.solution()) {
+        let scale = 1.0_f64.max(serial_value.abs()).max(parallel_value.abs());
+        assert!((serial_value - parallel_value).abs() <= 5.0e-10 * scale);
+    }
+}
+
+#[test]
+fn one_thread_planned_pcg_is_bitwise_serial() {
+    let (graph, right_hand_sides) = path_problem(4_000, 1);
+    let cmg_options = CmgOptions {
+        direct_threshold: 64,
+        ..CmgOptions::default()
+    };
+    let preconditioner = CmgPreconditioner::build(&graph, cmg_options).unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 1,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+    let plan = ParallelCmgPlan::build(&preconditioner, &executor).unwrap();
+    assert_eq!(plan.operator_count(), 0);
+
+    let rhs = &right_hand_sides[0];
+    let mut serial_workspace = PcgWorkspace::new(&preconditioner);
+    let serial = solve_pcg_with_workspace(
+        &graph,
+        &preconditioner,
+        rhs,
+        PcgOptions::default(),
+        &mut serial_workspace,
+    )
+    .unwrap();
+    let mut planned_workspace = PcgWorkspace::new(&preconditioner);
+    let planned = solve_pcg_with_plan_and_workspace(
+        &graph,
+        &preconditioner,
+        &plan,
+        rhs,
+        PcgOptions::default(),
+        &mut planned_workspace,
+        &executor,
+    )
+    .unwrap();
+
+    assert_eq!(serial, planned);
 }
