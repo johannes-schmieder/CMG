@@ -692,8 +692,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Overall/duplicate-heavy graph-build ratios: `n/a` / `n/a`.
 - Evidence: `.ci/performance/routed-raw-sort-latest.json`.
 
+### Routed compact-edge radix sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Worker-firm geometric hierarchy-time ratio: `0.909923414399904`.
+- Worst hierarchy-time / exact additional-peak ratios: `1.0134175253014959` / `1.1128925174302333`.
+- Evidence: `.ci/performance/radix-compact-sort-latest.json`.
+
 ## Current next action
 
-1. Benchmark the remaining contraction mapping kernel under the current sort and merge implementation.
-2. Re-run full certified PCG routing after any retained hierarchy change.
-3. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Re-profile contraction subphases after the radix decision.
+2. If radix is retained, evaluate caller-owned scratch reuse before widening its routing threshold.
+3. Re-run full certified PCG routing after any retained hierarchy change.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.

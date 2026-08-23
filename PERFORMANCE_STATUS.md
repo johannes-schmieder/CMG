@@ -205,3 +205,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Duplicate-heavy geometric graph-build ratio: `n/a`.
 - The parallel sort path remains unchanged.
 - Evidence: `.ci/performance/routed-raw-sort-latest.json`.
+
+## Routed compact-edge radix sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Worker-firm geometric hierarchy-time ratio: `0.909923414399904`.
+- Worst hierarchy-time ratio: `1.0134175253014959`.
+- Worst exact additional-peak ratio: `1.1128925174302333`.
+- Parallel sorting is unchanged; the candidate affects only large serial/fallback compact coarse-edge ordering.
+- Evidence: `.ci/performance/radix-compact-sort-latest.json`.
