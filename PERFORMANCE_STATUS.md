@@ -133,3 +133,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - The unchanged production solver passed the complete baseline suite.
 - Independent full-PCG timing gates continue without relying on the stale profiler.
 - Evidence: `.ci/performance/pcg-profiler-sync.json`.
+
+## Forest-backed contraction capacity gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Geometric hierarchy-time ratio: `1.0066420586495628`.
+- Geometric exact additional-peak ratio: `0.992011742241337`.
+- Production uses the hint only for CMG forest aggregations; the public generic aggregation path is unchanged.
+- Evidence: `.ci/performance/forest-capacity-hint-latest.json`.

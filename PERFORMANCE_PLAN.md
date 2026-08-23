@@ -640,15 +640,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Representative bitwise-parity cases completed: `none`.
 - Machine-readable evidence: `.ci/performance/pcg-profiler-sync.json`.
 
+### Forest-backed contraction capacity checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Geometric hierarchy-time ratio: `1.0066420586495628`.
+- Geometric exact additional-peak ratio: `0.992011742241337`.
+- Evidence: `.ci/performance/forest-capacity-hint-latest.json`.
+
 ## Current next action
 
-1. Add a read-only planned-PCG phase profiler that separately measures finest
-   matvec, CMG application, reductions/norms, vector updates, component
-   centering, and residual certification while preserving the certified result.
-2. Prototype fixed-chunk deterministic parallel reductions and vector updates
-   only if that profile shows material outer-loop headroom; gate retention on
-   full certified solve time and numerical agreement.
-3. Continue coarse-contraction profiling, especially reusable buffers and
-   routed temporary capacity after the retained packed-key/unstable-sort work.
-4. Obtain controlled 8–32-thread and high-memory evidence on a larger or
-   self-hosted runner.
+1. Re-profile contraction sorting, mapping, duplicate aggregation, and diagonal assembly after the capacity decision.
+2. Evaluate reusable contraction work buffers only if the profile shows allocation or initialization remains material.
+3. Re-run full certified PCG routing after any retained hierarchy change.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.
