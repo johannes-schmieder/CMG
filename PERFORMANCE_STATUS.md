@@ -479,3 +479,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy-build ratios: `1.000x` / `1.000x`.
 - Worst peak-RSS ratio: `1.000x`.
 - Evidence: `.ci/performance/compact-forest-ancestors-latest.json`.
+
+## Compact forest-ancestor exact-memory gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Prior split / rerun hierarchy ratios: `0.938x` / `0.976x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/compact-forest-ancestors-memory-latest.json`.

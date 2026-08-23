@@ -936,6 +936,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: name 'geometric' is not defined.
 - Evidence: `.ci/performance/compact-forest-ancestors-latest.json`.
 
+### Compact forest-ancestor exact-memory checkpoint — 2026-08-23
+
+- The compact `i32` ancestor-count candidate was **not retained** after exact-memory requalification.
+- Validation: `success`.
+- Prior direct-split / rerun hierarchy timing ratios: `0.938x` / `0.976x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst process peak-RSS ratio in the memory rerun: `1.085x`.
+- Decision: timing or exact/process memory requalification limits were not all met.
+- Evidence: `.ci/performance/compact-forest-ancestors-memory-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
