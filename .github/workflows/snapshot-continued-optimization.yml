@@ -1,0 +1,44 @@
+name: Snapshot continued optimization state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/snapshot-continued-optimization.yml'
+      - '.ci/performance/packed-edge-sort-latest.json'
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Consolidate current decisions and cleanup temporary gates
+        run: python scripts/snapshot_continued_optimization.py
+
+      - name: Commit recovery snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'perf: snapshot continued optimization state'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
