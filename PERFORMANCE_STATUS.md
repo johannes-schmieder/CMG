@@ -266,3 +266,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned-case geometric speedup: `1.6262176840051474`.
 - Maximum scaled serial/planned solution difference: `5.605302390305238e-10`.
 - Evidence: `.ci/performance/post-compact-label-routing.json`.
+
+## Contraction profile after compact labels
+
+- Status: `success`.
+- Dominant attributed phase: `sorting` (`76.2%`).
+- Profiled cases: `4`.
+- Exact reconstructed coarse-graph equivalence: `passed inside the benchmark for every profiled level and repetition`.
+- Manual mapping uses the public compatibility label view; production totals use compact labels.
+- Evidence: `.ci/performance/contraction-subphase-post-labels.json`.

@@ -739,9 +739,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Planned-case geometric speedup: `1.6262176840051474`.
 - Evidence: `.ci/performance/post-compact-label-routing.json`.
 
+### Contraction profile after compact labels — 2026-08-23
+
+- Status: `success`.
+- Dominant phase: `sorting` (`76.2%`).
+- Evidence: `.ci/performance/contraction-subphase-post-labels.json`.
+
 ## Current next action
 
-1. Re-profile contraction mapping and sorting after compact aggregation labels.
-2. Evaluate compact aggregate-size storage only if retained-memory accounting shows material headroom.
-3. Revisit moderate-density scratch radix only if reusable scratch can preserve its speed signal without peak-memory inflation.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Benchmark-gate one narrowly scoped `sorting` or hierarchy-metadata optimization selected from the new profile.
+2. Preserve exact coarse-graph ordering, compensated duplicate summation, routing metadata, and certified solves.
+3. Run the manual 1–32 thread qualification on suitable hardware when available.
