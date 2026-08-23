@@ -1,0 +1,18 @@
+{
+  "accepted": false,
+  "decision_reason": "experiment failed safely: expected two visited loop conditions",
+  "error": "RuntimeError('expected two visited loop conditions')",
+  "experiment": "byte-forest-visited",
+  "hierarchy_cases": {},
+  "hierarchy_geometric_time_ratio": 1.0,
+  "improved_split_case_count": 0,
+  "path_hierarchy_time_ratio": 1.0,
+  "schema_version": 1,
+  "source_sha": "5a5cc0cbd521a7894222d88c0e73a727c32aa875",
+  "split_cases": {},
+  "split_geometric_time_ratio": 1.0,
+  "validation": "failure",
+  "worst_hierarchy_time_ratio": 1.0,
+  "worst_peak_rss_ratio": 1.0,
+  "worst_split_time_ratio": 1.0
+}

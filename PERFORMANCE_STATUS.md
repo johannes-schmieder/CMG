@@ -495,3 +495,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `0.972x` / `0.961x`.
 - Worst hierarchy RSS ratio: `1.085x`.
 - Evidence: `.ci/performance/compact-forest-ancestors-two-path-latest.json`.
+
+## Byte forest-visited gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/byte-forest-visited-latest.json`.

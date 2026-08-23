@@ -956,6 +956,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: timing or exact/process memory limits were not all met.
 - Evidence: `.ci/performance/compact-forest-ancestors-two-path-latest.json`.
 
+### Byte forest-visited checkpoint — 2026-08-23
+
+- Byte-per-vertex forest visited flags were **not retained**.
+- Validation: `failure`.
+- Geometric split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: expected two visited loop conditions.
+- Evidence: `.ci/performance/byte-forest-visited-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
