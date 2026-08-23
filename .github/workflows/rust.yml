@@ -94,12 +94,13 @@ jobs:
     needs: [quality, test]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout latest main
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
 
-      - name: Write status
+      - name: Prepare tested status
         shell: bash
         env:
           TESTED_SHA: ${{ github.sha }}
@@ -108,8 +109,7 @@ jobs:
           QUALITY_RESULT: ${{ needs.quality.result }}
           TEST_RESULT: ${{ needs.test.result }}
         run: |
-          mkdir -p .ci
-          cat > .ci/latest.json <<JSON
+          cat > /tmp/cmg-latest.json <<JSON
           {
             "tested_sha": "${TESTED_SHA}",
             "run_id": "${RUN_ID}",
@@ -122,12 +122,28 @@ jobs:
           }
           JSON
 
-      - name: Commit status
+      - name: Commit status from latest main
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .ci/latest.json
-          git diff --cached --quiet && exit 0
-          git commit -m 'ci: record checkpoint status [skip ci]'
-          git push origin HEAD:main
+
+          for attempt in 1 2 3 4; do
+            git fetch origin main
+            git reset --hard origin/main
+            mkdir -p .ci
+            cp /tmp/cmg-latest.json .ci/latest.json
+            git add .ci/latest.json
+            if git diff --cached --quiet; then
+              exit 0
+            fi
+            git commit -m 'ci: record checkpoint status [skip ci]'
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "status push raced on attempt ${attempt}; retrying from latest main"
+          done
+
+          echo 'failed to publish checkpoint status after four attempts' >&2
+          exit 1
