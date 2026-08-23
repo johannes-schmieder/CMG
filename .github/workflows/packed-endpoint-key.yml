@@ -1,0 +1,29 @@
+name: Packed endpoint-key qualification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/packed-endpoint-key.yml'
+      - 'scripts/packed_endpoint_key_gate.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify packed endpoint ordering
+        run: python scripts/packed_endpoint_key_gate.py
+
+      - name: Show decision record
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/packed-endpoint-key-latest.json || true
