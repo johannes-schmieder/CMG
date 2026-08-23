@@ -20,6 +20,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # Re-triggered after recovering the interrupted optimization session.
       - name: Qualify direct compact coarse-edge construction
         run: python scripts/direct_compact_contraction_gate.py
 
