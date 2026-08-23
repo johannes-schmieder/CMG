@@ -81,24 +81,22 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Latest resolved benchmark gate
 
-The packed endpoint-key experiment completed with validation
-`success` and was **not retained**. Geometric time/RSS ratios: 0.970/1.009.
-The decision record is `.ci/performance/packed-endpoint-key-latest.json`.
+The packed endpoint-key exact-allocation recheck completed with validation
+`success` and was **retained**. Standard timing ratio: 0.970. Exact-gate geometric timing ratio: 0.981; maximum additional-peak/retained ratios: 1.000000/1.000000.
+The controlling decision record is
+`.ci/performance/packed-endpoint-key-exact-latest.json`.
 
 ## Next prepared optimization
 
-After ordinary cross-platform qualification closes, profile hierarchy setup
-allocation and bandwidth again with the direct compact-contraction path in
-place. The next retain/revert experiments should be:
+Benchmark a routed exact-capacity contraction buffer:
 
-1. packed 64-bit endpoint keys for coarse-edge sorting where both aggregate
-   endpoints fit in `u32`;
-2. reusable coarse-contraction buffers that do not increase retained hierarchy
-   memory or compromise concurrent builders;
-3. compact aggregation-label storage only if the public API can remain
-   compatible without eagerly duplicating native-width labels;
-4. retain each change only after serial and four-thread timing, exact hierarchy,
-   peak-memory, and full numerical gates pass.
+1. count surviving fine edges only on levels where the aggregation predicts a
+   high internal-edge fraction;
+2. allocate the retained compact edge vector at that exact upper bound;
+3. preserve edge ordering, compensated duplicate summation, hierarchy reports,
+   and serial/parallel determinism;
+4. gate the candidate on serial and four-thread timing, exact requested
+   allocation, process RSS, and the full numerical suite.
 
 ## Remaining major work
 

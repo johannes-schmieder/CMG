@@ -357,9 +357,10 @@ where
 }
 
 fn compare_raw_edges(left: &Edge, right: &Edge) -> core::cmp::Ordering {
-    left.u
-        .cmp(&right.u)
-        .then(left.v.cmp(&right.v))
+    let left_endpoints = (u64::from(left.u) << 32) | u64::from(left.v);
+    let right_endpoints = (u64::from(right.u) << 32) | u64::from(right.v);
+    left_endpoints
+        .cmp(&right_endpoints)
         .then_with(|| left.weight.total_cmp(&right.weight))
 }
 

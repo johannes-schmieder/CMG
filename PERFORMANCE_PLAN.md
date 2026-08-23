@@ -308,17 +308,21 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Packed endpoint-key checkpoint — 2026-08-23
 
 - Replacing the two-endpoint comparator with one packed 64-bit endpoint key was
-  **not retained**. Geometric time/RSS ratios: 0.970/1.009.
+  **retained** after the exact-allocation recheck. Standard timing ratio: 0.970. Exact-gate geometric timing ratio: 0.981; maximum additional-peak/retained ratios: 1.000000/1.000000.
 - Validation status: `success`.
-- Decision: qualification passed, but packed endpoint ordering did not meet the material timing and memory gates.
+- Decision: standard timing improvement was confirmed to have no exact requested-allocation regression.
+- The earlier process-RSS-only comparison remains recorded as supporting noisy
+  evidence; exact requested allocation is the controlling memory gate.
 - Machine-readable evidence:
-  `.ci/performance/packed-endpoint-key-latest.json`.
+  `.ci/performance/packed-endpoint-key-latest.json` and
+  `.ci/performance/packed-endpoint-key-exact-latest.json`.
 
 ## Current next action
 
-1. Keep the qualified direct compact-edge comparator and profile reusable
-   contraction buffers or compact aggregation labels instead.
-2. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
+1. Profile a routed exact-capacity contraction buffer on levels where many fine
+   edges become internal; retain it only if setup time and exact allocation both
+   improve without changing hierarchy metadata.
+2. Audit and remove obsolete one-shot workflows and staging scripts now that the
+   packed-key decision is closed.
+3. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
    is available.
-3. Remove obsolete one-shot workflows, staging scripts, and committed Python
-   cache files after active gates are secure.
