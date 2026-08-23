@@ -144,11 +144,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ## Current hot spots
 
-1. Full certified single-RHS PCG needs an end-to-end routing matrix; stationary-cycle speed alone is not sufficient.
-2. Sparse path-like levels should remain on the compact serial edge kernel, while sufficiently dense large levels benefit from CSR parallelism.
-3. Aggregation maps still use native-width indices; further compaction must preserve the public API and show an end-to-end memory win.
-4. Controlled 8-, 16-, and 32-thread plus high-memory evidence is unavailable on ordinary hosted runners.
-5. Packed contraction keys, reusable contraction buffers, and fixed-order parallel PCG reductions remain candidates for measurement.
+1. Planned PCG still performs dot products, Euclidean norms, Krylov vector
+   updates, component centering, and residual reconstruction mostly serially.
+2. Coarse contraction remains the dominant measured setup phase on
+   worker–firm and dense worker–firm graphs.
+3. Controlled 8-, 16-, and 32-thread/high-memory behavior is still unknown on
+   ordinary hosted runners.
+4. Further index compaction or duplicated sparse metadata must demonstrate an
+   end-to-end memory benefit rather than only a local structure-size benefit.
 
 ## Rejected or deferred experiments
 
@@ -485,10 +488,44 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence: `.ci/performance/direct-compact-contraction-latest.json` and `.ci/performance/parallel-cmg-routing-probe.json`.
 - Full certified PCG timing, not only stationary application timing, is the next numerical-performance gate.
 
+### Full certified PCG canonical-edge routing checkpoint — 2026-08-23
+
+- The default prepared single-RHS router uses planned execution from
+  **350,000 canonical retained edges** when a parallel hierarchy operator
+  exists and the executor has more than one thread.
+- Tested routing-matrix SHA: `8749fa228e0b99f555a2a5e3838c1ac8843a9cea`; run `32649078880`.
+- Status: `success`; numerical failures: `none`; routing
+  mismatches: `none`.
+- Maximum scaled serial/planned solution difference:
+  `0.000e+00`.
+- Geometric planned speedup across the matrix:
+  `1.208x`.
+
+| Case | Input edges | Canonical edges | Auto route | Planned speedup | Iterations |
+|---|---:|---:|---|---:|---:|
+| dense-worker-firm-1.6m | 1,600,000 | 1,599,978 | Planned | 1.777x | 9 / 9 |
+| dense-worker-firm-400k | 400,000 | 399,930 | Planned | 1.361x | 9 / 9 |
+| dense-worker-firm-600k | 600,000 | 599,918 | Planned | 1.446x | 9 / 9 |
+| dense-worker-firm-800k | 800,000 | 799,978 | Planned | 1.491x | 9 / 9 |
+| path-250k | 249,999 | 249,999 | Serial | 0.995x | 29 / 29 |
+| worker-firm-300k | 300,000 | 299,996 | Serial | 1.020x | 20 / 20 |
+| worker-firm-375k | 375,000 | 374,996 | Planned | 1.041x | 20 / 20 |
+| worker-firm-450k | 450,000 | 449,996 | Planned | 1.038x | 20 / 20 |
+| worker-firm-525k | 525,000 | 524,996 | Planned | 1.059x | 20 / 20 |
+| worker-firm-600k | 600,000 | 599,996 | Planned | 1.091x | 19 / 19 |
+
+- Machine-readable evidence:
+  `.ci/performance/full-pcg-routing-latest.json`.
+
 ## Current next action
 
-1. Add a stable full-PCG serial-versus-planned benchmark and record routing decisions, iterations, residual certificates, plan bytes, and peak RSS.
-2. Tune the planned single-RHS routing floor only from same-host full-solve evidence; keep sparse/path cases serial when parallel overhead does not pay.
-3. Evaluate fixed-chunk deterministic parallel dot products, norms, and Krylov vector updates if full-PCG profiling shows the outer loop is material.
-4. Profile packed contraction keys and reusable contraction buffers on million-edge sparse and dense worker–firm graphs.
-5. Obtain controlled 8–32-thread/high-memory qualification on a larger or self-hosted runner.
+1. Add a read-only planned-PCG phase profiler that separately measures finest
+   matvec, CMG application, reductions/norms, vector updates, component
+   centering, and residual certification while preserving the certified result.
+2. Prototype fixed-chunk deterministic parallel reductions and vector updates
+   only if that profile shows material outer-loop headroom; gate retention on
+   full certified solve time and numerical agreement.
+3. Continue coarse-contraction profiling, especially reusable buffers and
+   routed temporary capacity after the retained packed-key/unstable-sort work.
+4. Obtain controlled 8–32-thread and high-memory evidence on a larger or
+   self-hosted runner.

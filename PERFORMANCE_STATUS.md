@@ -22,32 +22,34 @@ This is the concise recovery record for the active optimization phase. Read it t
 
 ## Qualified full-PCG router
 
-The default prepared single-RHS router now uses planned execution from **350,000 canonical retained edges** when a parallel hierarchy operator exists and more than one thread is available. The threshold is an overridable performance heuristic, not a mathematical CMG constant.
+The default prepared single-RHS router uses planned execution from **350,000
+canonical retained edges** when a parallel hierarchy operator exists and more
+than one thread is available. The threshold remains overridable through
+`ParallelPcgPolicy`.
 
-The latest four-thread full certified PCG matrix is recorded in `.ci/performance/full-pcg-routing-latest.json`. It reports both generated and canonical edge counts. Across ten cases:
+- Routing-matrix SHA: `8749fa228e0b99f555a2a5e3838c1ac8843a9cea`; run `32649078880`.
+- Status: `success`.
+- Numerical failures: `none`.
+- Routing mismatches: `none`.
+- Maximum scaled serial/planned solution difference:
+  `0.000e+00`.
+- Geometric planned speedup: `1.208x`.
 
-- numerical failures: none;
-- routing mismatches: none;
-- maximum scaled serial/planned solution difference: `0.0`;
-- serial and planned iteration counts and residual certificates: identical;
-- geometric planned speedup: approximately `1.208x`.
+| Case | Input edges | Canonical edges | Auto route | Planned speedup | Iterations |
+|---|---:|---:|---|---:|---:|
+| dense-worker-firm-1.6m | 1,600,000 | 1,599,978 | Planned | 1.777x | 9 / 9 |
+| dense-worker-firm-400k | 400,000 | 399,930 | Planned | 1.361x | 9 / 9 |
+| dense-worker-firm-600k | 600,000 | 599,918 | Planned | 1.446x | 9 / 9 |
+| dense-worker-firm-800k | 800,000 | 799,978 | Planned | 1.491x | 9 / 9 |
+| path-250k | 249,999 | 249,999 | Serial | 0.995x | 29 / 29 |
+| worker-firm-300k | 300,000 | 299,996 | Serial | 1.020x | 20 / 20 |
+| worker-firm-375k | 375,000 | 374,996 | Planned | 1.041x | 20 / 20 |
+| worker-firm-450k | 450,000 | 449,996 | Planned | 1.038x | 20 / 20 |
+| worker-firm-525k | 525,000 | 524,996 | Planned | 1.059x | 20 / 20 |
+| worker-firm-600k | 600,000 | 599,996 | Planned | 1.091x | 19 / 19 |
 
-Measured directional speedups include:
-
-| Case | Canonical edges | Auto route | Planned speedup |
-|---|---:|---|---:|
-| Path | 249,999 | Serial | 0.995x |
-| Sparse worker–firm | 299,996 | Serial | 1.020x |
-| Sparse worker–firm | 374,996 | Planned | 1.041x |
-| Sparse worker–firm | 449,996 | Planned | 1.038x |
-| Sparse worker–firm | 524,996 | Planned | 1.059x |
-| Sparse worker–firm | 599,996 | Planned | 1.091x |
-| Dense worker–firm | 399,930 | Planned | 1.361x |
-| Dense worker–firm | 599,918 | Planned | 1.446x |
-| Dense worker–firm | 799,978 | Planned | 1.491x |
-| Dense worker–firm | 1,599,978 | Planned | 1.777x |
-
-These timings come from an ordinary four-logical-CPU hosted runner and are directional rather than a claim about 8–32-core or NUMA scaling.
+These are directional measurements from an ordinary four-logical-CPU hosted
+runner, not a claim about 8–32-core or NUMA scaling.
 
 ## Other retained evidence
 
