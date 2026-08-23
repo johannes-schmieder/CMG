@@ -21,6 +21,8 @@ mod options;
 #[cfg(feature = "parallel")]
 mod parallel_solver;
 mod pcg;
+#[cfg(feature = "profiling")]
+mod pcg_profile;
 mod preconditioner;
 mod sddm;
 mod sddm_solver;
@@ -52,6 +54,10 @@ pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_wit
 pub use pcg::{
     solve_pcg_batch_parallel, solve_pcg_batch_with_executor, solve_pcg_with_plan,
     solve_pcg_with_plan_and_workspace,
+};
+#[cfg(feature = "profiling")]
+pub use pcg_profile::{
+    PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan,
 };
 pub use preconditioner::CmgPreconditioner;
 #[cfg(feature = "parallel")]
