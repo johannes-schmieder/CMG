@@ -1,0 +1,202 @@
+name: Profile certified PCG phases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pcg-phase-profile.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify and profile representative solves
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path.cwd()
+
+          def run(command, *, env=None, timeout=8000):
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  env=env,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=timeout,
+              )
+              print(completed.stdout, end='')
+              if completed.returncode != 0:
+                  raise RuntimeError(
+                      f"command failed ({completed.returncode}): {' '.join(command)}"
+                  )
+              return completed
+
+          result = {
+              'schema_version': 1,
+              'experiment': 'certified-pcg-phase-profile',
+              'source_sha': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'status': 'not_run',
+              'cases': {},
+          }
+
+          try:
+              run(['cargo', 'fmt', '--all', '--', '--check'])
+              run([
+                  'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all', '--', '--check',
+              ])
+              run([
+                  'cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all-targets', '--', '-D', 'warnings',
+              ])
+              run([
+                  'cargo', 'build', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--bin', 'pcg-phase-profile', '--release',
+              ])
+
+              binary = Path('benchmarks/target/release/pcg-phase-profile')
+              specs = [
+                  ('path-250k', ['path', 250000, 3, 4]),
+                  ('worker-firm-300k', ['worker-firm', 100000, 3, 4]),
+                  ('worker-firm-600k', ['worker-firm', 200000, 3, 4]),
+                  ('dense-worker-firm-800k', ['dense-worker-firm', 50000, 3, 4]),
+                  ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
+              ]
+
+              for name, arguments in specs:
+                  time_path = Path(f'/tmp/pcg-phase-{name}.time')
+                  completed = run([
+                      '/usr/bin/time', '-v', '-o', str(time_path),
+                      str(binary), *map(str, arguments),
+                  ])
+                  payloads = [
+                      json.loads(line)
+                      for line in completed.stdout.splitlines()
+                      if line.strip().startswith('{')
+                  ]
+                  if len(payloads) != 1:
+                      raise RuntimeError(f'unexpected profiler output for {name}: {payloads}')
+                  case = payloads[0]
+                  peak_line = next(
+                      line for line in time_path.read_text().splitlines()
+                      if 'Maximum resident set size (kbytes):' in line
+                  )
+                  case['peak_rss_kib'] = int(peak_line.rsplit(':', 1)[1].strip())
+                  result['cases'][name] = case
+
+              result['maximum_profile_overhead_ratio'] = max(
+                  case['profile_overhead_ratio'] for case in result['cases'].values()
+              )
+              result['minimum_parallel_core_share'] = min(
+                  case['parallel_core_share'] for case in result['cases'].values()
+              )
+              result['maximum_serial_outer_share'] = max(
+                  case['serial_outer_share'] for case in result['cases'].values()
+              )
+              result['status'] = 'success'
+          except Exception as error:
+              result['status'] = 'failure'
+              result['error'] = repr(error)
+              print(f'PCG phase profiling failed: {error}', flush=True)
+
+          record = Path('.ci/performance/pcg-phase-profile-latest.json')
+          record.parent.mkdir(parents=True, exist_ok=True)
+          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if result['status'] == 'success':
+              rows = []
+              for name, case in result['cases'].items():
+                  phases = case['phases']
+                  rows.append(
+                      f"| {name} | {case['iterations']} | "
+                      f"{case['parallel_core_share']:.1%} | "
+                      f"{case['serial_outer_share']:.1%} | "
+                      f"{phases['preconditioner']['share']:.1%} | "
+                      f"{phases['dot_products']['share']:.1%} | "
+                      f"{phases['vector_updates']['share']:.1%} |"
+                  )
+              checkpoint = '''### Certified PCG phase profile — 2026-08-23
+
+| Case | Iterations | Parallel CMG/matvec share | Serial outer share | Preconditioner | Dot products | Vector updates |
+|---|---:|---:|---:|---:|---:|---:|
+''' + '\n'.join(rows) + f'''
+
+- The profiler checks bitwise equality with the ordinary planned solver before reporting timings.
+- Maximum instrumentation overhead ratio: `{result['maximum_profile_overhead_ratio']:.3f}x`.
+- Machine-readable evidence: `.ci/performance/pcg-phase-profile-latest.json`.
+
+'''
+          else:
+              checkpoint = f'''### Certified PCG phase profile — 2026-08-23
+
+- Status: **failure**.
+- Error: `{result.get('error')}`.
+- Machine-readable evidence: `.ci/performance/pcg-phase-profile-latest.json`.
+
+'''
+          if '### Certified PCG phase profile — 2026-08-23' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          plan_path.write_text(plan)
+
+          status_path = Path('PERFORMANCE_STATUS.md')
+          status = status_path.read_text().rstrip()
+          if '## Certified PCG phase profile' not in status:
+              if result['status'] == 'success':
+                  status += (
+                      '\n\n## Certified PCG phase profile\n\n'
+                      f"- Minimum already-parallel core share: `{result['minimum_parallel_core_share']:.1%}`.\n"
+                      f"- Maximum still-serial outer-PCG share: `{result['maximum_serial_outer_share']:.1%}`.\n"
+                      '- Evidence: `.ci/performance/pcg-phase-profile-latest.json`.\n'
+                  )
+              else:
+                  status += (
+                      '\n\n## Certified PCG phase profile\n\n'
+                      f"- Status: `failure`; see `.ci/performance/pcg-phase-profile-latest.json`.\n"
+                  )
+              status_path.write_text(status + '\n')
+
+          Path('.github/workflows/pcg-phase-profile.yml').unlink()
+
+      - name: Commit profiling checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: record certified PCG phase profile'
+          for attempt in 1 2 3 4; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Show profile
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/pcg-phase-profile-latest.json || true
