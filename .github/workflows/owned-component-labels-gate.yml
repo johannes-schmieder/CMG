@@ -1,7 +1,11 @@
+# Armed after the workflow existed on the default branch.
 name: Owned internal component-label gate
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/owned-component-labels-gate.yml'
 
 permissions:
   contents: write
