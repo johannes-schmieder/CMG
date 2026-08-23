@@ -53,12 +53,12 @@ Hosted-runner timings are directional. Claims about 8–32-thread scaling, NUMA 
 | P1 Repeated overhead | COMPLETE | Graph metadata and compatible stationary application are reused |
 | P2 Terminal/workspace memory | COMPLETE | Factor compression and scratch aliasing pass qualification |
 | P3 Frozen CSR | COMPLETE | Deterministic CSR agrees with edge matvec; measured routing is documented |
-| P4 Parallel solve kernels | COMPLETE | Package-owned pool and row-parallel CSR pass cross-platform tests |
+| P4 Parallel solve kernels | COMPLETE | Selective row-parallel CMG and plan-aware certified PCG pass qualification |
 | P5 Multi-RHS scheduler | COMPLETE | Ordered memory-bounded concurrent solves pass cross-platform tests |
-| P6 Parallel setup | IN PROGRESS | Sorting/contraction/heavy-edge routing is implemented; larger setup profiles remain |
+| P6 Parallel setup | COMPLETE | Sorting, direct compact contraction, and heavy-edge routing passed large hosted gates |
 | P7 Pinned C comparison | COMPLETE | Matvec, restriction, prolongation, and full iterative cycle agree and are timed |
-| P8 Large qualification | PARTIAL | Hosted 1–4-thread evidence exists; 8–32-thread and high-memory qualification remain |
-| P9 Panel/SIMD/NUMA work | DEFERRED | Begin only after profiles justify the complexity |
+| P8 Large qualification | PARTIAL | Hosted 1–4-thread evidence exists; controlled 8–32-thread/high-memory evidence remains |
+| P9 Panel/SIMD/NUMA work | DEFERRED | Begin only after full-PCG profiles justify the complexity |
 
 ## Implemented performance work
 
@@ -144,10 +144,11 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ## Current hot spots
 
-1. Single-RHS production PCG remains mostly serial even when the optional parallel feature is enabled.
-2. Coarse contraction still allocates endpoint triples and sorts at every level.
-3. Aggregation maps remain native-width `usize`; compact storage could reduce bandwidth, but must be evaluated without duplicating labels.
-4. Hosted hardware has qualified only 1–4 threads.
+1. Full certified single-RHS PCG needs an end-to-end routing matrix; stationary-cycle speed alone is not sufficient.
+2. Sparse path-like levels should remain on the compact serial edge kernel, while sufficiently dense large levels benefit from CSR parallelism.
+3. Aggregation maps still use native-width indices; further compaction must preserve the public API and show an end-to-end memory win.
+4. Controlled 8-, 16-, and 32-thread plus high-memory evidence is unavailable on ordinary hosted runners.
+5. Packed contraction keys, reusable contraction buffers, and fixed-order parallel PCG reductions remain candidates for measurement.
 
 ## Rejected or deferred experiments
 
@@ -476,12 +477,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/two-stage-sort-probe.json`.
 
+### Direct compact contraction and prepared parallel PCG checkpoint — 2026-08-23
+
+- Direct construction of coarse graphs in retained 16-byte `Edge` storage was **retained** after full serial/all-feature qualification. Across six large serial and parallel cases, geometric hierarchy-build time was `0.952x` and geometric peak RSS was `0.924x`; the worst observed timing ratio was `0.974x`.
+- The optional `ParallelCmgPlan`, plan-aware certified PCG path, and memory-aware `ParallelPcgSolver` are present in production source. The default dependency-free serial APIs remain unchanged.
+- A four-thread stationary-application routing probe showed exact serial/parallel agreement and speedups from `0.96x` on sparse path-like work to `2.23x` on a dense worker–firm case. This confirms selective routing rather than unconditional parallelization.
+- Machine-readable evidence: `.ci/performance/direct-compact-contraction-latest.json` and `.ci/performance/parallel-cmg-routing-probe.json`.
+- Full certified PCG timing, not only stationary application timing, is the next numerical-performance gate.
+
 ## Current next action
 
-1. Do not mutate production sorting for the two-stage candidate; profile comparison-sort call patterns or pursue parallel setup qualification instead.
-2. Preserve endpoint order, weight-bit order within duplicate groups,
-   compensated summation, hierarchy metadata, and certified solve results.
-3. Extend user-facing guidance for automatic, within-solve, and across-RHS
-   parallel execution.
-4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
-   hardware is available.
+1. Add a stable full-PCG serial-versus-planned benchmark and record routing decisions, iterations, residual certificates, plan bytes, and peak RSS.
+2. Tune the planned single-RHS routing floor only from same-host full-solve evidence; keep sparse/path cases serial when parallel overhead does not pay.
+3. Evaluate fixed-chunk deterministic parallel dot products, norms, and Krylov vector updates if full-PCG profiling shows the outer loop is material.
+4. Profile packed contraction keys and reusable contraction buffers on million-edge sparse and dense worker–firm graphs.
+5. Obtain controlled 8–32-thread/high-memory qualification on a larger or self-hosted runner.
