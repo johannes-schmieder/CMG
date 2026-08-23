@@ -871,6 +871,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; one full diagonal-array pass was removed with stable end-to-end setup gains.
 - Evidence: `.ci/performance/fused-diagonal-statistics-latest.json`.
 
+### Trusted compact contraction checkpoint — 2026-08-23
+
+- Redundant checked conversions for private compact aggregation labels were **not retained**.
+- Validation: `success`.
+- Geometric production-contraction / hierarchy-build ratios: `1.005x` / `0.991x`.
+- Worst peak-RSS ratio: `1.018x`.
+- Decision: qualification passed, but contraction or hierarchy timing did not improve consistently enough.
+- Evidence: `.ci/performance/trusted-compact-contraction-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
