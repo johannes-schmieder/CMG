@@ -275,3 +275,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Exact reconstructed coarse-graph equivalence: `passed inside the benchmark for every profiled level and repetition`.
 - Manual mapping uses the public compatibility label view; production totals use compact labels.
 - Evidence: `.ci/performance/contraction-subphase-post-labels.json`.
+
+## Lazy aggregation-size gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Geometric retained-memory ratio: `0.953003038418093`.
+- Geometric hierarchy-time ratio: `0.9983684256046577`.
+- Serial/planned PCG geometric ratios: `0.9867773370546498` / `0.9951106963463812`.
+- Public aggregate sizes remain available through a thread-safe lazy compatibility cache.
+- Evidence: `.ci/performance/lazy-aggregation-sizes-latest.json`.

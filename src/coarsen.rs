@@ -19,7 +19,8 @@ enum LabelStorage {
 pub struct Aggregation {
     labels: LabelStorage,
     native_labels: OnceLock<Vec<usize>>,
-    sizes: Vec<usize>,
+    aggregate_count: usize,
+    sizes: OnceLock<Vec<usize>>,
 }
 
 impl Clone for Aggregation {
@@ -27,14 +28,15 @@ impl Clone for Aggregation {
         Self {
             labels: self.labels.clone(),
             native_labels: OnceLock::new(),
-            sizes: self.sizes.clone(),
+            aggregate_count: self.aggregate_count,
+            sizes: OnceLock::new(),
         }
     }
 }
 
 impl PartialEq for Aggregation {
     fn eq(&self, other: &Self) -> bool {
-        self.sizes == other.sizes
+        self.aggregate_count == other.aggregate_count
             && self.fine_dimension() == other.fine_dimension()
             && (0..self.fine_dimension()).all(|index| self.label_at(index) == other.label_at(index))
     }
@@ -45,7 +47,6 @@ impl Eq for Aggregation {}
 impl Aggregation {
     /// Construct an aggregation from explicit labels and a coarse dimension.
     pub fn new(labels: Vec<usize>, aggregate_count: usize) -> Result<Self, CmgError> {
-        let mut sizes = vec![0; aggregate_count];
         for &label in &labels {
             if label >= aggregate_count {
                 return Err(CmgError::VertexOutOfBounds {
@@ -53,20 +54,20 @@ impl Aggregation {
                     vertex_count: aggregate_count,
                 });
             }
-            sizes[label] += 1;
         }
-        Ok(Self::from_validated_parts(labels, sizes))
+        Ok(Self::from_validated_parts(labels, aggregate_count))
     }
 
     pub(crate) fn from_forest_parts(labels: Vec<usize>, sizes: Vec<usize>) -> Self {
         debug_assert_eq!(sizes.iter().sum::<usize>(), labels.len());
         debug_assert!(labels.iter().all(|&label| label < sizes.len()));
-        Self::from_validated_parts(labels, sizes)
+        let aggregate_count = sizes.len();
+        Self::from_validated_parts(labels, aggregate_count)
     }
 
-    fn from_validated_parts(labels: Vec<usize>, sizes: Vec<usize>) -> Self {
+    fn from_validated_parts(labels: Vec<usize>, aggregate_count: usize) -> Self {
         let compact_limit = (u32::MAX as usize).saturating_add(1);
-        let labels = if sizes.len() <= compact_limit {
+        let labels = if aggregate_count <= compact_limit {
             LabelStorage::Compact(labels.into_iter().map(|label| label as u32).collect())
         } else {
             LabelStorage::Native(labels)
@@ -74,7 +75,8 @@ impl Aggregation {
         Self {
             labels,
             native_labels: OnceLock::new(),
-            sizes,
+            aggregate_count,
+            sizes: OnceLock::new(),
         }
     }
 
@@ -94,9 +96,27 @@ impl Aggregation {
     }
 
     /// Return aggregate sizes.
+    ///
+    /// Production hierarchy kernels need only the aggregate count. The full
+    /// native-width size vector is materialized lazily for API compatibility.
     #[must_use]
     pub fn sizes(&self) -> &[usize] {
-        &self.sizes
+        self.sizes.get_or_init(|| {
+            let mut sizes = vec![0; self.aggregate_count];
+            match &self.labels {
+                LabelStorage::Compact(labels) => {
+                    for &label in labels {
+                        sizes[label as usize] += 1;
+                    }
+                }
+                LabelStorage::Native(labels) => {
+                    for &label in labels {
+                        sizes[label] += 1;
+                    }
+                }
+            }
+            sizes
+        })
     }
 
     /// Return the fine dimension.
@@ -110,8 +130,8 @@ impl Aggregation {
 
     /// Return the coarse dimension.
     #[must_use]
-    pub fn coarse_dimension(&self) -> usize {
-        self.sizes.len()
+    pub const fn coarse_dimension(&self) -> usize {
+        self.aggregate_count
     }
 
     #[inline]
@@ -341,6 +361,7 @@ mod compact_aggregation_label_tests {
         let aggregation = Aggregation::new(vec![0, 0, 1, 2, 2], 3).unwrap();
         assert!(matches!(&aggregation.labels, LabelStorage::Compact(_)));
         assert!(aggregation.native_labels.get().is_none());
+        assert!(aggregation.sizes.get().is_none());
 
         let fine = [1.0, 2.0, 3.0, 4.0, 5.0];
         assert_eq!(aggregation.restrict(&fine).unwrap(), vec![3.0, 3.0, 9.0]);
@@ -350,6 +371,9 @@ mod compact_aggregation_label_tests {
         );
         assert_eq!(aggregation.labels(), &[0, 0, 1, 2, 2]);
         assert!(aggregation.native_labels.get().is_some());
+        assert!(aggregation.sizes.get().is_none());
+        assert_eq!(aggregation.sizes(), &[2, 1, 2]);
+        assert!(aggregation.sizes.get().is_some());
     }
 
     #[test]
@@ -358,7 +382,10 @@ mod compact_aggregation_label_tests {
         let _ = aggregation.labels();
         let cloned = aggregation.clone();
         assert_eq!(aggregation, cloned);
+        let _ = aggregation.sizes();
         assert!(cloned.native_labels.get().is_none());
+        assert!(cloned.sizes.get().is_none());
         assert_eq!(cloned.labels(), &[0, 1, 1, 2]);
+        assert_eq!(cloned.sizes(), &[1, 2, 1]);
     }
 }

@@ -745,8 +745,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Dominant phase: `sorting` (`76.2%`).
 - Evidence: `.ci/performance/contraction-subphase-post-labels.json`.
 
+### Lazy aggregation-size checkpoint — 2026-08-23
+
+- Candidate was **retained**.
+- Validation: `success`.
+- Geometric retained / hierarchy-time ratios: `0.953003038418093` / `0.9983684256046577`.
+- Serial/planned PCG ratios: `0.9867773370546498` / `0.9951106963463812`.
+- Evidence: `.ci/performance/lazy-aggregation-sizes-latest.json`.
+
 ## Current next action
 
-1. Benchmark-gate one narrowly scoped `sorting` or hierarchy-metadata optimization selected from the new profile.
-2. Preserve exact coarse-graph ordering, compensated duplicate summation, routing metadata, and certified solves.
+1. Re-run the full routing matrix if lazy aggregate sizes are retained.
+2. Continue sort-dominant contraction work only with a design that clears both speed and peak-memory gates.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
