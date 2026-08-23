@@ -187,3 +187,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Diagonal share: `4.9%`.
 - Finalization share: `0.4%`.
 - Evidence: `.ci/performance/contraction-subphase-profile-v2.json`.
+
+## Raw graph two-stage ordering gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Overall geometric graph-build ratio: `1.00652839386318`.
+- Duplicate-heavy geometric graph-build ratio: `0.9707700491430172`.
+- The parallel sort path remains unchanged.
+- Evidence: `.ci/performance/raw-two-stage-sort-latest.json`.

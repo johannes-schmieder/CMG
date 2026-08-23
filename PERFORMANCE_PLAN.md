@@ -678,8 +678,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Mapping/sorting/merging/diagonal shares: `11.2%` / `74.8%` / `8.7%` / `4.9%`.
 - Evidence: `.ci/performance/contraction-subphase-profile-v2.json`.
 
+### Raw graph two-stage sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Overall/duplicate-heavy graph-build ratios: `1.00652839386318` / `0.9707700491430172`.
+- Evidence: `.ci/performance/raw-two-stage-sort-latest.json`.
+
 ## Current next action
 
-1. Optimize the largest remaining current-kernel contraction phase under a full correctness and hierarchy-time gate.
+1. Benchmark the remaining contraction mapping kernel under the current sort and merge implementation.
 2. Re-run full certified PCG routing after any retained hierarchy change.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.

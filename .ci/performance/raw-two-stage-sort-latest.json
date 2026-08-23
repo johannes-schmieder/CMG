@@ -1,0 +1,88 @@
+{
+  "acceptance_limits": {
+    "duplicate_geometric_time_ratio_max": 0.975,
+    "geometric_time_ratio_max": 0.985,
+    "worst_peak_rss_ratio_max": 1.03,
+    "worst_time_ratio_max": 1.035
+  },
+  "accepted": false,
+  "cases": {
+    "coarse-collisions-1m": {
+      "baseline_median_ns": 44305583.0,
+      "baseline_peak_rss_kib": 64512,
+      "candidate_median_ns": 32167725.0,
+      "candidate_over_baseline_peak_rss": 1.0004960317460319,
+      "candidate_over_baseline_time": 0.7260422461882513,
+      "candidate_peak_rss_kib": 64544,
+      "case": "coarse-collisions",
+      "metadata": {
+        "case": "coarse-collisions",
+        "raw_edges": 1000000,
+        "retained_edges": 187500,
+        "scale": 62500,
+        "vertices": 125000
+      },
+      "scale": 62500
+    },
+    "duplicates-16-1m": {
+      "baseline_median_ns": 7738749.0,
+      "baseline_peak_rss_kib": 64532,
+      "candidate_median_ns": 8685662.0,
+      "candidate_over_baseline_peak_rss": 1.0003099237587554,
+      "candidate_over_baseline_time": 1.1223599576624077,
+      "candidate_peak_rss_kib": 64552,
+      "case": "duplicates-16",
+      "metadata": {
+        "case": "duplicates-16",
+        "raw_edges": 1000000,
+        "retained_edges": 62500,
+        "scale": 62500,
+        "vertices": 125000
+      },
+      "scale": 62500
+    },
+    "duplicates-4-1m": {
+      "baseline_median_ns": 8677054.0,
+      "baseline_peak_rss_kib": 64684,
+      "candidate_median_ns": 9741534.0,
+      "candidate_over_baseline_peak_rss": 0.9972790798342712,
+      "candidate_over_baseline_time": 1.1226775815847176,
+      "candidate_peak_rss_kib": 64508,
+      "case": "duplicates-4",
+      "metadata": {
+        "case": "duplicates-4",
+        "raw_edges": 1000000,
+        "retained_edges": 250000,
+        "scale": 250000,
+        "vertices": 500000
+      },
+      "scale": 250000
+    },
+    "unique-1m": {
+      "baseline_median_ns": 12532903.0,
+      "baseline_peak_rss_kib": 64508,
+      "candidate_median_ns": 14060692.0,
+      "candidate_over_baseline_peak_rss": 0.9998139765610466,
+      "candidate_over_baseline_time": 1.1219022440371555,
+      "candidate_peak_rss_kib": 64496,
+      "case": "unique",
+      "metadata": {
+        "case": "unique",
+        "raw_edges": 1000000,
+        "retained_edges": 1000000,
+        "scale": 1000000,
+        "vertices": 1000001
+      },
+      "scale": 1000000
+    }
+  },
+  "decision_reason": "qualification passed but raw graph construction timing or RSS gates were not met",
+  "duplicate_geometric_time_ratio": 0.9707700491430172,
+  "experiment": "raw-graph-two-stage-endpoint-weight-sort",
+  "geometric_time_ratio": 1.00652839386318,
+  "schema_version": 1,
+  "source_sha": "fa51a0ede2bd2d171c84423610d5ba755f1cb759",
+  "validation": "success",
+  "worst_peak_rss_ratio": 1.0004960317460319,
+  "worst_time_ratio": 1.1226775815847176
+}
