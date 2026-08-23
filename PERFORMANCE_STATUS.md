@@ -142,3 +142,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric exact additional-peak ratio: `0.992011742241337`.
 - Production uses the hint only for CMG forest aggregations; the public generic aggregation path is unchanged.
 - Evidence: `.ci/performance/forest-capacity-hint-latest.json`.
+
+## Corrected two-stage contraction sort gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Worker-firm geometric hierarchy-time ratio: `n/a`.
+- Worst case hierarchy-time ratio: `n/a`.
+- Parallel sorting remains unchanged; the candidate affects only serial compact coarse-edge ordering.
+- Evidence: `.ci/performance/two-stage-sort-v2-latest.json`.
