@@ -796,6 +796,13 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Active parallel setup / worst RSS ratios: `0.9957837547352953` / `1.0016806860478462`.
 - Evidence: `.ci/performance/parallel-endpoint-sort-latest.json`.
 
+### Density-routed parallel endpoint-first sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `success`.
+- Active parallel setup / worst RSS ratios: `0.9891906343831914` / `1.0042045435660512`.
+- Evidence: `.ci/performance/dense-parallel-endpoint-sort-latest.json`.
+
 ## Current next action
 
 1. Re-profile parallel hierarchy sorting after the endpoint-first decision.

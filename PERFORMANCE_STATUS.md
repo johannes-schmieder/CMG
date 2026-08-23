@@ -344,3 +344,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst parallel setup / peak-RSS ratios: `1.0254294870933098` / `1.0016806860478462`.
 - Serial endpoint-first ordering and public graph construction remain unchanged.
 - Evidence: `.ci/performance/parallel-endpoint-sort-latest.json`.
+
+## Density-routed parallel endpoint-first sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Active-case parallel setup geometric ratio: `0.9891906343831914`.
+- Worst parallel setup / peak-RSS ratios: `1.0101119524801792` / `1.0042045435660512`.
+- Serial endpoint-first ordering and public graph construction remain unchanged; the candidate routes only parallel compact levels with at least four edges per coarse vertex.
+- Evidence: `.ci/performance/dense-parallel-endpoint-sort-latest.json`.

@@ -1,0 +1,207 @@
+{
+  "acceptance_limits": {
+    "active_parallel_setup_geometric_ratio_max": 0.99,
+    "parallel_batch_geometric_ratio_max": 1.03,
+    "parallel_batch_worst_ratio_max": 1.08,
+    "parallel_setup_worst_ratio_max": 1.03,
+    "serial_setup_geometric_ratio_max": 1.025,
+    "serial_setup_worst_ratio_max": 1.05,
+    "worst_peak_rss_ratio_max": 1.03
+  },
+  "accepted": false,
+  "active_parallel_setup_geometric_ratio": 0.9891906343831914,
+  "cases": {
+    "dense-worker-firm-100k": {
+      "baseline_parallel_batch_ns": 371520903.0,
+      "baseline_parallel_setup_ns": 375556006.0,
+      "baseline_peak_rss_kib": 510416,
+      "baseline_serial_setup_ns": 371058411.5,
+      "candidate_over_baseline_parallel_batch": 1.003384569992822,
+      "candidate_over_baseline_parallel_setup": 0.9927807052565151,
+      "candidate_over_baseline_peak_rss": 0.999098774333093,
+      "candidate_over_baseline_serial_setup": 1.0119684444884225,
+      "candidate_parallel_batch_ns": 372778341.5,
+      "candidate_parallel_setup_ns": 372844756.5,
+      "candidate_peak_rss_kib": 509956,
+      "candidate_serial_setup_ns": 375499403.5,
+      "metadata": {
+        "backward_errors": [
+          5.467362204068316e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 1280000,
+        "case": "dense-worker-firm",
+        "executor_threads": 4,
+        "iterations": [
+          8
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 100000,
+        "workspace_bytes": 15138488
+      }
+    },
+    "dense-worker-firm-200k": {
+      "baseline_parallel_batch_ns": 780572630.5,
+      "baseline_parallel_setup_ns": 806960088.5,
+      "baseline_peak_rss_kib": 1029936,
+      "baseline_serial_setup_ns": 757425816.5,
+      "candidate_over_baseline_parallel_batch": 1.0224633061868547,
+      "candidate_over_baseline_parallel_setup": 0.9892796209833865,
+      "candidate_over_baseline_peak_rss": 0.9902362865265415,
+      "candidate_over_baseline_serial_setup": 1.0090854521328558,
+      "candidate_parallel_batch_ns": 798106872.5,
+      "candidate_parallel_setup_ns": 798309170.5,
+      "candidate_peak_rss_kib": 1019880,
+      "candidate_serial_setup_ns": 764307372.5,
+      "metadata": {
+        "backward_errors": [
+          8.600286183783656e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 2560000,
+        "case": "dense-worker-firm",
+        "executor_threads": 4,
+        "iterations": [
+          8
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 200000,
+        "workspace_bytes": 30493848
+      }
+    },
+    "dense-worker-firm-50k": {
+      "baseline_parallel_batch_ns": 181076320.5,
+      "baseline_parallel_setup_ns": 175124633.0,
+      "baseline_peak_rss_kib": 267692,
+      "baseline_serial_setup_ns": 179339943.0,
+      "candidate_over_baseline_parallel_batch": 1.0008754982405332,
+      "candidate_over_baseline_parallel_setup": 0.9855248890086182,
+      "candidate_over_baseline_peak_rss": 0.9928873481463771,
+      "candidate_over_baseline_serial_setup": 1.0139545990599539,
+      "candidate_parallel_batch_ns": 181234852.5,
+      "candidate_parallel_setup_ns": 172589684.5,
+      "candidate_peak_rss_kib": 265788,
+      "candidate_serial_setup_ns": 181842560.0,
+      "metadata": {
+        "backward_errors": [
+          4.497075853714634e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 640000,
+        "case": "dense-worker-firm",
+        "executor_threads": 4,
+        "iterations": [
+          8
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 50000,
+        "workspace_bytes": 7454160
+      }
+    },
+    "grid-600k": {
+      "baseline_parallel_batch_ns": 673419036.5,
+      "baseline_parallel_setup_ns": 129111470.0,
+      "baseline_peak_rss_kib": 288004,
+      "baseline_serial_setup_ns": 126514805.0,
+      "candidate_over_baseline_parallel_batch": 0.9987330503687061,
+      "candidate_over_baseline_parallel_setup": 1.0056274241165406,
+      "candidate_over_baseline_peak_rss": 1.0034860626935738,
+      "candidate_over_baseline_serial_setup": 1.0004552589714697,
+      "candidate_parallel_batch_ns": 672565848.5,
+      "candidate_parallel_setup_ns": 129838035.0,
+      "candidate_peak_rss_kib": 289008,
+      "candidate_serial_setup_ns": 126572402.0,
+      "metadata": {
+        "backward_errors": [
+          9.887927078208579e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 1198450,
+        "case": "grid",
+        "executor_threads": 4,
+        "iterations": [
+          26
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 600000,
+        "workspace_bytes": 44628008
+      }
+    },
+    "path-500k": {
+      "baseline_parallel_batch_ns": 728926001.0,
+      "baseline_parallel_setup_ns": 65729838.5,
+      "baseline_peak_rss_kib": 172016,
+      "baseline_serial_setup_ns": 62562453.5,
+      "candidate_over_baseline_parallel_batch": 1.0040316739915551,
+      "candidate_over_baseline_parallel_setup": 0.9451102485213013,
+      "candidate_over_baseline_peak_rss": 0.99195423681518,
+      "candidate_over_baseline_serial_setup": 0.9407344134929108,
+      "candidate_parallel_batch_ns": 731864793.0,
+      "candidate_parallel_setup_ns": 62121944.0,
+      "candidate_peak_rss_kib": 170632,
+      "candidate_serial_setup_ns": 58854653.0,
+      "metadata": {
+        "backward_errors": [
+          6.718027950551265e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 499999,
+        "case": "path",
+        "executor_threads": 4,
+        "iterations": [
+          48
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 500000,
+        "workspace_bytes": 39519776
+      }
+    },
+    "worker-firm-1m": {
+      "baseline_parallel_batch_ns": 2248016161.5,
+      "baseline_parallel_setup_ns": 248996225.5,
+      "baseline_peak_rss_kib": 481384,
+      "baseline_serial_setup_ns": 251358131.0,
+      "candidate_over_baseline_parallel_batch": 1.0035445174445201,
+      "candidate_over_baseline_parallel_setup": 1.0101119524801792,
+      "candidate_over_baseline_peak_rss": 1.0042045435660512,
+      "candidate_over_baseline_serial_setup": 1.0104888112809847,
+      "candidate_parallel_batch_ns": 2255984294.0,
+      "candidate_parallel_setup_ns": 251514063.5,
+      "candidate_peak_rss_kib": 483408,
+      "candidate_serial_setup_ns": 253994579.0,
+      "metadata": {
+        "backward_errors": [
+          9.628206476042288e-09
+        ],
+        "batch_concurrency": 1,
+        "canonical_edges": 1714286,
+        "case": "worker-firm",
+        "executor_threads": 4,
+        "iterations": [
+          22
+        ],
+        "logical_cpus": 4,
+        "rhs_count": 1,
+        "vertices": 1000000,
+        "workspace_bytes": 70859432
+      }
+    }
+  },
+  "decision_reason": "qualification passed but dense-level routing did not preserve a stable setup gain or a control/solve/RSS gate was exceeded",
+  "experiment": "density-routed-parallel-compact-endpoint-first-sort",
+  "parallel_batch_geometric_ratio": 1.005475395231553,
+  "parallel_batch_worst_ratio": 1.0224633061868547,
+  "parallel_setup_geometric_ratio": 0.9878435755162673,
+  "parallel_setup_worst_ratio": 1.0101119524801792,
+  "schema_version": 1,
+  "serial_setup_geometric_ratio": 0.9974357715504466,
+  "serial_setup_worst_ratio": 1.0139545990599539,
+  "source_sha": "8efb0f8352f2ac19ef04977260ac34d45d427f1d",
+  "validation": "success",
+  "worst_peak_rss_ratio": 1.0042045435660512
+}
