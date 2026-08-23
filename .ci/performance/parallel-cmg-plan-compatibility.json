@@ -1,0 +1,8 @@
+{
+  "assessment": "parallel-cmg-plan-patch-compatibility",
+  "compatible": true,
+  "output": "Checking patch benchmarks/Cargo.toml...\nChecking patch benchmarks/src/bin/parallel-cmg-apply.rs...\nChecking patch src/coarsen.rs...\nChecking patch src/csr.rs...\nChecking patch src/graph.rs...\nHunk #1 succeeded at 234 (offset 46 lines).\nChecking patch src/lib.rs...\nChecking patch src/preconditioner.rs...\nChecking patch tests/parallel.rs...\n",
+  "returncode": 0,
+  "schema_version": 1,
+  "source_sha": "0175ad045b430911378ec5d281b913c83167070e"
+}
