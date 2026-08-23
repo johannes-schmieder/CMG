@@ -375,9 +375,9 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Owned trusted forest split gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Hierarchy geometric / worst time ratios: `n/a` / `n/a`.
-- Improved hierarchy cases: `n/a` / 4.
-- Serial / planned PCG geometric ratios: `n/a` / `n/a`.
+- Validation: `success`.
+- Hierarchy geometric / worst time ratios: `1.0007042230394185` / `1.0152898789624596`.
+- Improved hierarchy cases: `2` / 4.
+- Serial / planned PCG geometric ratios: `1.0014665533844995` / `1.0022955841523074`.
 - Public checked `split_forest` behavior remains unchanged.
 - Evidence: `.ci/performance/owned-trusted-split-latest.json`.

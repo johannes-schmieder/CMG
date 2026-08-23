@@ -820,8 +820,8 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Owned trusted forest split checkpoint — 2026-08-23
 
 - Candidate was **not retained**.
-- Validation: `failure`.
-- Hierarchy / planned-PCG geometric ratios: `n/a` / `n/a`.
+- Validation: `success`.
+- Hierarchy / planned-PCG geometric ratios: `1.0007042230394185` / `1.0022955841523074`.
 - Evidence: `.ci/performance/owned-trusted-split-latest.json`.
 
 ## Current next action
