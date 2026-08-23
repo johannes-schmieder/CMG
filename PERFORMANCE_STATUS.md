@@ -6,7 +6,7 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Current recovery point
 
-- Benchmark gate baseline: `1bf83b76844ce0808b52c062c80bec6880d187bc`.
+- Benchmark gate baseline: `f2fa9f5b7a75e13ce4b579b7e7adf8c9aef43ee4`.
 - The hierarchy phase profile completed successfully on the retained unstable
   compact-edge sort; contraction remains the principal setup bottleneck.
 - Routed in-place endpoint radix was **not retained** after full numerical,

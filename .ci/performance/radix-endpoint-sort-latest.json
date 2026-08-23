@@ -1,15 +1,112 @@
 {
+  "acceptance_limits": {
+    "geometric_additional_peak_ratio_max": 1.005,
+    "geometric_time_ratio_max": 0.97,
+    "worst_additional_peak_ratio_max": 1.015,
+    "worst_peak_rss_ratio_max": 1.03,
+    "worst_time_ratio_max": 1.035
+  },
   "accepted": false,
-  "baseline_sha": "1bf83b76844ce0808b52c062c80bec6880d187bc",
-  "cases": {},
-  "decision_reason": "experiment failed: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
-  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "baseline_sha": "f2fa9f5b7a75e13ce4b579b7e7adf8c9aef43ee4",
+  "cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "3"
+      ],
+      "baseline_additional_peak_bytes": 161634096.0,
+      "baseline_max_post_drop_delta_bytes": 0,
+      "baseline_median_ns": 509293269.0,
+      "baseline_peak_rss_kib": 190240,
+      "candidate_additional_peak_bytes": 161634096.0,
+      "candidate_max_post_drop_delta_bytes": 0,
+      "candidate_median_ns": 565020824.0,
+      "candidate_over_baseline_additional_peak": 1.0,
+      "candidate_over_baseline_peak_rss": 1.0,
+      "candidate_over_baseline_time": 1.1094213459946591,
+      "candidate_peak_rss_kib": 190240,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "hierarchy_matrix_nonzeros": 18003524,
+        "levels": 6,
+        "median_retained_bytes": 158434624,
+        "repetitions": 3,
+        "scale": 100000,
+        "vertices": 200000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "3"
+      ],
+      "baseline_additional_peak_bytes": 84097120.0,
+      "baseline_max_post_drop_delta_bytes": 0,
+      "baseline_median_ns": 53877366.0,
+      "baseline_peak_rss_kib": 119784,
+      "candidate_additional_peak_bytes": 84097120.0,
+      "candidate_max_post_drop_delta_bytes": 0,
+      "candidate_median_ns": 53242073.0,
+      "candidate_over_baseline_additional_peak": 1.0,
+      "candidate_over_baseline_peak_rss": 0.9991317705202698,
+      "candidate_over_baseline_time": 0.9882085364009815,
+      "candidate_peak_rss_kib": 119680,
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "hierarchy_matrix_nonzeros": 3999739,
+        "levels": 7,
+        "median_retained_bytes": 64011896,
+        "repetitions": 3,
+        "scale": 1000000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "3"
+      ],
+      "baseline_additional_peak_bytes": 111423984.0,
+      "baseline_max_post_drop_delta_bytes": 0,
+      "baseline_median_ns": 207382962.0,
+      "baseline_peak_rss_kib": 153576,
+      "candidate_additional_peak_bytes": 111423984.0,
+      "candidate_max_post_drop_delta_bytes": 0,
+      "candidate_median_ns": 210491081.0,
+      "candidate_over_baseline_additional_peak": 1.0,
+      "candidate_over_baseline_peak_rss": 1.0051049643173413,
+      "candidate_over_baseline_time": 1.0149873401846772,
+      "candidate_peak_rss_kib": 154360,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "hierarchy_matrix_nonzeros": 7658057,
+        "levels": 9,
+        "median_retained_bytes": 96399184,
+        "repetitions": 3,
+        "scale": 500000,
+        "vertices": 1000000
+      }
+    }
+  },
+  "decision_reason": "full qualification passed but timing or exact-allocation gates were not met",
   "experiment": "routed-inplace-endpoint-radix",
+  "geometric_additional_peak_ratio": 1.0,
+  "geometric_peak_rss_ratio": 1.0014087819205455,
+  "geometric_time_ratio": 1.0362596345775017,
   "routing": {
     "minimum_edges": 262144,
     "minimum_edges_per_coarse_vertex": 4,
     "parallel_path_changed": false
   },
   "schema_version": 1,
-  "validation": "not_run"
+  "validation": "success",
+  "worst_additional_peak_ratio": 1.0,
+  "worst_peak_rss_ratio": 1.0051049643173413,
+  "worst_time_ratio": 1.1094213459946591
 }
