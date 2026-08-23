@@ -13,6 +13,7 @@ categories = ["algorithms", "mathematics", "science"]
 [features]
 default = []
 parallel = ["dep:rayon"]
+profiling = ["parallel"]
 
 [dependencies]
 rayon = { version = "1.12", optional = true }
