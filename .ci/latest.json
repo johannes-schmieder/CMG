@@ -1,9 +1,9 @@
 {
-  "tested_sha": "8be17fa8a08bc1c654b3cbc4322ec196687e33f1",
-  "run_id": "32662621098",
+  "tested_sha": "d89ea142e5625557afcc38b95eb2cf0e23bf656f",
+  "run_id": "32662835698",
   "run_attempt": "1",
-  "quality": "success",
-  "cross_platform_tests": "success",
+  "quality": "cancelled",
+  "cross_platform_tests": "cancelled",
   "platforms": ["ubuntu-latest", "macos-latest", "windows-latest"],
   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)"
