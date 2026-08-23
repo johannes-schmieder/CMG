@@ -1,0 +1,45 @@
+name: Resolve failed optimization gates safely
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/resolve-failed-optimization-gates.yml'
+      - '.ci/performance/fixed-chunk-norm-sum-latest.json'
+      - '.ci/performance/parallel-pcg-vector-updates-latest.json'
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve only failed candidate gates
+        run: python scripts/resolve_failed_optimization_gates.py
+
+      - name: Commit safe resolution checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'ci: resolve failed optimization gates against qualified baseline'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
