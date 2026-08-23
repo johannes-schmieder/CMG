@@ -98,3 +98,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned geometric full-solve ratio: `1.025x`.
 - Evidence: `.ci/performance/parallel-outer-centering-latest.json`.
 
+## Fused centering and preconditioned-dot gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Geometric full-solve ratio: `0.996x`.
+- Evidence: `.ci/performance/fused-centering-dot-latest.json`.
+

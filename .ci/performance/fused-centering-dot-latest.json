@@ -1,0 +1,159 @@
+{
+  "acceptance_limits": {
+    "best_time_ratio_max": 0.97,
+    "geometric_time_ratio_max": 0.99,
+    "worst_time_ratio_max": 1.04
+  },
+  "accepted": false,
+  "baseline_sha": "60b5891f0e50a20715196ceba63f0011f8b34988",
+  "best_time_ratio": 0.9851112686526137,
+  "cases": {
+    "dense-worker-firm-400k": {
+      "arguments": [
+        "dense-worker-firm",
+        25000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 63634482.5,
+      "baseline_serial_ns": 136948845.0,
+      "candidate_planned_ns": 63892727.5,
+      "candidate_serial_ns": 136855884.5,
+      "metadata": {
+        "auto_execution": "Planned",
+        "case": "dense-worker-firm",
+        "edges": 399930,
+        "input_edges": 400000,
+        "levels": 6,
+        "max_scaled_difference": 0.0,
+        "operators": 5,
+        "plan_bytes": 45175784,
+        "planned_backward_error": 6.156236952861186e-09,
+        "planned_iterations": 9,
+        "planned_residual_norm": 0.0003279385605283138,
+        "repetitions": 3,
+        "scale": 25000,
+        "serial_backward_error": 6.156236952861186e-09,
+        "serial_iterations": 9,
+        "serial_residual_norm": 0.0003279385605283138,
+        "threads": 4,
+        "vertices": 50000,
+        "workspace_bytes": 5474184
+      },
+      "planned_ratio": 1.0040582556792224,
+      "serial_ratio": 0.9993212027454484
+    },
+    "path-150k": {
+      "arguments": [
+        "path",
+        150000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 150091666.5,
+      "baseline_serial_ns": 146068076.5,
+      "candidate_planned_ns": 147856992.0,
+      "candidate_serial_ns": 144402998.5,
+      "metadata": {
+        "auto_execution": "Serial",
+        "case": "path",
+        "edges": 149999,
+        "input_edges": 149999,
+        "levels": 6,
+        "max_scaled_difference": 0.0,
+        "operators": 0,
+        "plan_bytes": 0,
+        "planned_backward_error": 7.551762186393004e-09,
+        "planned_iterations": 29,
+        "planned_residual_norm": 5.5120534666461645e-05,
+        "repetitions": 3,
+        "scale": 150000,
+        "serial_backward_error": 7.551762186393004e-09,
+        "serial_iterations": 29,
+        "serial_residual_norm": 5.5120534666461645e-05,
+        "threads": 4,
+        "vertices": 150000,
+        "workspace_bytes": 10918688
+      },
+      "planned_ratio": 0.9851112686526137,
+      "serial_ratio": 0.9886006714136473
+    },
+    "worker-firm-300k": {
+      "arguments": [
+        "worker-firm",
+        100000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 152593932.0,
+      "baseline_serial_ns": 154701957.5,
+      "candidate_planned_ns": 151932610.5,
+      "candidate_serial_ns": 154757703.5,
+      "metadata": {
+        "auto_execution": "Serial",
+        "case": "worker-firm",
+        "edges": 299996,
+        "input_edges": 300000,
+        "levels": 6,
+        "max_scaled_difference": 0.0,
+        "operators": 5,
+        "plan_bytes": 15970688,
+        "planned_backward_error": 6.1478852947836375e-09,
+        "planned_iterations": 20,
+        "planned_residual_norm": 0.00010625731538737036,
+        "repetitions": 3,
+        "scale": 100000,
+        "serial_backward_error": 6.1478852947836375e-09,
+        "serial_iterations": 20,
+        "serial_residual_norm": 0.00010625731538737036,
+        "threads": 4,
+        "vertices": 200000,
+        "workspace_bytes": 14771800
+      },
+      "planned_ratio": 0.9956661350072558,
+      "serial_ratio": 1.0003603445030746
+    },
+    "worker-firm-600k": {
+      "arguments": [
+        "worker-firm",
+        200000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 274517503.5,
+      "baseline_serial_ns": 298757717.5,
+      "candidate_planned_ns": 273851915.0,
+      "candidate_serial_ns": 297648226.5,
+      "metadata": {
+        "auto_execution": "Planned",
+        "case": "worker-firm",
+        "edges": 599996,
+        "input_edges": 600000,
+        "levels": 7,
+        "max_scaled_difference": 0.0,
+        "operators": 6,
+        "plan_bytes": 33141840,
+        "planned_backward_error": 8.448314140708354e-09,
+        "planned_iterations": 19,
+        "planned_residual_norm": 0.00021911114836242713,
+        "repetitions": 3,
+        "scale": 200000,
+        "serial_backward_error": 8.448314140708354e-09,
+        "serial_iterations": 19,
+        "serial_residual_norm": 0.00021911114836242713,
+        "threads": 4,
+        "vertices": 400000,
+        "workspace_bytes": 29690296
+      },
+      "planned_ratio": 0.9975754241841996,
+      "serial_ratio": 0.9962863185283238
+    }
+  },
+  "decision_reason": "qualification passed but the full-solve timing gate was not met",
+  "experiment": "fused-preconditioned-centering-dot",
+  "geometric_time_ratio": 0.9958554147744314,
+  "run_id": "32653567772",
+  "schema_version": 1,
+  "validation": "success",
+  "worst_time_ratio": 1.0040582556792224
+}
