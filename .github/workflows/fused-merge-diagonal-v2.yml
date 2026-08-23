@@ -1,0 +1,37 @@
+name: Repaired fused merge-diagonal gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fused-merge-diagonal-v2.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-fused-merge-diagonal-v2
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify repaired fused merge-diagonal construction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/fused_merge_diagonal_gate_v2.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/fused-merge-diagonal-latest.json || true
