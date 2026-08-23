@@ -1,0 +1,230 @@
+name: Full certified PCG routing benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/full-pcg-routing.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Format, qualify, and benchmark full PCG
+        shell: python
+        run: |
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import statistics
+          import subprocess
+
+          root = Path.cwd()
+
+          def run(command, *, env=None, timeout=7000):
+              print('+', ' '.join(command), flush=True)
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  env=env,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=timeout,
+              )
+              print(completed.stdout, end='')
+              if completed.returncode != 0:
+                  raise RuntimeError(
+                      f"command failed ({completed.returncode}): {' '.join(command)}"
+                  )
+              return completed
+
+          result = {
+              'schema_version': 1,
+              'experiment': 'full-certified-pcg-routing',
+              'source_sha': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'status': 'not_run',
+              'cases': {},
+          }
+
+          try:
+              run(['cargo', 'fmt', '--all'])
+              run([
+                  'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all',
+              ])
+              run(['cargo', 'fmt', '--all', '--', '--check'])
+              run([
+                  'cargo', 'fmt', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all', '--', '--check',
+              ])
+              run([
+                  'cargo', 'clippy', '--all-targets', '--all-features',
+                  '--', '-D', 'warnings',
+              ])
+              run([
+                  'cargo', 'clippy', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--all-targets', '--', '-D', 'warnings',
+              ])
+              doc_env = os.environ.copy()
+              doc_env['RUSTDOCFLAGS'] = '-D warnings'
+              run([
+                  'cargo', 'doc', '--no-deps', '--document-private-items',
+                  '--all-features',
+              ], env=doc_env)
+              run(['cargo', 'test', '--all-targets', '--all-features'])
+              run(['cargo', 'test', '--all-targets', '--all-features', '--release'])
+              run([
+                  'cargo', 'build', '--manifest-path', 'benchmarks/Cargo.toml',
+                  '--bin', 'full-pcg-routing', '--release',
+              ])
+
+              binary = Path('benchmarks/target/release/full-pcg-routing')
+              specs = [
+                  ('path-250k', ['path', 250000, 3, 4]),
+                  ('worker-firm-300k', ['worker-firm', 100000, 3, 4]),
+                  ('worker-firm-600k', ['worker-firm', 200000, 3, 4]),
+                  ('dense-worker-firm-800k', ['dense-worker-firm', 50000, 3, 4]),
+                  ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
+              ]
+
+              speedups = []
+              numerical_failures = []
+              route_mismatches = []
+              for name, arguments in specs:
+                  time_path = Path(f'/tmp/full-pcg-{name}.time')
+                  completed = run([
+                      '/usr/bin/time', '-v', '-o', str(time_path),
+                      str(binary), *[str(value) for value in arguments],
+                  ])
+                  payloads = [
+                      json.loads(line)
+                      for line in completed.stdout.splitlines()
+                      if line.strip().startswith('{')
+                  ]
+                  if len(payloads) != 1:
+                      raise RuntimeError(f'unexpected benchmark output for {name}: {payloads}')
+                  case = payloads[0]
+                  peak_line = next(
+                      line for line in time_path.read_text().splitlines()
+                      if 'Maximum resident set size (kbytes):' in line
+                  )
+                  case['peak_rss_kib'] = int(peak_line.rsplit(':', 1)[1].strip())
+                  case['recommended_execution'] = (
+                      'Planned'
+                      if case['operators'] > 0 and case['speedup'] >= 1.03
+                      else 'Serial'
+                  )
+                  case['auto_matches_recommendation'] = (
+                      case['auto_execution'] == case['recommended_execution']
+                  )
+                  result['cases'][name] = case
+                  speedups.append(case['speedup'])
+
+                  numerical_ok = (
+                      case['max_scaled_difference'] <= 5e-11
+                      and abs(case['serial_iterations'] - case['planned_iterations']) <= 1
+                      and math.isfinite(case['serial_backward_error'])
+                      and math.isfinite(case['planned_backward_error'])
+                  )
+                  if not numerical_ok:
+                      numerical_failures.append(name)
+                  if not case['auto_matches_recommendation']:
+                      route_mismatches.append(name)
+
+              result['geometric_speedup'] = math.exp(
+                  statistics.fmean(math.log(value) for value in speedups)
+              )
+              result['minimum_speedup'] = min(speedups)
+              result['maximum_speedup'] = max(speedups)
+              result['maximum_scaled_difference'] = max(
+                  case['max_scaled_difference'] for case in result['cases'].values()
+              )
+              result['numerical_failures'] = numerical_failures
+              result['route_mismatches'] = route_mismatches
+              result['status'] = 'success' if not numerical_failures else 'failure'
+          except Exception as error:
+              result['status'] = 'failure'
+              result['error'] = repr(error)
+              print(f'full PCG routing benchmark failed: {error}', flush=True)
+
+          record = Path('.ci/performance/full-pcg-routing-latest.json')
+          record.parent.mkdir(parents=True, exist_ok=True)
+          record.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          if result['status'] == 'success':
+              rows = []
+              for name, case in result['cases'].items():
+                  rows.append(
+                      f"| {name} | {case['operators']} | {case['serial_iterations']} / "
+                      f"{case['planned_iterations']} | {case['speedup']:.3f}x | "
+                      f"{case['auto_execution']} | {case['recommended_execution']} |"
+                  )
+              checkpoint = '''### Full certified PCG routing checkpoint — 2026-08-23
+
+| Case | Planned levels | Serial/planned iterations | Planned speedup | Current auto route | Measured recommendation |
+|---|---:|---:|---:|---|---|
+''' + '\n'.join(rows) + f'''
+
+- Maximum scaled serial/planned solution difference: `{result['maximum_scaled_difference']:.3e}`.
+- Geometric planned speedup across the matrix: `{result['geometric_speedup']:.3f}x`.
+- Routing mismatches: `{', '.join(result['route_mismatches']) if result['route_mismatches'] else 'none'}`.
+- Machine-readable evidence: `.ci/performance/full-pcg-routing-latest.json`.
+
+'''
+          else:
+              checkpoint = f'''### Full certified PCG routing checkpoint — 2026-08-23
+
+- Benchmark status: **failure**.
+- Error or numerical failures: `{result.get('error', result.get('numerical_failures'))}`.
+- Machine-readable evidence: `.ci/performance/full-pcg-routing-latest.json`.
+
+'''
+          if '### Full certified PCG routing checkpoint — 2026-08-23' not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          plan_path.write_text(plan)
+
+          status_path = Path('PERFORMANCE_STATUS.md')
+          status = status_path.read_text()
+          addition = (
+              '\n## Full-PCG routing measurement\n\n'
+              f"- Status: `{result['status']}`.\n"
+              f"- Geometric planned speedup: `{result.get('geometric_speedup', float('nan')):.3f}x`.\n"
+              f"- Route mismatches: `{', '.join(result.get('route_mismatches', [])) or 'none'}`.\n"
+              '- Evidence: `.ci/performance/full-pcg-routing-latest.json`.\n'
+          )
+          if '## Full-PCG routing measurement' not in status:
+              status_path.write_text(status.rstrip() + addition)
+
+          Path('.github/workflows/full-pcg-routing.yml').unlink()
+
+      - name: Commit benchmark checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: record full certified PCG routing matrix'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/full-pcg-routing-latest.json || true
