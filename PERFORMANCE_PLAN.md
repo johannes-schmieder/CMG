@@ -656,9 +656,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Worst hierarchy-time ratio: `n/a`.
 - Evidence: `.ci/performance/two-stage-sort-v2-latest.json`.
 
+### Function-scoped two-stage sort checkpoint — 2026-08-23
+
+- Candidate was **not retained**.
+- Validation: `failure`.
+- Worker-firm geometric hierarchy-time ratio: `n/a`.
+- Worst hierarchy-time ratio: `n/a`.
+- Evidence: `.ci/performance/two-stage-sort-v3-latest.json`.
+
 ## Current next action
 
-1. Re-profile contraction subphases after the corrected sorting decision.
-2. Evaluate reusable contraction work buffers only if allocation or initialization remains material.
+1. Re-profile contraction subphases after the sorting decision.
+2. Evaluate infallible prevalidated coarse-edge construction and other mapping-kernel costs if mapping remains material.
 3. Re-run full certified PCG routing after any retained hierarchy change.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

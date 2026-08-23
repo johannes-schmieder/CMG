@@ -151,3 +151,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst case hierarchy-time ratio: `n/a`.
 - Parallel sorting remains unchanged; the candidate affects only serial compact coarse-edge ordering.
 - Evidence: `.ci/performance/two-stage-sort-v2-latest.json`.
+
+## Function-scoped two-stage contraction sort gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Worker-firm geometric hierarchy-time ratio: `n/a`.
+- Worst hierarchy-time ratio: `n/a`.
+- Parallel sort behavior is unchanged.
+- Evidence: `.ci/performance/two-stage-sort-v3-latest.json`.
