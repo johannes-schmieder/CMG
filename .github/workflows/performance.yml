@@ -118,12 +118,17 @@ jobs:
           specs = [
               ('path-250k', ['path', 250000, 3, 4]),
               ('worker-firm-300k', ['worker-firm', 100000, 3, 4]),
+              ('worker-firm-375k', ['worker-firm', 125000, 3, 4]),
+              ('worker-firm-450k', ['worker-firm', 150000, 3, 4]),
+              ('worker-firm-525k', ['worker-firm', 175000, 3, 4]),
               ('worker-firm-600k', ['worker-firm', 200000, 3, 4]),
+              ('dense-worker-firm-400k', ['dense-worker-firm', 25000, 3, 4]),
+              ('dense-worker-firm-600k', ['dense-worker-firm', 37500, 3, 4]),
               ('dense-worker-firm-800k', ['dense-worker-firm', 50000, 3, 4]),
               ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
           ]
           result = {
-              'schema_version': 3,
+              'schema_version': 4,
               'experiment': 'full-certified-pcg-routing',
               'tested_sha': os.environ['TESTED_SHA'],
               'run_id': os.environ['RUN_ID'],
