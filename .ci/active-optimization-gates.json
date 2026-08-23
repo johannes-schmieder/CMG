@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "workflows": {
+    "parallel-pcg-vector-kernels.yml": [
+      {
+        "conclusion": "failure",
+        "created_at": "2026-08-23T14:29:06Z",
+        "head_sha": "5f5aee82edb97513456b67a972a1142179606581",
+        "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32645568911",
+        "id": 32645568911,
+        "run_attempt": 1,
+        "status": "completed",
+        "updated_at": "2026-08-23T14:29:14Z"
+      }
+    ],
+    "two-stage-sort-probe.yml": [
+      {
+        "conclusion": "failure",
+        "created_at": "2026-08-23T13:53:37Z",
+        "head_sha": "2706e5d686af1353199ae09a59ada9e6c17bb905",
+        "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32643738245",
+        "id": 32643738245,
+        "run_attempt": 1,
+        "status": "completed",
+        "updated_at": "2026-08-23T13:53:45Z"
+      },
+      {
+        "conclusion": "success",
+        "created_at": "2026-08-23T13:50:01Z",
+        "head_sha": "f8bfd497eb3964f4feeef5c328ae76431bba84e9",
+        "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32643550506",
+        "id": 32643550506,
+        "run_attempt": 1,
+        "status": "completed",
+        "updated_at": "2026-08-23T13:50:27Z"
+      }
+    ]
+  }
+}
