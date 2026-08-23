@@ -20,6 +20,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # Explicit rerun after the workflow-file creation checkpoint.
       - name: Qualify routed exact-capacity coarse-edge construction
         run: python scripts/exact_capacity_contraction_gate.py
 
