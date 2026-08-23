@@ -9,7 +9,7 @@
   "hierarchy_geometric_time_ratio": 1.0,
   "improved_contraction_case_count": 0,
   "schema_version": 1,
-  "source_sha": "9489a7327253718f3a1bfd4b107406e9212c5fb7",
+  "source_sha": "e2a43d5469183d6bdf9af2cedd5f3224c6b2f07f",
   "validation": "failure",
   "worst_contraction_time_ratio": 1.0,
   "worst_hierarchy_time_ratio": 1.0,
