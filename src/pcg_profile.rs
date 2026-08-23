@@ -333,17 +333,17 @@ pub fn profile_pcg_with_plan(
         )
     })?;
     measure(&mut profile.centering, || {
-        components.center_in_place_with_workspace(
-            &mut workspace.preconditioned,
-            &mut workspace.component,
-        )
+        components
+            .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)
     })?;
     let mut rho = measure(&mut profile.dot_products, || {
         dot(&workspace.residual, &workspace.preconditioned)
     });
     validate_positive_pcg(0, "r^T M r", rho)?;
     measure(&mut profile.vector_updates, || {
-        workspace.direction.copy_from_slice(&workspace.preconditioned);
+        workspace
+            .direction
+            .copy_from_slice(&workspace.preconditioned);
     });
 
     let mut restarts = 0_usize;
@@ -378,10 +378,8 @@ pub fn profile_pcg_with_plan(
             }
         });
         measure(&mut profile.centering, || {
-            components.center_in_place_with_workspace(
-                &mut workspace.solution,
-                &mut workspace.component,
-            )
+            components
+                .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)
         })?;
 
         let solution_norm = measure(&mut profile.norms, || euclidean_norm(&workspace.solution));
@@ -452,10 +450,8 @@ pub fn profile_pcg_with_plan(
         }
 
         measure(&mut profile.centering, || {
-            components.center_in_place_with_workspace(
-                &mut workspace.residual,
-                &mut workspace.component,
-            )
+            components
+                .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)
         })?;
         measure(&mut profile.preconditioner, || {
             plan.apply_compatible_into_prevalidated(
@@ -480,7 +476,9 @@ pub fn profile_pcg_with_plan(
 
         if restarted {
             measure(&mut profile.vector_updates, || {
-                workspace.direction.copy_from_slice(&workspace.preconditioned);
+                workspace
+                    .direction
+                    .copy_from_slice(&workspace.preconditioned);
             });
         } else {
             let beta = new_rho / rho;

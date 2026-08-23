@@ -56,9 +56,7 @@ pub use pcg::{
     solve_pcg_with_plan_and_workspace,
 };
 #[cfg(feature = "profiling")]
-pub use pcg_profile::{
-    PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan,
-};
+pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan};
 pub use preconditioner::CmgPreconditioner;
 #[cfg(feature = "parallel")]
 pub use preconditioner::ParallelCmgPlan;

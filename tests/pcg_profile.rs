@@ -1,8 +1,8 @@
 #![cfg(feature = "profiling")]
 
 use cmg::{
-    CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor,
-    ParallelOptions, PcgOptions, profile_pcg_with_plan, solve_pcg_with_plan,
+    CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
+    PcgOptions, profile_pcg_with_plan, solve_pcg_with_plan,
 };
 
 fn worker_firm_graph(per_side: usize) -> Laplacian {
