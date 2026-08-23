@@ -1,0 +1,45 @@
+name: Profile contraction after compact labels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/profile-contraction-after-compact-labels.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Profile contraction subphases
+        run: python scripts/profile_contraction_after_compact_labels.py
+
+      - name: Commit profile checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: profile contraction after compact labels'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/contraction-subphase-post-labels.json || true
