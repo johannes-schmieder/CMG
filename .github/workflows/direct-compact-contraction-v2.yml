@@ -1,0 +1,29 @@
+name: Direct compact coarse contraction v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/direct-compact-contraction-v2.yml'
+      - 'scripts/direct_compact_contraction_gate_v2.py'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify corrected direct compact coarse-edge construction
+        run: python scripts/direct_compact_contraction_gate_v2.py
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/direct-compact-contraction-latest.json || true
