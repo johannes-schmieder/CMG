@@ -1,0 +1,15 @@
+{
+  "accepted": false,
+  "baseline_sha": "1bf83b76844ce0808b52c062c80bec6880d187bc",
+  "cases": {},
+  "decision_reason": "experiment failed: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "routed-inplace-endpoint-radix",
+  "routing": {
+    "minimum_edges": 262144,
+    "minimum_edges_per_coarse_vertex": 4,
+    "parallel_path_changed": false
+  },
+  "schema_version": 1,
+  "validation": "not_run"
+}

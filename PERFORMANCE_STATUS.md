@@ -6,17 +6,13 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Current recovery point
 
-- Repository head before this cleanup: `db6198ec31ccd2b23700081c785be6712a6e4f6e`.
-- Latest retained numerical checkpoint:
-  `701036624e312fa4a8e21a26297d8254b7dc0142`
-  (`perf: retain packed endpoint-key ordering after exact gate`).
-- The routed exact-capacity candidate completed full qualification but was
-  rejected and reverted; production numerical source remains on the previously
-  cross-platform-qualified one-pass contraction path.
-- `.ci/latest.json` records quality and Ubuntu/macOS/Windows success for
-  `bcc4f0ec3b46b692b055a7c5aef54de5f48768fb`, which contains the retained
-  packed-key implementation. Subsequent commits changed only documentation,
-  benchmark evidence, or completed one-shot automation.
+- Benchmark gate baseline: `1bf83b76844ce0808b52c062c80bec6880d187bc`.
+- The hierarchy phase profile completed successfully on the retained unstable
+  compact-edge sort; contraction remains the principal setup bottleneck.
+- Routed in-place endpoint radix was **not retained** after full numerical,
+  exact-allocation, and large-case timing qualification.
+- `.ci/latest.json` remains the authoritative three-platform qualification
+  record; the gate does not claim 8–32-core evidence.
 
 ## Retained performance work
 
@@ -94,20 +90,17 @@ The decision record is
 
 ## Next prepared optimization
 
-The in-place unstable compact-edge sort was retained after exact hierarchy and
-allocation qualification. Its geometric hierarchy-time ratio was
-0.907, and its geometric exact additional-peak
-ratio was 0.972.
-
-The next checkpoint is a read-only phase-profile refresh. A custom radix path
-will be considered only if contraction remains dominant after this simpler
-in-place improvement.
+The hierarchy phase profile attributes `72.4%` of measured setup time to coarse
+contraction overall. The routed in-place endpoint-radix candidate was
+**not retained**. The next change must therefore be selected from a refreshed
+contraction profile rather than from unmeasured micro-optimization.
 
 ## Remaining major work
 
+- Refresh the hierarchy profile if the radix route is retained; otherwise add a
+  contraction subphase profiler before another source mutation.
 - Extend user-facing memory/performance guidance for automatic, explicit
   within-solve, and explicit across-RHS execution.
-- Identify the remaining hierarchy-setup bottleneck with read-only phase timing.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
   hardware; ordinary hosted runners currently expose only four logical CPUs.
 

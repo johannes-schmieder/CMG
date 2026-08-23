@@ -410,13 +410,44 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/unstable-edge-sort-latest.json`.
 
+### Hierarchy phase-profile refresh — 2026-08-23
+
+- The read-only profile completed successfully after the retained unstable sort.
+- Coarse contraction remains the aggregate dominant setup phase at `72.4%` of
+  attributed hierarchy time, including `65.1%` on worker–firm and `81.9%` on
+  dense worker–firm. Path setup is instead dominated by forest splitting.
+- Manual phase attribution reproduced production terminal reasons, level sizes,
+  nonzero counts, and fill accounting before timing was interpreted.
+- No numerical production behavior changed in this profile.
+- Machine-readable evidence:
+  `.ci/performance/hierarchy-phase-profile.json`.
+
+### Routed in-place endpoint-radix checkpoint — 2026-08-23
+
+- The safe in-place MSD endpoint-radix candidate was **not retained**.
+- It is routed only for large serial compact coarse-edge buffers with at least
+  four mapped contributions per coarse vertex; path-like levels retain the
+  comparison sort, and the existing parallel sort is unchanged.
+- Exact weight total ordering inside duplicate endpoint groups and compensated
+  summation are preserved.
+- Validation status: `not_run`.
+- Geometric hierarchy-time ratio:
+  `nan`.
+- Worst per-case hierarchy-time ratio:
+  `nan`.
+- Geometric exact additional-peak ratio:
+  `nan`.
+- Machine-readable evidence:
+  `.ci/performance/radix-endpoint-sort-latest.json`.
+
 ## Current next action
 
-1. Re-run the hierarchy phase profiler on the retained in-place unstable sort
-   to quantify the remaining contraction share.
-2. Benchmark a safe deterministic radix endpoint ordering only if contraction
-   remains the dominant phase after the lower-memory in-place win.
-3. Preserve exact weight ordering within duplicate endpoint groups,
-   compensated summation, path performance, and requested-allocation limits.
+1. Use the refreshed phase profile and radix decision to select the next
+   contraction optimization; do not alter path forest splitting without a
+   separate path-specific profile and gate.
+2. If radix is retained, refresh the phase profile and test whether mapping,
+   duplicate compaction, or diagonal construction is now dominant.
+3. If radix is rejected, add a read-only contraction subphase profiler before
+   attempting another sorting algorithm.
 4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
    hardware is available.
