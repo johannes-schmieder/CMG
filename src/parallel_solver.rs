@@ -11,11 +11,12 @@ use crate::{
 /// Default finest-graph edge threshold for planned single-RHS execution.
 ///
 /// This conservative threshold is derived from the retained hosted-runner
-/// full-PCG crossover matrix: 300,000-edge sparse worker-firm systems did not
-/// benefit materially, while 375,000-edge and larger measured systems did.
+/// full-PCG crossover matrix. It is measured in canonical retained edges:
+/// nominal 300,000-edge sparse worker-firm systems stay below the threshold,
+/// while the nominal 375,000-edge class crosses it and benefits materially.
 /// It is a routing heuristic rather than a mathematical CMG constant and can
 /// be overridden through [`ParallelPcgPolicy`].
-pub const DEFAULT_MIN_PLANNED_EDGES: usize = 375_000;
+pub const DEFAULT_MIN_PLANNED_EDGES: usize = 350_000;
 
 /// Routing policy for a prepared parallel PCG solver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
