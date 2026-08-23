@@ -1,0 +1,6 @@
+{
+  "experiment": "parallel-cmg-routing-diagnostic",
+  "output": "    Updating crates.io index\n Downloading crates ...\n  Downloaded either v1.18.0\n  Downloaded crossbeam-epoch v0.9.20\n  Downloaded crossbeam-deque v0.8.7\n  Downloaded crossbeam-utils v0.8.22\n  Downloaded rayon-core v1.13.0\n  Downloaded rayon v1.12.0\n   Compiling crossbeam-utils v0.8.22\n   Compiling crossbeam-epoch v0.9.20\n   Compiling crossbeam-deque v0.8.7\n   Compiling rayon-core v1.13.0\n    Checking either v1.18.0\n    Checking rayon v1.12.0\n    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)\nerror[E0599]: no method named `level_operator` found for reference `&preconditioner::ParallelCmgPlan` in the current scope\n   --> src/preconditioner.rs:497:35\n    |\n497 |         let parallel_level = plan.level_operator(level_index).is_some();\n    |                                   ^^^^^^^^^^^^^^ method not found in `&preconditioner::ParallelCmgPlan`\n\nFor more information about this error, try `rustc --explain E0599`.\nerror: could not compile `cmg` (lib test) due to 1 previous error\nwarning: build failed, waiting for other jobs to finish...\nerror: could not compile `cmg` (lib) due to 1 previous error\n",
+  "returncode": 101,
+  "schema_version": 1
+}
