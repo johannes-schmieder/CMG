@@ -1,7 +1,11 @@
+# Armed after the workflow existed on the default branch.
 name: Parallel endpoint-first compact sort gate
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/parallel-endpoint-sort-gate.yml'
 
 permissions:
   contents: write
