@@ -768,9 +768,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Geometric hierarchy-time ratio: `0.9549888147228235`.
 - Evidence: `.ci/performance/lean-forest-hierarchy-latest.json`.
 
+### Post-lean-forest routing requalification — 2026-08-23
+
+- Status: `success`.
+- Routing / metadata / numerical failures: `0` / `0` / `0`.
+- Planned-case geometric speedup: `1.5911556967322051`.
+- Evidence: `.ci/performance/post-lean-forest-routing.json`.
+
 ## Current next action
 
-1. Re-run the full routing matrix if the lean forest hierarchy path is retained.
-2. Refresh large hierarchy peak-memory guidance using the cumulative retained changes.
-3. Continue sorting work only with a design that clears both speed and peak-memory gates.
+1. Profile hierarchy forest subphases after the retained lean construction path.
+2. Refresh cumulative large-graph peak-memory guidance.
+3. Continue sort-dominant contraction work only with a design that clears both speed and peak-memory gates.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

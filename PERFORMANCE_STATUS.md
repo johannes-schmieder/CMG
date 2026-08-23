@@ -306,3 +306,14 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Serial/planned PCG ratios: `1.0105348490677508` / `1.0070062607771673`.
 - The complete public `ForestGrouping` diagnostic path is unchanged.
 - Evidence: `.ci/performance/lean-forest-hierarchy-latest.json`.
+
+## Post-lean-forest routing requalification
+
+- Status: `success`.
+- Source SHA: `ff86a5a69982edc305ef3f078b471736623a09aa`.
+- Routing failures: `0`.
+- Metadata failures: `0`.
+- Numerical failures: `0`.
+- Planned-case geometric speedup: `1.5911556967322051`.
+- Maximum scaled serial/planned solution difference: `5.605302390305238e-10`.
+- Evidence: `.ci/performance/post-lean-forest-routing.json`.
