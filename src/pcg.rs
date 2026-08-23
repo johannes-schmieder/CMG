@@ -428,8 +428,8 @@ pub fn solve_pcg_with_plan_and_workspace(
     workspace.direction.fill(0.0);
     workspace.matrix_direction.fill(0.0);
 
-    let initial_residual_norm = euclidean_norm(rhs);
-    let projected_initial_norm = euclidean_norm(&workspace.projected_rhs);
+    let initial_residual_norm = euclidean_norm_with_executor(rhs, executor);
+    let projected_initial_norm = euclidean_norm_with_executor(&workspace.projected_rhs, executor);
     let operator_bound = graph.operator_norm_bound();
     let initial_tolerance = allowed_residual(options, initial_residual_norm, operator_bound, 0.0);
     if initial_residual_norm <= initial_tolerance {
@@ -496,14 +496,14 @@ pub fn solve_pcg_with_plan_and_workspace(
         components
             .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
 
-        let solution_norm = euclidean_norm(&workspace.solution);
+        let solution_norm = euclidean_norm_with_executor(&workspace.solution, executor);
         last_tolerance = allowed_residual(
             options,
             initial_residual_norm,
             operator_bound,
             solution_norm,
         );
-        let recursive_residual_norm = euclidean_norm(&workspace.residual);
+        let recursive_residual_norm = euclidean_norm_with_executor(&workspace.residual, executor);
         let candidate = recursive_residual_norm <= last_tolerance;
         let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
         let mut restarted = false;
@@ -750,7 +750,7 @@ fn recompute_residual_with_plan(
     for (value, rhs_value) in residual.iter_mut().zip(rhs) {
         *value = *rhs_value - *value;
     }
-    Ok(euclidean_norm(residual))
+    Ok(euclidean_norm_with_executor(residual, executor))
 }
 
 fn recompute_residual(
@@ -793,6 +793,43 @@ fn original_residual_norm(
 
 fn dot(left: &[f64], right: &[f64]) -> f64 {
     compensated_sum(left.iter().zip(right).map(|(x, y)| x * y))
+}
+
+#[cfg(feature = "parallel")]
+fn euclidean_norm_with_executor(values: &[f64], executor: &ParallelExecutor) -> f64 {
+    let options = executor.options();
+    let parallel_floor = options
+        .reduction_chunk_size
+        .saturating_mul(executor.thread_count())
+        .saturating_mul(2);
+    let scale = if executor.should_parallel(values.len()) && values.len() >= parallel_floor {
+        executor.install(|| {
+            values
+                .par_chunks(options.reduction_chunk_size)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .map(|value| value.abs())
+                        .fold(0.0_f64, f64::max)
+                })
+                .reduce(|| 0.0_f64, f64::max)
+        })
+    } else {
+        values
+            .iter()
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max)
+    };
+    if scale == 0.0 {
+        0.0
+    } else {
+        scale
+            * compensated_sum(values.iter().map(|value| {
+                let scaled = *value / scale;
+                scaled * scaled
+            }))
+            .sqrt()
+    }
 }
 
 fn euclidean_norm(values: &[f64]) -> f64 {

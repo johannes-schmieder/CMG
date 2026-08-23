@@ -105,3 +105,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric full-solve ratio: `0.996x`.
 - Evidence: `.ci/performance/fused-centering-dot-latest.json`.
 
+## Exact parallel norm-scale gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Planned geometric full-solve ratio: `0.971x`.
+- Evidence: `.ci/performance/parallel-exact-norm-scale-latest.json`.
+

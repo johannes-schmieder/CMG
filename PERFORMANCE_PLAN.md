@@ -600,6 +600,22 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Centering subtraction, product evaluation, and Neumaier accumulation retain the same vertex order as the former separate loops. Every non-timing benchmark field was required to match exactly.
 - Machine-readable evidence: `.ci/performance/fused-centering-dot-latest.json`.
 
+### Exact parallel norm-scale checkpoint — 2026-08-23
+
+- Parallel max-absolute passes for planned-PCG norms were **retained**.
+- Qualification status: `success`.
+- Decision: full qualification passed; parallel max-absolute norm passes improved planned solves with exact results.
+
+| Case | Serial solve ratio | Planned solve ratio |
+|---|---:|---:|
+| path-150k | 0.983x | 0.955x |
+| worker-firm-300k | 0.950x | 0.939x |
+| worker-firm-600k | 1.011x | 0.969x |
+| dense-worker-firm-400k | 0.984x | 1.021x |
+
+- Only the order-independent maximum pass is parallel. The compensated squared-sum pass remains serial in its original order, and every non-timing benchmark field was required to match exactly.
+- Machine-readable evidence: `.ci/performance/parallel-exact-norm-scale-latest.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest
