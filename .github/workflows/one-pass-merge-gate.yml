@@ -1,0 +1,45 @@
+name: One-pass compensated duplicate merge gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-pass-merge-gate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify one-pass duplicate-group merging
+        run: python scripts/one_pass_merge_gate.py
+
+      - name: Commit decision checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: record one-pass compensated merge gate'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
+
+      - name: Show decision
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/one-pass-merge-latest.json || true
