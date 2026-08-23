@@ -465,13 +465,23 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Production numerical behavior was unchanged.
 - Machine-readable evidence:
   `.ci/performance/contraction-subphase-profile.json`.
+### Two-stage endpoint/weight sort probe — 2026-08-23
+
+- Benchmark-only candidate: **not promising** for a production qualification gate.
+- Active worker–firm geometric sorting ratio: `nan`.
+- Active worker–firm geometric manual-contraction ratio: `nan`.
+- Worst per-case sorting ratio, including the path guard: `nan`.
+- Exact coarse-graph equivalence passed inside every sampled level.
+- No production numerical source was retained by this probe.
+- Machine-readable evidence:
+  `.ci/performance/two-stage-sort-probe.json`.
+
 ## Current next action
 
-1. Use the successful contraction subphase profile to benchmark-gate the
-   next `sorting` optimization; do not change unrelated numerical code.
-2. Preserve exact coarse-graph ordering, compensated duplicate summation,
-   hierarchy metadata, and original-system solve certification.
-3. Extend user-facing guidance for automatic, within-solve, and
-   across-RHS parallel execution.
-4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when
-   suitable hardware is available.
+1. Do not mutate production sorting for the two-stage candidate; profile comparison-sort call patterns or pursue parallel setup qualification instead.
+2. Preserve endpoint order, weight-bit order within duplicate groups,
+   compensated summation, hierarchy metadata, and certified solve results.
+3. Extend user-facing guidance for automatic, within-solve, and across-RHS
+   parallel execution.
+4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+   hardware is available.

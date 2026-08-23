@@ -90,10 +90,10 @@ The decision record is
 
 ## Next prepared optimization
 
-The hierarchy phase profile attributes `72.4%` of measured setup time to coarse
-contraction overall. The routed in-place endpoint-radix candidate was
-**not retained**. The next change must therefore be selected from a refreshed
-contraction profile rather than from unmeasured micro-optimization.
+The successful contraction subphase profile assigns 78.0% of aggregate manual
+contraction time to sorting. The benchmark-only two-stage endpoint/weight sort
+was **not promising**: active geometric sorting ratio `nan` and manual
+contraction ratio `nan`. Do not mutate production sorting for the two-stage candidate; profile comparison-sort call patterns or pursue parallel setup qualification instead.
 
 ## Latest contraction subphase evidence
 
@@ -106,12 +106,11 @@ every timing was accepted. See
 
 ## Remaining major work
 
-- Benchmark-gate a narrowly scoped `sorting` optimization selected
-  from the successful subphase profile.
-- Extend user-facing memory/performance guidance for automatic,
-  explicit within-solve, and explicit across-RHS execution.
-- Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on
-  suitable hardware; ordinary hosted runners expose only four logical CPUs.
+- Select another sorting/setup candidate from measured evidence; do not retain the two-stage probe.
+- Extend user-facing memory/performance guidance for automatic, explicit
+  within-solve, and explicit across-RHS execution.
+- Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
+  hardware; ordinary hosted runners expose only four logical CPUs.
 
 ## Recovery rule
 

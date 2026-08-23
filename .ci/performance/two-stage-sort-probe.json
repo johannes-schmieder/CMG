@@ -1,0 +1,10 @@
+{
+  "baseline_sha": "f8bfd497eb3964f4feeef5c328ae76431bba84e9",
+  "cases": {},
+  "decision_reason": "probe failed: command failed (101): cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings')",
+  "experiment": "two-stage-endpoint-weight-sort-probe",
+  "promising_for_full_gate": false,
+  "schema_version": 1,
+  "status": "failure"
+}
