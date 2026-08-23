@@ -94,9 +94,14 @@ The decision record is
 
 ## Next prepared optimization
 
-The read-only hierarchy phase profiler did not complete successfully. Inspect
-`.ci/performance/hierarchy-phase-profile.json` and repair the benchmark before
-staging another production numerical optimization.
+The in-place unstable compact-edge sort was retained after exact hierarchy and
+allocation qualification. Its geometric hierarchy-time ratio was
+0.907, and its geometric exact additional-peak
+ratio was 0.972.
+
+The next checkpoint is a read-only phase-profile refresh. A custom radix path
+will be considered only if contraction remains dominant after this simpler
+in-place improvement.
 
 ## Remaining major work
 

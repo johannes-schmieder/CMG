@@ -91,7 +91,7 @@ impl Laplacian {
         I: IntoIterator<Item = (usize, usize, f64)>,
     {
         let mut raw = collect_validated_edges(vertex_count, edges)?;
-        raw.sort_by(compare_raw_edges);
+        raw.sort_unstable_by(compare_raw_edges);
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
@@ -113,7 +113,7 @@ impl Laplacian {
         if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
             executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
         } else {
-            raw.sort_by(compare_raw_edges);
+            raw.sort_unstable_by(compare_raw_edges);
         }
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
@@ -122,7 +122,7 @@ impl Laplacian {
         vertex_count: usize,
         mut raw: Vec<Edge>,
     ) -> Result<Self, CmgError> {
-        raw.sort_by(compare_raw_edges);
+        raw.sort_unstable_by(compare_raw_edges);
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
@@ -135,7 +135,7 @@ impl Laplacian {
         if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
             executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
         } else {
-            raw.sort_by(compare_raw_edges);
+            raw.sort_unstable_by(compare_raw_edges);
         }
         Self::from_sorted_raw_edges(vertex_count, raw)
     }

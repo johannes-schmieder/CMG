@@ -384,9 +384,39 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/hierarchy-phase-profile.json`.
 
+### Unstable compact-edge sort checkpoint — 2026-08-23
+
+- Replacing stable comparison sorting with in-place unstable comparison sorting
+  was **retained**. The comparator remains a total order on packed endpoint
+  key and weight, so equal-comparator edges are numerically identical.
+- Geometric hierarchy-time ratio: 0.907.
+- Geometric exact additional-peak ratio:
+  0.972.
+- Worst per-case time ratio: 0.998.
+- Full qualification status: `success`.
+- Machine-readable evidence:
+  `.ci/performance/unstable-edge-sort-latest.json`.
+
+### Unstable compact-edge sort checkpoint — 2026-08-23
+
+- Replacing stable comparison sorting with in-place unstable comparison sorting
+  was **retained**. The comparator remains a total order on packed endpoint
+  key and weight, so equal-comparator edges are numerically identical.
+- Geometric hierarchy-time ratio: 0.907.
+- Geometric exact additional-peak ratio:
+  0.972.
+- Worst per-case time ratio: 0.998.
+- Full qualification status: `success`.
+- Machine-readable evidence:
+  `.ci/performance/unstable-edge-sort-latest.json`.
+
 ## Current next action
 
-1. Inspect the recorded compiler/test failure and repair the read-only profiler.
-2. Do not mutate production numerical source until the phase profile succeeds.
-3. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
+1. Re-run the hierarchy phase profiler on the retained in-place unstable sort
+   to quantify the remaining contraction share.
+2. Benchmark a safe deterministic radix endpoint ordering only if contraction
+   remains the dominant phase after the lower-memory in-place win.
+3. Preserve exact weight ordering within duplicate endpoint groups,
+   compensated summation, path performance, and requested-allocation limits.
+4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
    hardware is available.
