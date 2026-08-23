@@ -1,0 +1,56 @@
+{
+  "runs": [
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-23T16:37:16Z",
+      "head_sha": "60415d0c69bf172c3fb463e2b2852b6914d7b55d",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32652229584",
+      "id": 32652229584,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-23T16:37:16Z"
+    },
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-23T16:31:08Z",
+      "head_sha": "eaaff984ae67a2fd50fda64f91d2de866b3b7348",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32651910071",
+      "id": 32651910071,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-23T16:31:08Z"
+    },
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-23T16:28:11Z",
+      "head_sha": "dcd3391c29cbe85ba8c32744cb0ea69dd46db0ef",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32651756383",
+      "id": 32651756383,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-23T16:28:11Z"
+    },
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-23T16:23:24Z",
+      "head_sha": "bb64464c5e9719a652f4f8d7caf1c456dcfb719f",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32651510298",
+      "id": 32651510298,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-23T16:23:24Z"
+    },
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-23T16:11:56Z",
+      "head_sha": "f5a61859ede1087532d916e14623e6f99239f3cf",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32650926705",
+      "id": 32650926705,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-23T16:11:56Z"
+    }
+  ],
+  "schema_version": 1,
+  "workflow": "pcg-phase-profile.yml"
+}
