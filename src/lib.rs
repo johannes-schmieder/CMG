@@ -44,6 +44,8 @@ pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_wit
 #[cfg(feature = "parallel")]
 pub use pcg::{solve_pcg_batch_parallel, solve_pcg_batch_with_executor};
 pub use preconditioner::CmgPreconditioner;
+#[cfg(feature = "parallel")]
+pub use preconditioner::ParallelCmgPlan;
 pub use sddm::{SddmAugmentation, SddmMatrix};
 pub use sddm_solver::{SddmResult, SddmSolver, SddmWorkspace, solve_sddm};
 pub use workspace::CmgWorkspace;

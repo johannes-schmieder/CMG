@@ -1,11 +1,27 @@
 #![cfg(feature = "parallel")]
 
 use cmg::{
-    Aggregation, CmgError, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian,
+    Aggregation, CmgError, CmgHierarchy, CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan,
     ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, build_forest_grouping,
     build_forest_grouping_with_executor, maximum_weight_forest,
     maximum_weight_forest_with_executor, solve_pcg_batch, solve_pcg_batch_with_executor,
 };
+
+fn worker_firm_problem(per_side: usize) -> (Laplacian, Vec<f64>) {
+    let firm_offset = per_side;
+    let mut edges = Vec::with_capacity(3 * per_side);
+    for worker in 0..per_side {
+        edges.push((worker, firm_offset + worker, 1.0));
+        edges.push((worker, firm_offset + (worker + 1) % per_side, 0.75));
+        edges.push((worker, firm_offset + (5 * worker + 17) % per_side, 1.25));
+    }
+    let graph = Laplacian::from_edges(2 * per_side, edges).unwrap();
+    let target: Vec<f64> = (0..2 * per_side)
+        .map(|vertex| (vertex % 127) as f64 / 23.0 - 2.0)
+        .collect();
+    let rhs = graph.matvec(&target).unwrap();
+    (graph, rhs)
+}
 
 fn path_problem(vertex_count: usize, rhs_count: usize) -> (Laplacian, Vec<Vec<f64>>) {
     let graph = Laplacian::from_edges(
@@ -212,4 +228,109 @@ fn parallel_contraction_and_hierarchy_match_serial_exactly() {
     let parallel_preconditioner =
         CmgPreconditioner::build_with_executor(&graph, options, &executor).unwrap();
     assert_eq!(serial_preconditioner, parallel_preconditioner);
+}
+
+#[test]
+fn parallel_cmg_plan_matches_stationary_cycle_and_rejects_other_hierarchies() {
+    let (graph, rhs) = worker_firm_problem(10_000);
+    let options = CmgOptions {
+        direct_threshold: 64,
+        ..CmgOptions::default()
+    };
+    let preconditioner = CmgPreconditioner::build(&graph, options).unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 4,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+    let plan = ParallelCmgPlan::build(&preconditioner, &executor).unwrap();
+    assert!(plan.operator_count() > 0);
+    assert!(plan.byte_len() > 0);
+
+    let mut serial_output = vec![0.0; graph.vertex_count()];
+    let mut serial_workspace = preconditioner.workspace();
+    preconditioner
+        .apply_compatible_into(&rhs, &mut serial_output, &mut serial_workspace)
+        .unwrap();
+
+    let mut parallel_output = vec![0.0; graph.vertex_count()];
+    let mut parallel_workspace = preconditioner.workspace();
+    plan.apply_compatible_into(
+        &preconditioner,
+        &rhs,
+        &mut parallel_output,
+        &mut parallel_workspace,
+        &executor,
+    )
+    .unwrap();
+
+    for (serial, parallel) in serial_output.iter().zip(&parallel_output) {
+        let scale = 1.0_f64.max(serial.abs()).max(parallel.abs());
+        assert!((serial - parallel).abs() <= 2.0e-11 * scale);
+    }
+
+    let rebuilt = Laplacian::from_edges(
+        graph.vertex_count(),
+        graph
+            .edges()
+            .iter()
+            .map(|edge| (edge.u(), edge.v(), edge.weight())),
+    )
+    .unwrap();
+    let other_preconditioner = CmgPreconditioner::build(&rebuilt, options).unwrap();
+    let error = plan
+        .apply_compatible_into(
+            &other_preconditioner,
+            &rhs,
+            &mut parallel_output,
+            &mut parallel_workspace,
+            &executor,
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        CmgError::InvalidHierarchy {
+            context: "parallel CMG plan belongs to a different hierarchy",
+        }
+    );
+}
+
+#[test]
+fn one_thread_parallel_cmg_plan_is_bitwise_serial() {
+    let (graph, right_hand_sides) = path_problem(4_000, 1);
+    let options = CmgOptions {
+        direct_threshold: 64,
+        ..CmgOptions::default()
+    };
+    let preconditioner = CmgPreconditioner::build(&graph, options).unwrap();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 1,
+        min_parallel_len: 1,
+        ..ParallelOptions::default()
+    })
+    .unwrap();
+    let plan = ParallelCmgPlan::build(&preconditioner, &executor).unwrap();
+    assert_eq!(plan.operator_count(), 0);
+    assert_eq!(plan.byte_len(), 0);
+
+    let rhs = &right_hand_sides[0];
+    let mut serial_output = vec![0.0; graph.vertex_count()];
+    let mut serial_workspace = preconditioner.workspace();
+    preconditioner
+        .apply_compatible_into(rhs, &mut serial_output, &mut serial_workspace)
+        .unwrap();
+
+    let mut parallel_output = vec![0.0; graph.vertex_count()];
+    let mut parallel_workspace = preconditioner.workspace();
+    plan.apply_compatible_into(
+        &preconditioner,
+        rhs,
+        &mut parallel_output,
+        &mut parallel_workspace,
+        &executor,
+    )
+    .unwrap();
+
+    assert_eq!(serial_output, parallel_output);
 }

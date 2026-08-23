@@ -108,6 +108,25 @@ impl Aggregation {
         Ok(())
     }
 
+    #[cfg(feature = "parallel")]
+    pub(crate) fn prolong_add_into_with_executor(
+        &self,
+        coarse: &[f64],
+        fine: &mut [f64],
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
+        validate_prolong_dimensions(self, coarse, fine)?;
+        if !executor.should_parallel(fine.len()) {
+            return self.prolong_add_into(coarse, fine);
+        }
+        executor.install(|| {
+            fine.par_iter_mut()
+                .zip(self.labels.par_iter())
+                .for_each(|(value, &label)| *value += coarse[label]);
+        });
+        Ok(())
+    }
+
     /// Form the exact graph Laplacian `R L R^T`.
     pub fn contract(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;

@@ -234,6 +234,10 @@ impl Laplacian {
         Arc::ptr_eq(&self.lineage, &other.lineage)
     }
 
+    pub(crate) const fn lineage(&self) -> &Arc<()> {
+        &self.lineage
+    }
+
     /// Compute `output = L * input` without allocating.
     pub fn matvec_into(&self, input: &[f64], output: &mut [f64]) -> Result<(), CmgError> {
         if input.len() != self.vertex_count {

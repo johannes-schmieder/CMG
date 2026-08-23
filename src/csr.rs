@@ -5,6 +5,7 @@ use crate::ParallelExecutor;
 use crate::{CmgError, Laplacian};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 enum ColumnIndices {
@@ -31,12 +32,22 @@ impl ColumnIndices {
 /// own their output entries, making this representation suitable for
 /// deterministic parallel matrix-vector products without atomics. Canonical
 /// graph ordering guarantees ascending neighbor indices within every row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CsrLaplacian {
     vertex_count: usize,
     row_offsets: Vec<usize>,
     columns: ColumnIndices,
     weights: Vec<f64>,
+    source_lineage: Arc<()>,
+}
+
+impl PartialEq for CsrLaplacian {
+    fn eq(&self, other: &Self) -> bool {
+        self.vertex_count == other.vertex_count
+            && self.row_offsets == other.row_offsets
+            && self.columns == other.columns
+            && self.weights == other.weights
+    }
 }
 
 impl CsrLaplacian {
@@ -113,6 +124,7 @@ impl CsrLaplacian {
             row_offsets,
             columns,
             weights,
+            source_lineage: Arc::clone(graph.lineage()),
         })
     }
 
@@ -126,6 +138,10 @@ impl CsrLaplacian {
     #[must_use]
     pub fn directed_entry_count(&self) -> usize {
         self.weights.len()
+    }
+
+    pub(crate) fn shares_lineage(&self, graph: &Laplacian) -> bool {
+        Arc::ptr_eq(&self.source_lineage, graph.lineage())
     }
 
     /// Return whether neighbor indices use four-byte storage.
