@@ -568,6 +568,22 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - The candidate preserves the centering subtraction order and the norm maximum/squared-sum orders. Every non-timing benchmark field was required to match exactly.
 - Machine-readable evidence: `.ci/performance/fused-centering-norm-latest.json`.
 
+### Parallel outer-PCG centering checkpoint — 2026-08-23
+
+- Parallel mean subtraction in the planned solver was **not retained**.
+- Qualification status: `success`.
+- Decision: qualification passed but the planned full-solve timing gate was not met.
+
+| Case | Serial solve ratio | Planned solve ratio |
+|---|---:|---:|
+| path-150k | 1.007x | 1.044x |
+| worker-firm-300k | 1.008x | 1.017x |
+| worker-firm-600k | 1.000x | 1.004x |
+| dense-worker-firm-400k | 1.000x | 1.036x |
+
+- Compensated component sums and means remain serial and unchanged. Only independent per-vertex subtraction is parallelized, and every non-timing benchmark field was required to match exactly.
+- Machine-readable evidence: `.ci/performance/parallel-outer-centering-latest.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest

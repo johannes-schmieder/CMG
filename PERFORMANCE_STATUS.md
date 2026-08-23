@@ -91,3 +91,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric full-solve ratio: `1.004x`.
 - Evidence: `.ci/performance/fused-centering-norm-latest.json`.
 
+## Parallel outer-PCG centering gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Planned geometric full-solve ratio: `1.025x`.
+- Evidence: `.ci/performance/parallel-outer-centering-latest.json`.
+

@@ -1,0 +1,162 @@
+{
+  "acceptance_limits": {
+    "planned_best_time_ratio_max": 0.96,
+    "planned_geometric_time_ratio_max": 0.985,
+    "planned_worst_time_ratio_max": 1.04,
+    "serial_worst_time_ratio_max": 1.04
+  },
+  "accepted": false,
+  "baseline_sha": "84d4c9e3e410f5f18a40c0b97bf9511c79c754fc",
+  "cases": {
+    "dense-worker-firm-400k": {
+      "arguments": [
+        "dense-worker-firm",
+        25000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 58563805.0,
+      "baseline_serial_ns": 124115903.5,
+      "candidate_planned_ns": 60662206.0,
+      "candidate_serial_ns": 124175765.0,
+      "metadata": {
+        "auto_execution": "Planned",
+        "case": "dense-worker-firm",
+        "edges": 399930,
+        "input_edges": 400000,
+        "levels": 6,
+        "max_scaled_difference": 0.0,
+        "operators": 5,
+        "plan_bytes": 45175784,
+        "planned_backward_error": 6.156236952861186e-09,
+        "planned_iterations": 9,
+        "planned_residual_norm": 0.0003279385605283138,
+        "repetitions": 3,
+        "scale": 25000,
+        "serial_backward_error": 6.156236952861186e-09,
+        "serial_iterations": 9,
+        "serial_residual_norm": 0.0003279385605283138,
+        "threads": 4,
+        "vertices": 50000,
+        "workspace_bytes": 5474184
+      },
+      "planned_ratio": 1.0358310222500058,
+      "serial_ratio": 1.000482303220715
+    },
+    "path-150k": {
+      "arguments": [
+        "path",
+        150000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 137301981.0,
+      "baseline_serial_ns": 132843045.0,
+      "candidate_planned_ns": 143308773.0,
+      "candidate_serial_ns": 133826267.0,
+      "metadata": {
+        "auto_execution": "Serial",
+        "case": "path",
+        "edges": 149999,
+        "input_edges": 149999,
+        "levels": 6,
+        "max_scaled_difference": 0.0,
+        "operators": 0,
+        "plan_bytes": 0,
+        "planned_backward_error": 7.551762186393004e-09,
+        "planned_iterations": 29,
+        "planned_residual_norm": 5.5120534666461645e-05,
+        "repetitions": 3,
+        "scale": 150000,
+        "serial_backward_error": 7.551762186393004e-09,
+        "serial_iterations": 29,
+        "serial_residual_norm": 5.5120534666461645e-05,
+        "threads": 4,
+        "vertices": 150000,
+        "workspace_bytes": 10918688
+      },
+      "planned_ratio": 1.0437487642658265,
+      "serial_ratio": 1.007401381080959
+    },
+    "worker-firm-300k": {
+      "arguments": [
+        "worker-firm",
+        100000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 138830849.0,
+      "baseline_serial_ns": 133888449.5,
+      "candidate_planned_ns": 141152945.5,
+      "candidate_serial_ns": 135021914.5,
+      "metadata": {
+        "auto_execution": "Serial",
+        "case": "worker-firm",
+        "edges": 299996,
+        "input_edges": 300000,
+        "levels": 6,
+        "max_scaled_difference": 0.0,
+        "operators": 5,
+        "plan_bytes": 15970688,
+        "planned_backward_error": 6.1478852947836375e-09,
+        "planned_iterations": 20,
+        "planned_residual_norm": 0.00010625731538737036,
+        "repetitions": 3,
+        "scale": 100000,
+        "serial_backward_error": 6.1478852947836375e-09,
+        "serial_iterations": 20,
+        "serial_residual_norm": 0.00010625731538737036,
+        "threads": 4,
+        "vertices": 200000,
+        "workspace_bytes": 14771800
+      },
+      "planned_ratio": 1.0167260844165837,
+      "serial_ratio": 1.0084657414753317
+    },
+    "worker-firm-600k": {
+      "arguments": [
+        "worker-firm",
+        200000,
+        3,
+        4
+      ],
+      "baseline_planned_ns": 257199570.5,
+      "baseline_serial_ns": 273240186.0,
+      "candidate_planned_ns": 258173416.0,
+      "candidate_serial_ns": 273349449.0,
+      "metadata": {
+        "auto_execution": "Planned",
+        "case": "worker-firm",
+        "edges": 599996,
+        "input_edges": 600000,
+        "levels": 7,
+        "max_scaled_difference": 0.0,
+        "operators": 6,
+        "plan_bytes": 33141840,
+        "planned_backward_error": 8.448314140708354e-09,
+        "planned_iterations": 19,
+        "planned_residual_norm": 0.00021911114836242713,
+        "repetitions": 3,
+        "scale": 200000,
+        "serial_backward_error": 8.448314140708354e-09,
+        "serial_iterations": 19,
+        "serial_residual_norm": 0.00021911114836242713,
+        "threads": 4,
+        "vertices": 400000,
+        "workspace_bytes": 29690296
+      },
+      "planned_ratio": 1.003786341859385,
+      "serial_ratio": 1.0003998789548474
+    }
+  },
+  "decision_reason": "qualification passed but the planned full-solve timing gate was not met",
+  "experiment": "parallel-outer-pcg-centering",
+  "planned_best_time_ratio": 1.003786341859385,
+  "planned_geometric_time_ratio": 1.024902456192042,
+  "planned_worst_time_ratio": 1.0437487642658265,
+  "run_id": "32653335112",
+  "schema_version": 1,
+  "serial_geometric_time_ratio": 1.0041802678694058,
+  "serial_worst_time_ratio": 1.0084657414753317,
+  "validation": "success"
+}
