@@ -179,9 +179,14 @@ impl Laplacian {
             raw.shrink_to_fit();
         }
 
-        let diagonal_nnz = diagonal.iter().filter(|degree| **degree != 0.0).count();
+        let mut diagonal_nnz = 0_usize;
+        let mut maximum_degree = 0.0_f64;
+        for &degree in &diagonal {
+            diagonal_nnz += usize::from(degree != 0.0);
+            maximum_degree = maximum_degree.max(degree);
+        }
         let matrix_nnz = diagonal_nnz + 2 * raw.len();
-        let operator_norm_bound = 2.0 * diagonal.iter().copied().fold(0.0, f64::max);
+        let operator_norm_bound = 2.0 * maximum_degree;
 
         Ok(Self {
             vertex_count,
@@ -563,5 +568,17 @@ mod fused_merge_diagonal_tests {
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod fused_diagonal_statistics_tests {
+    use super::Laplacian;
+
+    #[test]
+    fn one_pass_diagonal_statistics_match_expected_values() {
+        let graph = Laplacian::from_edges(4, [(0, 1, 2.0), (1, 2, 3.0)]).unwrap();
+        assert_eq!(graph.matrix_nnz(), 7);
+        assert_eq!(graph.operator_norm_bound().to_bits(), 10.0_f64.to_bits());
     }
 }

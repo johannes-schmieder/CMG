@@ -414,3 +414,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Graph-build / hierarchy-build ratios: `0.982x` / `0.982x`.
 - Worst peak-RSS ratio: `1.002x`.
 - Evidence: `.ci/performance/fused-merge-diagonal-latest.json`.
+
+## Fused diagonal-statistics gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Graph-build / hierarchy-build ratios: `0.981x` / `0.995x`.
+- Worst peak-RSS ratio: `1.001x`.
+- Evidence: `.ci/performance/fused-diagonal-statistics-latest.json`.

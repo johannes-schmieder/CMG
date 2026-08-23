@@ -862,6 +862,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; one canonical edge pass was removed with stable end-to-end setup gains.
 - Evidence: `.ci/performance/fused-merge-diagonal-latest.json`.
 
+### Fused diagonal-statistics checkpoint — 2026-08-23
+
+- Diagonal accumulation during canonical duplicate merging was **retained**.
+- Validation: `success`.
+- Geometric graph-build / hierarchy-build ratios: `0.981x` / `0.995x`.
+- Worst peak-RSS ratio: `1.001x`.
+- Decision: full qualification passed; one full diagonal-array pass was removed with stable end-to-end setup gains.
+- Evidence: `.ci/performance/fused-diagonal-statistics-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
