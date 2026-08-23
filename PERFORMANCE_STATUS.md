@@ -6,17 +6,17 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Current recovery point
 
-- Repository head before this status refresh: `7f2e2d62e5a5e2922a19013c749daa5638a92753`.
-- Latest substantive numerical checkpoint: `1f94d86c93a1fd5ccd2e4a9ca590c5b8cb197b77`
-  (`perf: retain direct compact contraction`).
-- The latest ordinary three-platform record currently names
-  `4ec2cde67cb8d4d4d6577ae8eb981445f2e5737b`; it passed formatting, Clippy,
-  rustdoc, benchmark-crate qualification, debug/release tests, release build,
-  and Ubuntu/macOS/Windows tests, but predates the retained numerical commit.
-- This status refresh intentionally triggers ordinary CI on the exact retained
-  source state. Do not begin another production source mutation until
-  `.ci/latest.json` records this checkpoint with both quality and
-  cross-platform status `success`.
+- Repository head before this status refresh:
+  `ebc7b69a8b175edf7758e574ed32d36ef0fc6efb`.
+- Latest substantive numerical checkpoint:
+  `ebc7b69a8b175edf7758e574ed32d36ef0fc6efb`
+  (`perf: add selectively routed parallel CMG plan`).
+- The retain gate passed full serial/all-feature validation on Ubuntu. This
+  status refresh intentionally triggers ordinary formatting, Clippy, rustdoc,
+  benchmark-crate qualification, debug/release tests, release build, and
+  Ubuntu/macOS/Windows testing on the exact retained source.
+- Do not begin the PCG integration mutation until `.ci/latest.json` records
+  this checkpoint with quality and cross-platform status `success`.
 
 ## Retained performance work
 
@@ -29,16 +29,19 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
   remain `usize`.
 - Graph construction compacts validated duplicate edges in retained 16-byte
   storage and trims unused capacity before levels are retained.
-- Coarse contraction now constructs retained 16-byte `Edge` values directly,
+- Coarse contraction constructs retained 16-byte `Edge` values directly,
   avoiding temporary 24-byte `(usize, usize, f64)` tuples in serial and
   parallel hierarchy construction.
 - CSR rows use compact columns and support deterministic atomics-free matvec.
 - A package-owned optional Rayon pool supports deterministic setup kernels and
   memory-bounded parallel batches.
+- The optional `ParallelCmgPlan` stores CSR operators only on routed
+  nonterminal levels. Sparse path-like cases retain the serial hierarchy and
+  build no parallel operators.
 - The official pinned C matvec/restriction/prolongation/full-cycle kernels are
   compiled in the benchmark-only crate and checked for numerical agreement.
-- A stable single-RHS solve benchmark exists at
-  `benchmarks/src/bin/single-rhs-solve.rs`.
+- Stable stationary-apply and single-RHS solve benchmarks are retained in the
+  benchmark crate.
 
 ## Current measured evidence
 
@@ -50,39 +53,43 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 - Direct compact contraction passed six million-scale serial and four-thread
   cases. Its geometric hierarchy-build time and peak-RSS ratios were
   `0.952x` and `0.924x`; the parallel-case ratios were `0.942x` and `0.883x`.
+- Selectively routed `ParallelCmgPlan` application had four-thread geometric
+  speedup `1.279x` with zero scaled numerical difference. It built no path
+  operator, measured `1.166x` on the 600,000-edge worker–firm case, and
+  `2.358x` on the 800,000-edge dense worker–firm case.
+- Optional plan storage remained below the configured 128 bytes per original
+  edge, with a measured maximum of about 112.71 bytes per edge.
 - These values are directional hosted-runner evidence, not a claim about
   8–32-core or NUMA scaling.
 
 ## Latest resolved benchmark gate
 
-The corrected direct compact-contraction gate completed with validation
-`success`, and the candidate was **retained**. The decision record is
-`.ci/performance/direct-compact-contraction-latest.json`.
+The broad parallel-plan candidate was rejected because it slowed the path case
+below its hard floor. The refined router then passed validation and was
+**retained**. Its decision record is
+`.ci/performance/parallel-cmg-routed-plan-latest.json`.
 
 ## Next prepared optimization
 
-After the cross-platform checkpoint closes, benchmark an optional
-`ParallelCmgPlan` rather than adding CSR storage to the ordinary preconditioner.
-The intended first checkpoint is:
+After the ordinary cross-platform checkpoint closes, integrate the optional
+plan into a separate parallel PCG path without changing the existing serial API:
 
-1. retain deterministic CSR operators only for nonterminal levels large enough
-   to use the caller's package-owned executor;
-2. keep the default serial hierarchy unchanged and dependency-free;
-3. parallelize CMG level matvecs, Jacobi vector kernels, and prolongation without
-   changing the recursive repeat schedule;
-4. validate one-thread serial behavior, multi-thread certified numerical
-   agreement, hierarchy ownership, memory overhead, and stationary-cycle speed;
-5. integrate the plan into the PCG outer loop only if the CMG-application gate
-   produces a material end-to-end signal.
+1. reuse one immutable `ParallelCmgPlan` and caller-owned workspace throughout
+   all PCG iterations;
+2. retain fresh original-system residual replacement and final certification;
+3. route graph matvec and CMG application independently so sparse/path cases
+   can remain serial;
+4. benchmark full end-to-end solves, not only stationary applications;
+5. retain the new public path only if iteration counts, certificates, memory,
+   and per-family runtime gates all pass.
 
 ## Remaining major work
 
-- Complete ordinary Ubuntu/macOS/Windows qualification of the retained direct
-  contraction source.
-- Rebase and qualify the optional parallel CMG application path against the
-  now-optimized contraction implementation.
-- Integrate and benchmark single-RHS parallel PCG only if the application path
-  wins under selective routing.
+- Complete ordinary Ubuntu/macOS/Windows qualification of the retained routed
+  plan.
+- Implement and qualify an opt-in single-RHS parallel PCG path.
+- Benchmark thread counts 1, 2, and 4 in the hosted environment and preserve an
+  explicit user thread-count control for future 8–32-core qualification.
 - Profile packed contraction keys and reusable contraction buffers.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
   hardware; ordinary hosted runners currently expose only four logical CPUs.
