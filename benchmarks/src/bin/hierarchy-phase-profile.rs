@@ -101,9 +101,7 @@ fn build_case(case: &str, scale: usize) -> BenchGraph {
         "path" => path_graph(scale),
         "worker-firm" => worker_firm_graph(scale, 3),
         "dense-worker-firm" => worker_firm_graph(scale, 16),
-        _ => panic!(
-            "unknown case {case}; expected path, worker-firm, or dense-worker-firm"
-        ),
+        _ => panic!("unknown case {case}; expected path, worker-firm, or dense-worker-firm"),
     }
 }
 
@@ -124,12 +122,11 @@ fn corrected_parent(
     threshold: f64,
 ) -> Vec<usize> {
     let mut final_parent = split_parent.to_vec();
-    let has_low_effective_degree =
-        graph
-            .diagonal()
-            .iter()
-            .zip(selected_weight)
-            .any(|(degree, weight)| *degree > 0.0 && *weight / *degree < threshold);
+    let has_low_effective_degree = graph
+        .diagonal()
+        .iter()
+        .zip(selected_weight)
+        .any(|(degree, weight)| *degree > 0.0 && *weight / *degree < threshold);
 
     if has_low_effective_degree {
         let mut selected_incident_weight = vec![0.0; graph.vertex_count()];
@@ -183,10 +180,7 @@ fn retain_level(
 
 fn retained_summary(levels: &[RetainedLevel]) -> RetainedSummary {
     RetainedSummary {
-        vertices: levels
-            .iter()
-            .map(|level| level.graph.vertex_count())
-            .sum(),
+        vertices: levels.iter().map(|level| level.graph.vertex_count()).sum(),
         edges: levels.iter().map(|level| level.graph.edge_count()).sum(),
         inverse_values: levels
             .iter()
@@ -256,13 +250,11 @@ fn profile_manual(graph: &Laplacian, options: CmgOptions) -> ManualProfile {
         times.low_degree_ns += low_degree_start.elapsed().as_nanos();
 
         let components_start = Instant::now();
-        let (labels, sizes) =
-            forest_components(&final_parent).expect("valid corrected forest");
+        let (labels, sizes) = forest_components(&final_parent).expect("valid corrected forest");
         times.forest_components_ns += components_start.elapsed().as_nanos();
 
         let aggregation_start = Instant::now();
-        let aggregation =
-            Aggregation::new(labels, sizes.len()).expect("valid forest aggregation");
+        let aggregation = Aggregation::new(labels, sizes.len()).expect("valid forest aggregation");
         times.aggregation_ns += aggregation_start.elapsed().as_nanos();
 
         let bookkeeping_start = Instant::now();
@@ -393,8 +385,7 @@ fn main() {
         CmgHierarchy::build(&bench_graph.graph, options).expect("production hierarchy");
     verify_profile(&warm_manual, &warm_hierarchy);
     black_box(
-        CmgPreconditioner::build(&bench_graph.graph, options)
-            .expect("production preconditioner"),
+        CmgPreconditioner::build(&bench_graph.graph, options).expect("production preconditioner"),
     );
 
     let mut manual_profiles = Vec::with_capacity(repetitions);
@@ -529,18 +520,16 @@ fn main() {
         if index > 0 {
             phase_json.push(',');
         }
-        write!(&mut phase_json, "\"{name}\":{value}")
-            .expect("writing to a String cannot fail");
+        write!(&mut phase_json, "\"{name}\":{value}").expect("writing to a String cannot fail");
     }
     phase_json.push('}');
 
-    let terminal_json = terminal_factor_median
-        .map_or_else(|| "null".to_owned(), |value| value.to_string());
+    let terminal_json =
+        terminal_factor_median.map_or_else(|| "null".to_owned(), |value| value.to_string());
     let dominant_share = dominant_ns as f64 / manual_total_ns.max(1) as f64;
     let attributed_share = attributed_ns as f64 / manual_total_ns.max(1) as f64;
     let hierarchy_over_manual = hierarchy_median_ns as f64 / manual_total_ns.max(1) as f64;
-    let finalization_estimate =
-        preconditioner_median_ns.saturating_sub(hierarchy_median_ns);
+    let finalization_estimate = preconditioner_median_ns.saturating_sub(hierarchy_median_ns);
 
     println!(
         concat!(

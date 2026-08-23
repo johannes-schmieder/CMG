@@ -1,0 +1,229 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded crossbeam-deque v0.8.7
+  Downloaded either v1.18.0
+  Downloaded crossbeam-epoch v0.9.20
+  Downloaded rayon-core v1.13.0
+  Downloaded crossbeam-utils v0.8.22
+  Downloaded rayon v1.12.0
+   Compiling crossbeam-utils v0.8.22
+   Compiling crossbeam-epoch v0.9.20
+   Compiling crossbeam-deque v0.8.7
+   Compiling rayon-core v1.13.0
+    Checking either v1.18.0
+    Checking rayon v1.12.0
+    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)
+    Checking cmg-benchmarks v0.1.0 (/home/runner/work/CMG/CMG/benchmarks)
+error: there is no argument named `case`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `case` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `scale`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `scale` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `repetitions`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `repetitions` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `hierarchy_median_ns`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `hierarchy_median_ns` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `preconditioner_median_ns`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `preconditioner_median_ns` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `finalization_estimate`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `finalization_estimate` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `terminal_json`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `terminal_json` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `manual_total_ns`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `manual_total_ns` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `attributed_ns`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `attributed_ns` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `attributed_share`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `attributed_share` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `hierarchy_over_manual`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `hierarchy_over_manual` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `dominant_phase`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `dominant_phase` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `dominant_share`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `dominant_share` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: there is no argument named `phase_json`
+   --> src/bin/hierarchy-phase-profile.rs:535:9
+    |
+535 | /         concat!(
+536 | |             "{{",
+537 | |             "\"case\":\"{case}\",",
+538 | |             "\"scale\":{scale},",
+...   |
+563 | |             "}}"
+564 | |         ),
+    | |_________^
+    |
+    = note: did you intend to capture a variable `phase_json` from the surrounding scope?
+    = note: to avoid ambiguity, `format_args!` cannot capture variables when the format string is expanded from a macro
+
+error: could not compile `cmg-benchmarks` (bin "hierarchy-phase-profile" test) due to 14 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `cmg-benchmarks` (bin "hierarchy-phase-profile") due to 14 previous errors
