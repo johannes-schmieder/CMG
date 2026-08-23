@@ -1,0 +1,178 @@
+name: Refresh prepared solver status
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-prepared-solver-status.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Update live recovery documents
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+
+          record = json.loads(
+              Path('.ci/performance/prepared-parallel-solver-latest.json').read_text()
+          )
+          if record.get('validation') != 'success' or record.get('accepted'):
+              raise SystemExit('expected a successfully qualified rejected prepared solver')
+
+          base = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+          geometric = record['geometric_auto_over_best']
+          worst = record['maximum_auto_over_best']
+          numerical = record['maximum_scaled_difference']
+          workspace = record['maximum_workspace_excess_bytes']
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          checkpoint = f'''### Prepared parallel solver checkpoint — 2026-08-23
+
+- The memory-aware prepared solver candidate was **not retained**.
+- Validation status: `success`; every numerical comparison matched with maximum
+  scaled difference `{numerical:.3g}`, and retained workspace excess was
+  `{workspace}` bytes.
+- Geometric/worst automatic-to-best explicit timing ratios were
+  `{geometric:.3f}x` / `{worst:.3f}x`.
+- The rejection was driven by one noisy single-RHS path case; production source
+  remained on the retained explicit serial, planned, and across-RHS APIs.
+- Machine-readable evidence:
+  `.ci/performance/prepared-parallel-solver-latest.json`.
+
+'''
+          pattern = re.compile(
+              r'### Prepared parallel solver checkpoint — 2026-08-23\n.*?(?=## Current next action\n)',
+              re.DOTALL,
+          )
+          if not pattern.search(plan):
+              raise SystemExit('prepared solver checkpoint was not found')
+          plan = pattern.sub(checkpoint, plan, count=1)
+          plan = re.sub(
+              r'## Current next action\n.*\Z',
+              '''## Current next action
+
+1. Requalify the prepared solver with interleaved multi-sample timing and compare
+   automatic execution against both its selected explicit strategy and the best
+   explicit strategy; retain it only if the original strict numerical, memory,
+   geometric, and per-case timing gates pass.
+2. Profile packed contraction keys and reusable contraction buffers after the
+   routing decision is closed.
+3. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
+   is available.
+4. Remove obsolete one-shot workflows, staging scripts, and committed Python
+   cache files after active gates are secure.
+''',
+              plan,
+              count=1,
+              flags=re.DOTALL,
+          )
+          plan_path.write_text(plan)
+
+          status_path = Path('PERFORMANCE_STATUS.md')
+          status = status_path.read_text()
+          recovery = f'''## Current recovery point
+
+- Repository head before this status refresh: `{base}`.
+- Latest retained numerical checkpoint:
+  `f3b3a7acd0181f5872ebf0d79ac7f9e67cffb8fa`
+  (`perf: add opt-in prebuilt-plan parallel PCG`).
+- The prepared automatic batch-solver experiment completed validation but was
+  rejected and reverted; it did not modify retained production source.
+- `.ci/latest.json` records quality and Ubuntu/macOS/Windows success for
+  `947543ef9f3afabcbe0593d63dd19564f3601d82`.
+
+'''
+          status = re.sub(
+              r'## Current recovery point\n.*?(?=## Retained performance work\n)',
+              recovery,
+              status,
+              count=1,
+              flags=re.DOTALL,
+          )
+          gate = f'''## Latest rejected benchmark gate
+
+The prepared automatic solver passed formatting, lint, documentation,
+debug/release, numerical, and workspace qualification but was **not retained**.
+Its geometric automatic-to-best ratio was `{geometric:.3f}x`; the worst case was
+`{worst:.3f}x`. Maximum scaled numerical difference was `{numerical:.3g}` and
+workspace excess was `{workspace}` bytes. The decision record is
+`.ci/performance/prepared-parallel-solver-latest.json`.
+
+'''
+          status = re.sub(
+              r'## Latest resolved benchmark gate\n.*?(?=## Next prepared optimization\n)',
+              gate,
+              status,
+              count=1,
+              flags=re.DOTALL,
+          )
+          next_section = '''## Next prepared optimization
+
+Requalify the same prepared-solver abstraction with a less noisy benchmark,
+without weakening the acceptance thresholds:
+
+1. interleave automatic and explicit executions and use at least five measured
+   samples after warm-up;
+2. compare automatic execution with the explicit strategy it selected as well
+   as the best explicit strategy;
+3. retain the simple policy only if geometric and every per-case timing gates
+   pass with zero numerical and workspace regressions;
+4. keep the existing explicit serial, planned, and across-RHS APIs unchanged;
+5. revert the abstraction completely if the robust gate still fails.
+
+'''
+          status = re.sub(
+              r'## Next prepared optimization\n.*?(?=## Remaining major work\n)',
+              next_section,
+              status,
+              count=1,
+              flags=re.DOTALL,
+          )
+          remaining = '''## Remaining major work
+
+- Close the robust prepared-solver routing gate.
+- Profile packed contraction keys and reusable contraction buffers.
+- Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
+  hardware; ordinary hosted runners currently expose only four logical CPUs.
+- Remove obsolete self-removing workflows, staging scripts, and committed
+  Python cache files after active gates are secure.
+
+'''
+          status = re.sub(
+              r'## Remaining major work\n.*?(?=## Recovery rule\n)',
+              remaining,
+              status,
+              count=1,
+              flags=re.DOTALL,
+          )
+          status_path.write_text(status)
+
+          Path('.github/workflows/refresh-prepared-solver-status.yml').unlink()
+
+      - name: Commit refreshed recovery state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs: record rejected prepared solver gate'
+          git pull --rebase origin main
+          git push origin HEAD:main
