@@ -927,6 +927,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: prior timing gains were confirmed against non-regressive exact hierarchy memory; compact forest indegrees retained.
 - Evidence: `.ci/performance/compact-forest-indegree-memory-latest.json`.
 
+### Compact forest-ancestor checkpoint — 2026-08-23
+
+- Monomorphized `i32` forest ancestor counts with an `i64` fallback were **not retained**.
+- Validation: `failure`.
+- Geometric split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: name 'geometric' is not defined.
+- Evidence: `.ci/performance/compact-forest-ancestors-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
