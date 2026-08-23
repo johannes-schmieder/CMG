@@ -1,0 +1,10 @@
+{
+  "cases": {},
+  "error": "RuntimeError('command failed (1): cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check')",
+  "experiment": "contraction-subphase-profile",
+  "phase_shares": {},
+  "phase_totals_ns": {},
+  "schema_version": 1,
+  "source_sha": "6edb63899709e16203a1efa5268a2d88cd17809c",
+  "status": "failure"
+}

@@ -95,6 +95,13 @@ contraction overall. The routed in-place endpoint-radix candidate was
 **not retained**. The next change must therefore be selected from a refreshed
 contraction profile rather than from unmeasured micro-optimization.
 
+## Latest contraction subphase evidence
+
+The read-only contraction profiler completed with status `failure`. The
+aggregate dominant phase is `unresolved` at `0.0%` of
+manual contraction time. Exact coarse-graph equivalence is checked before every
+timing is accepted. See `.ci/performance/contraction-subphase-profile.json`.
+
 ## Remaining major work
 
 - Refresh the hierarchy profile if the radix route is retained; otherwise add a

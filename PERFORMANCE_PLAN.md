@@ -440,14 +440,24 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/radix-endpoint-sort-latest.json`.
 
+### Contraction subphase profile — 2026-08-23
+
+- Read-only benchmark status: `failure`.
+- Aggregate dominant contraction phase: `unresolved`
+  (`0.0%` of attributed manual contraction time).
+- No completed cases.
+- Every reconstructed coarse graph was checked exactly against production
+  endpoint order, weight bits, diagonal bits, matrix nonzeros, operator bound,
+  and the production `Aggregation::contract` result before timing was used.
+- No production numerical behavior changed in this checkpoint.
+- Machine-readable evidence:
+  `.ci/performance/contraction-subphase-profile.json`.
+
 ## Current next action
 
-1. Use the refreshed phase profile and radix decision to select the next
-   contraction optimization; do not alter path forest splitting without a
-   separate path-specific profile and gate.
-2. If radix is retained, refresh the phase profile and test whether mapping,
-   duplicate compaction, or diagonal construction is now dominant.
-3. If radix is rejected, add a read-only contraction subphase profiler before
-   attempting another sorting algorithm.
-4. Obtain controlled 8-, 16-, and 32-thread/high-memory evidence when suitable
-   hardware is available.
+1. Use the profile record to select the next benchmark-gated contraction candidate.
+2. Retain ordinary comparison sorting for dense contraction; routed radix was
+   numerically valid but slower and memory-neutral.
+3. Obtain controlled 8–32-thread/high-memory evidence when suitable hardware is available.
+4. Keep production source unchanged until the next candidate passes full numerical,
+   timing, and exact-allocation gates.

@@ -23,3 +23,7 @@ path = "src/bin/hierarchy-alloc.rs"
 [[bin]]
 name = "terminal-build"
 path = "src/bin/terminal-build.rs"
+
+[[bin]]
+name = "contraction-subphase-profile"
+path = "src/bin/contraction-subphase-profile.rs"
