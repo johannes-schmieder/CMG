@@ -430,3 +430,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Production-contraction / hierarchy-build ratios: `1.005x` / `0.991x`.
 - Worst peak-RSS ratio: `1.018x`.
 - Evidence: `.ci/performance/trusted-compact-contraction-latest.json`.
+
+## Incremental diagonal-metadata gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Graph-build / hierarchy-build ratios: `1.028x` / `1.009x`.
+- Worst peak-RSS ratio: `1.002x`.
+- Evidence: `.ci/performance/incremental-diagonal-metadata-latest.json`.

@@ -880,6 +880,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but contraction or hierarchy timing did not improve consistently enough.
 - Evidence: `.ci/performance/trusted-compact-contraction-latest.json`.
 
+### Incremental diagonal-metadata checkpoint — 2026-08-23
+
+- Updating diagonal nonzero count and maximum degree during edge application was **not retained**.
+- Validation: `success`.
+- Geometric graph-build / hierarchy-build ratios: `1.028x` / `1.009x`.
+- Worst peak-RSS ratio: `1.002x`.
+- Decision: qualification passed, but eliminating the final diagonal pass did not improve setup consistently enough.
+- Evidence: `.ci/performance/incremental-diagonal-metadata-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
