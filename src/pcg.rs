@@ -462,7 +462,7 @@ pub fn solve_pcg_with_plan_and_workspace(
     )?;
     components
         .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)?;
-    let mut rho = dot(&workspace.residual, &workspace.preconditioned);
+    let mut rho = dot_with_executor(&workspace.residual, &workspace.preconditioned, executor);
     validate_positive_pcg(0, "r^T M r", rho)?;
     workspace
         .direction
@@ -478,7 +478,8 @@ pub fn solve_pcg_with_plan_and_workspace(
             &mut workspace.matrix_direction,
             executor,
         )?;
-        let direction_curvature = dot(&workspace.direction, &workspace.matrix_direction);
+        let direction_curvature =
+            dot_with_executor(&workspace.direction, &workspace.matrix_direction, executor);
         validate_positive_pcg(iteration, "p^T A p", direction_curvature)?;
         let alpha = rho / direction_curvature;
         validate_finite_pcg(iteration, "alpha", alpha)?;
@@ -571,7 +572,7 @@ pub fn solve_pcg_with_plan_and_workspace(
             &mut workspace.preconditioned,
             &mut workspace.component,
         )?;
-        let new_rho = dot(&workspace.residual, &workspace.preconditioned);
+        let new_rho = dot_with_executor(&workspace.residual, &workspace.preconditioned, executor);
         validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
 
         if restarted {
@@ -788,6 +789,89 @@ fn original_residual_norm(
                 scaled * scaled
             }))
             .sqrt()
+    }
+}
+
+#[cfg(feature = "parallel")]
+fn dot_with_executor(left: &[f64], right: &[f64], executor: &ParallelExecutor) -> f64 {
+    debug_assert_eq!(left.len(), right.len());
+    let options = executor.options();
+    let parallel_floor = options
+        .min_parallel_len
+        .max(options.reduction_chunk_size.saturating_mul(8));
+    if left.len() < parallel_floor || executor.thread_count() <= 1 {
+        return dot(left, right);
+    }
+    executor.install(|| fixed_chunk_dot(left, right, options.reduction_chunk_size))
+}
+
+#[cfg(feature = "parallel")]
+fn fixed_chunk_dot(left: &[f64], right: &[f64], chunk_size: usize) -> f64 {
+    debug_assert_eq!(left.len(), right.len());
+    let chunk_count = left.len().div_ceil(chunk_size);
+    if chunk_count == 0 {
+        return 0.0;
+    }
+
+    fn reduce_range(
+        left: &[f64],
+        right: &[f64],
+        chunk_size: usize,
+        first_chunk: usize,
+        last_chunk: usize,
+    ) -> f64 {
+        if last_chunk - first_chunk == 1 {
+            let start = first_chunk * chunk_size;
+            let end = left.len().min(start + chunk_size);
+            return compensated_sum(
+                left[start..end]
+                    .iter()
+                    .zip(&right[start..end])
+                    .map(|(left, right)| left * right),
+            );
+        }
+        let middle = first_chunk + (last_chunk - first_chunk) / 2;
+        let (left_sum, right_sum) = rayon::join(
+            || reduce_range(left, right, chunk_size, first_chunk, middle),
+            || reduce_range(left, right, chunk_size, middle, last_chunk),
+        );
+        compensated_sum([left_sum, right_sum])
+    }
+
+    reduce_range(left, right, chunk_size, 0, chunk_count)
+}
+
+#[cfg(all(test, feature = "parallel"))]
+mod deterministic_parallel_dot_tests {
+    use super::{dot, dot_with_executor};
+    use crate::{ParallelExecutor, ParallelOptions};
+
+    #[test]
+    fn fixed_chunk_dot_is_thread_count_invariant() {
+        let left: Vec<f64> = (0..257)
+            .map(|index| ((index * 17) % 101) as f64 / 13.0 - 3.0)
+            .collect();
+        let right: Vec<f64> = (0..257)
+            .map(|index| ((index * 31 + 7) % 113) as f64 / 19.0 - 2.0)
+            .collect();
+        let mut reference = None;
+        for threads in [2, 3, 4] {
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                min_parallel_len: 1,
+                reduction_chunk_size: 16,
+                ..ParallelOptions::default()
+            })
+            .unwrap();
+            let value = dot_with_executor(&left, &right, &executor);
+            match reference {
+                Some(bits) => assert_eq!(bits, value.to_bits()),
+                None => reference = Some(value.to_bits()),
+            }
+        }
+        let fixed = f64::from_bits(reference.unwrap());
+        let serial = dot(&left, &right);
+        assert!((fixed - serial).abs() <= 2.0e-13 * (1.0 + serial.abs()));
     }
 }
 

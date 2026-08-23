@@ -114,9 +114,8 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 ## Deterministic fixed-chunk dot gate
 
-- Decision: `not retained`.
-- Validation: `not_run`.
-- Planned geometric full-solve ratio: `nanx`.
-- Maximum scaled solution difference: `nan`.
+- Decision: `retained`.
+- Validation: `success`.
+- Planned geometric full-solve ratio: `0.960x`.
+- Maximum scaled solution difference: `2.362e-10`.
 - Evidence: `.ci/performance/fixed-chunk-dot-latest.json`.
-

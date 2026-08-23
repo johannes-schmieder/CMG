@@ -618,13 +618,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ### Deterministic fixed-chunk dot checkpoint — 2026-08-23
 
-- Fixed-chunk planned-PCG dot products were **not retained**.
-- Qualification status: `not_run`.
-- Decision: experiment failed: expected one planned dot call: 'let p_ap = dot(&workspace.direction, &workspace.matvec);'.
+- Fixed-chunk planned-PCG dot products were **retained**.
+- Qualification status: `success`.
+- Decision: full qualification passed; fixed deterministic chunk reductions improved planned solves.
 
 | Case | Serial solve ratio | Planned solve ratio | Planned/serial scaled difference |
 |---|---:|---:|---:|
-| no completed timing cases | — | — | — |
+| path-150k | 0.989x | 0.985x | 2.36e-10 |
+| worker-firm-300k | 1.014x | 0.959x | 3.50e-16 |
+| worker-firm-600k | 1.004x | 0.940x | 6.22e-16 |
+| dense-worker-firm-400k | 0.998x | 0.957x | 0.00e+00 |
 
 - Chunk boundaries and the binary combine tree are fixed by `reduction_chunk_size`, so results are invariant to thread scheduling and thread count. Iteration counts were required to remain unchanged and final solutions/residual certificates remain independently verified.
 - Machine-readable evidence: `.ci/performance/fixed-chunk-dot-latest.json`.
