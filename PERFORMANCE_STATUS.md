@@ -119,3 +119,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned geometric full-solve ratio: `0.960x`.
 - Maximum scaled solution difference: `2.362e-10`.
 - Evidence: `.ci/performance/fixed-chunk-dot-latest.json`.
+
+## Production-reduction profiler sync
+
+- Decision: `not retained`.
+- Validation: `not_run`.
+- The phase profiler now reuses the exact production planned-PCG dot and norm helpers rather than maintaining stale copies.
+- Evidence: `.ci/performance/pcg-profiler-sync.json`.
+

@@ -632,6 +632,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Chunk boundaries and the binary combine tree are fixed by `reduction_chunk_size`, so results are invariant to thread scheduling and thread count. Iteration counts were required to remain unchanged and final solutions/residual certificates remain independently verified.
 - Machine-readable evidence: `.ci/performance/fixed-chunk-dot-latest.json`.
 
+### Production-reduction profiler sync — 2026-08-23
+
+- Profiler synchronization was **not retained**.
+- Validation: `not_run`.
+- Decision: profiler sync failed: profile import marker was not unique.
+- Representative bitwise-parity cases completed: `none`.
+- Machine-readable evidence: `.ci/performance/pcg-profiler-sync.json`.
+
 ## Current next action
 
 1. Add a read-only planned-PCG phase profiler that separately measures finest
