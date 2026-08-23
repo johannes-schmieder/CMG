@@ -1,0 +1,74 @@
+name: Assess parallel CMG plan compatibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/assess-parallel-plan-compatibility.yml'
+      - 'scripts/parallel_cmg_plan.patch.gz.b64'
+
+permissions:
+  contents: write
+
+jobs:
+  assess:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Check stored patch against current source
+        shell: python
+        run: |
+          import base64
+          import gzip
+          import json
+          from pathlib import Path
+          import subprocess
+
+          payload = Path('scripts/parallel_cmg_plan.patch.gz.b64')
+          patch = Path('/tmp/parallel-cmg-plan.patch')
+          result = {
+              'schema_version': 1,
+              'assessment': 'parallel-cmg-plan-patch-compatibility',
+              'source_sha': subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD'], text=True
+              ).strip(),
+              'compatible': False,
+          }
+          try:
+              patch.write_bytes(gzip.decompress(base64.b64decode(payload.read_bytes())))
+              completed = subprocess.run(
+                  ['git', 'apply', '--check', '--verbose', str(patch)],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+              )
+              result['compatible'] = completed.returncode == 0
+              result['returncode'] = completed.returncode
+              result['output'] = completed.stdout[-12000:]
+          except Exception as error:
+              result['error'] = repr(error)
+          destination = Path('.ci/performance/parallel-cmg-plan-compatibility.json')
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+
+      - name: Record assessment and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/assess-parallel-plan-compatibility.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'perf: assess parallel CMG patch compatibility'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Show result
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/parallel-cmg-plan-compatibility.json || true
