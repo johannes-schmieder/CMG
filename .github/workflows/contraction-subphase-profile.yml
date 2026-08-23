@@ -1,0 +1,43 @@
+name: Contraction subphase profile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/contraction-subphase-profile.yml'
+      - 'scripts/contraction_subphase_profiler.rs.gz.b64.part*'
+      - 'scripts/record_contraction_subphase_profile.py.gz.b64.part*'
+
+permissions:
+  contents: write
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reconstruct, validate, and profile contraction subphases
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat scripts/contraction_subphase_profiler.rs.gz.b64.part* \
+            | base64 --decode \
+            | gzip --decompress \
+            > benchmarks/src/bin/contraction-subphase-profile.rs
+          cat scripts/record_contraction_subphase_profile.py.gz.b64.part* \
+            | base64 --decode \
+            | gzip --decompress \
+            > scripts/record_contraction_subphase_profile.py
+          rm scripts/contraction_subphase_profiler.rs.gz.b64.part*
+          rm scripts/record_contraction_subphase_profile.py.gz.b64.part*
+          python scripts/record_contraction_subphase_profile.py
+
+      - name: Show profile record
+        if: always()
+        shell: bash
+        run: git show origin/main:.ci/performance/contraction-subphase-profile.json || true
