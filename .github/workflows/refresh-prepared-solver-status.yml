@@ -19,6 +19,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      # Explicit rerun after the initial workflow-file creation checkpoint.
       - name: Update live recovery documents
         shell: python
         run: |
