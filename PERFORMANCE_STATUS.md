@@ -126,3 +126,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Validation: `not_run`.
 - The phase profiler reuses the exact production planned-PCG dot and norm helpers.
 - Evidence: `.ci/performance/pcg-profiler-sync.json`.
+
+## Profiler synchronization fallback
+
+- The profiler synchronization candidate was not retained.
+- The unchanged production solver passed the complete baseline suite.
+- Independent full-PCG timing gates continue without relying on the stale profiler.
+- Evidence: `.ci/performance/pcg-profiler-sync.json`.
