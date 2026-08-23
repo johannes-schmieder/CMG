@@ -1,0 +1,49 @@
+name: Sync PCG profiler with production reductions v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync-pcg-profiler-v2.yml'
+      - 'scripts/sync_pcg_profiler_v2.py'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch and qualify profiler
+        run: python scripts/sync_pcg_profiler_v2.py
+
+      - name: Commit synchronization checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          if ! git diff --cached --quiet -- src/pcg.rs src/pcg_profile.rs; then
+            message='perf: sync PCG profiler with production reductions'
+          else
+            message='perf: record PCG profiler synchronization result'
+          fi
+          git commit -m "$message"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
