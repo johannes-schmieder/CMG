@@ -724,6 +724,14 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Serial/planned PCG geometric ratios: `n/a` / `n/a`.
 - Evidence: `.ci/performance/compact-aggregation-labels-latest.json`.
 
+### Corrected compact aggregation-label checkpoint — 2026-08-23
+
+- Candidate was **retained**.
+- Validation: `success`.
+- Geometric retained / hierarchy-time ratios: `0.956863044090649` / `0.9934997461358874`.
+- Serial/planned PCG geometric ratios: `0.995387475894316` / `0.9878997999485909`.
+- Evidence: `.ci/performance/compact-aggregation-labels-v2-latest.json`.
+
 ## Current next action
 
 1. Re-run the full certified routing matrix after any retained aggregation-label change.

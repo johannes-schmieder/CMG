@@ -245,3 +245,13 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Serial/planned PCG geometric ratios: `n/a` / `n/a`.
 - Public native-width labels remain available through a lazy compatibility cache.
 - Evidence: `.ci/performance/compact-aggregation-labels-latest.json`.
+
+## Corrected compact aggregation-label gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Geometric retained-memory ratio: `0.956863044090649`.
+- Geometric hierarchy-time ratio: `0.9934997461358874`.
+- Serial/planned PCG geometric ratios: `0.995387475894316` / `0.9878997999485909`.
+- Public native-width labels remain available through a lazy compatibility cache.
+- Evidence: `.ci/performance/compact-aggregation-labels-v2-latest.json`.

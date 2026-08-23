@@ -180,8 +180,8 @@ impl CmgHierarchy {
             }
 
             let grouping = group(&current, options.low_effective_degree_threshold)?;
-            let aggregation =
-                Aggregation::new(grouping.labels().to_vec(), grouping.aggregate_count())?;
+            let (labels, sizes) = grouping.into_aggregation_parts();
+            let aggregation = Aggregation::from_forest_parts(labels, sizes);
             let coarse_count = aggregation.coarse_dimension();
 
             if coarse_count == 1 {

@@ -50,6 +50,10 @@ impl ForestGrouping {
     pub fn aggregate_count(&self) -> usize {
         self.sizes.len()
     }
+
+    pub(crate) fn into_aggregation_parts(self) -> (Vec<usize>, Vec<usize>) {
+        (self.labels, self.sizes)
+    }
 }
 
 /// Construct the CMG heavy-edge forest and aggregate labels.

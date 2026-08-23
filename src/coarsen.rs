@@ -5,13 +5,42 @@ use crate::{CmgError, Edge, Laplacian};
 use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+use std::sync::OnceLock;
 
 /// A zero-based partition of fine vertices into coarse aggregates.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+enum LabelStorage {
+    Compact(Vec<u32>),
+    Native(Vec<usize>),
+}
+
+/// A zero-based partition of fine vertices into coarse aggregates.
+#[derive(Debug)]
 pub struct Aggregation {
-    labels: Vec<usize>,
+    labels: LabelStorage,
+    native_labels: OnceLock<Vec<usize>>,
     sizes: Vec<usize>,
 }
+
+impl Clone for Aggregation {
+    fn clone(&self) -> Self {
+        Self {
+            labels: self.labels.clone(),
+            native_labels: OnceLock::new(),
+            sizes: self.sizes.clone(),
+        }
+    }
+}
+
+impl PartialEq for Aggregation {
+    fn eq(&self, other: &Self) -> bool {
+        self.sizes == other.sizes
+            && self.fine_dimension() == other.fine_dimension()
+            && (0..self.fine_dimension()).all(|index| self.label_at(index) == other.label_at(index))
+    }
+}
+
+impl Eq for Aggregation {}
 
 impl Aggregation {
     /// Construct an aggregation from explicit labels and a coarse dimension.
@@ -26,13 +55,42 @@ impl Aggregation {
             }
             sizes[label] += 1;
         }
-        Ok(Self { labels, sizes })
+        Ok(Self::from_validated_parts(labels, sizes))
+    }
+
+    pub(crate) fn from_forest_parts(labels: Vec<usize>, sizes: Vec<usize>) -> Self {
+        debug_assert_eq!(sizes.iter().sum::<usize>(), labels.len());
+        debug_assert!(labels.iter().all(|&label| label < sizes.len()));
+        Self::from_validated_parts(labels, sizes)
+    }
+
+    fn from_validated_parts(labels: Vec<usize>, sizes: Vec<usize>) -> Self {
+        let compact_limit = (u32::MAX as usize).saturating_add(1);
+        let labels = if sizes.len() <= compact_limit {
+            LabelStorage::Compact(labels.into_iter().map(|label| label as u32).collect())
+        } else {
+            LabelStorage::Native(labels)
+        };
+        Self {
+            labels,
+            native_labels: OnceLock::new(),
+            sizes,
+        }
     }
 
     /// Return the fine-to-coarse labels.
+    ///
+    /// Hierarchy-built aggregations retain compact labels internally. The
+    /// native-width compatibility slice is materialized lazily only when this
+    /// public accessor is called.
     #[must_use]
     pub fn labels(&self) -> &[usize] {
-        &self.labels
+        match &self.labels {
+            LabelStorage::Native(labels) => labels,
+            LabelStorage::Compact(labels) => self
+                .native_labels
+                .get_or_init(|| labels.iter().map(|&label| label as usize).collect()),
+        }
     }
 
     /// Return aggregate sizes.
@@ -44,13 +102,24 @@ impl Aggregation {
     /// Return the fine dimension.
     #[must_use]
     pub fn fine_dimension(&self) -> usize {
-        self.labels.len()
+        match &self.labels {
+            LabelStorage::Compact(labels) => labels.len(),
+            LabelStorage::Native(labels) => labels.len(),
+        }
     }
 
     /// Return the coarse dimension.
     #[must_use]
     pub fn coarse_dimension(&self) -> usize {
         self.sizes.len()
+    }
+
+    #[inline]
+    fn label_at(&self, index: usize) -> usize {
+        match &self.labels {
+            LabelStorage::Compact(labels) => labels[index] as usize,
+            LabelStorage::Native(labels) => labels[index],
+        }
     }
 
     /// Restrict by summing fine values within every aggregate.
@@ -77,8 +146,17 @@ impl Aggregation {
             ));
         }
         coarse.fill(0.0);
-        for (&value, &label) in fine.iter().zip(&self.labels) {
-            coarse[label] += value;
+        match &self.labels {
+            LabelStorage::Compact(labels) => {
+                for (&value, &label) in fine.iter().zip(labels) {
+                    coarse[label as usize] += value;
+                }
+            }
+            LabelStorage::Native(labels) => {
+                for (&value, &label) in fine.iter().zip(labels) {
+                    coarse[label] += value;
+                }
+            }
         }
         Ok(())
     }
@@ -93,8 +171,17 @@ impl Aggregation {
     /// Prolong into caller-owned storage.
     pub fn prolong_into(&self, coarse: &[f64], fine: &mut [f64]) -> Result<(), CmgError> {
         validate_prolong_dimensions(self, coarse, fine)?;
-        for (value, &label) in fine.iter_mut().zip(&self.labels) {
-            *value = coarse[label];
+        match &self.labels {
+            LabelStorage::Compact(labels) => {
+                for (value, &label) in fine.iter_mut().zip(labels) {
+                    *value = coarse[label as usize];
+                }
+            }
+            LabelStorage::Native(labels) => {
+                for (value, &label) in fine.iter_mut().zip(labels) {
+                    *value = coarse[label];
+                }
+            }
         }
         Ok(())
     }
@@ -102,8 +189,17 @@ impl Aggregation {
     /// Add a prolonged coarse vector to a fine vector in place.
     pub fn prolong_add_into(&self, coarse: &[f64], fine: &mut [f64]) -> Result<(), CmgError> {
         validate_prolong_dimensions(self, coarse, fine)?;
-        for (value, &label) in fine.iter_mut().zip(&self.labels) {
-            *value += coarse[label];
+        match &self.labels {
+            LabelStorage::Compact(labels) => {
+                for (value, &label) in fine.iter_mut().zip(labels) {
+                    *value += coarse[label as usize];
+                }
+            }
+            LabelStorage::Native(labels) => {
+                for (value, &label) in fine.iter_mut().zip(labels) {
+                    *value += coarse[label];
+                }
+            }
         }
         Ok(())
     }
@@ -119,10 +215,15 @@ impl Aggregation {
         if !executor.should_parallel(fine.len()) {
             return self.prolong_add_into(coarse, fine);
         }
-        executor.install(|| {
-            fine.par_iter_mut()
-                .zip(self.labels.par_iter())
-                .for_each(|(value, &label)| *value += coarse[label]);
+        executor.install(|| match &self.labels {
+            LabelStorage::Compact(labels) => fine
+                .par_iter_mut()
+                .zip(labels.par_iter())
+                .for_each(|(value, &label)| *value += coarse[label as usize]),
+            LabelStorage::Native(labels) => fine
+                .par_iter_mut()
+                .zip(labels.par_iter())
+                .for_each(|(value, &label)| *value += coarse[label]),
         });
         Ok(())
     }
@@ -131,11 +232,24 @@ impl Aggregation {
     pub fn contract(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;
         let mut coarse_edges = Vec::with_capacity(graph.edge_count());
-        for edge in graph.edges() {
-            let left = self.labels[edge.u()];
-            let right = self.labels[edge.v()];
-            if left != right {
-                coarse_edges.push(Edge::from_internal_parts(left, right, edge.weight())?);
+        match &self.labels {
+            LabelStorage::Compact(labels) => {
+                for edge in graph.edges() {
+                    let left = labels[edge.u()] as usize;
+                    let right = labels[edge.v()] as usize;
+                    if left != right {
+                        coarse_edges.push(Edge::from_internal_parts(left, right, edge.weight())?);
+                    }
+                }
+            }
+            LabelStorage::Native(labels) => {
+                for edge in graph.edges() {
+                    let left = labels[edge.u()];
+                    let right = labels[edge.v()];
+                    if left != right {
+                        coarse_edges.push(Edge::from_internal_parts(left, right, edge.weight())?);
+                    }
+                }
             }
         }
         Laplacian::from_compact_edges(self.coarse_dimension(), coarse_edges)
@@ -157,16 +271,25 @@ impl Aggregation {
         {
             return self.contract(graph);
         }
-        let coarse_edges: Result<Vec<Edge>, CmgError> = executor.install(|| {
-            graph
+        let coarse_edges: Result<Vec<Edge>, CmgError> = executor.install(|| match &self.labels {
+            LabelStorage::Compact(labels) => graph
                 .edges()
                 .par_iter()
                 .filter_map(|edge| {
-                    let left = self.labels[edge.u()];
-                    let right = self.labels[edge.v()];
+                    let left = labels[edge.u()] as usize;
+                    let right = labels[edge.v()] as usize;
                     (left != right).then(|| Edge::from_internal_parts(left, right, edge.weight()))
                 })
-                .collect()
+                .collect(),
+            LabelStorage::Native(labels) => graph
+                .edges()
+                .par_iter()
+                .filter_map(|edge| {
+                    let left = labels[edge.u()];
+                    let right = labels[edge.v()];
+                    (left != right).then(|| Edge::from_internal_parts(left, right, edge.weight()))
+                })
+                .collect(),
         });
         Laplacian::from_compact_edges_with_executor(
             self.coarse_dimension(),
@@ -207,4 +330,35 @@ fn validate_prolong_dimensions(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod compact_aggregation_label_tests {
+    use super::{Aggregation, LabelStorage};
+
+    #[test]
+    fn compact_storage_preserves_public_labels_and_algebra() {
+        let aggregation = Aggregation::new(vec![0, 0, 1, 2, 2], 3).unwrap();
+        assert!(matches!(&aggregation.labels, LabelStorage::Compact(_)));
+        assert!(aggregation.native_labels.get().is_none());
+
+        let fine = [1.0, 2.0, 3.0, 4.0, 5.0];
+        assert_eq!(aggregation.restrict(&fine).unwrap(), vec![3.0, 3.0, 9.0]);
+        assert_eq!(
+            aggregation.prolong(&[10.0, 20.0, 30.0]).unwrap(),
+            vec![10.0, 10.0, 20.0, 30.0, 30.0]
+        );
+        assert_eq!(aggregation.labels(), &[0, 0, 1, 2, 2]);
+        assert!(aggregation.native_labels.get().is_some());
+    }
+
+    #[test]
+    fn clone_does_not_duplicate_materialized_native_cache() {
+        let aggregation = Aggregation::new(vec![0, 1, 1, 2], 3).unwrap();
+        let _ = aggregation.labels();
+        let cloned = aggregation.clone();
+        assert_eq!(aggregation, cloned);
+        assert!(cloned.native_labels.get().is_none());
+        assert_eq!(cloned.labels(), &[0, 1, 1, 2]);
+    }
 }
