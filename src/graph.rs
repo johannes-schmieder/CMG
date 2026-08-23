@@ -122,7 +122,7 @@ impl Laplacian {
         vertex_count: usize,
         mut raw: Vec<Edge>,
     ) -> Result<Self, CmgError> {
-        raw.sort_unstable_by(compare_raw_edges);
+        sort_compact_edges_two_stage(&mut raw);
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
@@ -135,7 +135,7 @@ impl Laplacian {
         if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
             executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
         } else {
-            raw.sort_unstable_by(compare_raw_edges);
+            sort_compact_edges_two_stage(&mut raw);
         }
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
@@ -356,12 +356,30 @@ where
     Ok(raw)
 }
 
+fn endpoint_key(edge: &Edge) -> u64 {
+    (u64::from(edge.u) << 32) | u64::from(edge.v)
+}
+
 fn compare_raw_edges(left: &Edge, right: &Edge) -> core::cmp::Ordering {
-    let left_endpoints = (u64::from(left.u) << 32) | u64::from(left.v);
-    let right_endpoints = (u64::from(right.u) << 32) | u64::from(right.v);
-    left_endpoints
-        .cmp(&right_endpoints)
+    endpoint_key(left)
+        .cmp(&endpoint_key(right))
         .then_with(|| left.weight.total_cmp(&right.weight))
+}
+
+fn sort_compact_edges_two_stage(raw: &mut [Edge]) {
+    raw.sort_unstable_by_key(endpoint_key);
+    let mut start = 0;
+    while start < raw.len() {
+        let key = endpoint_key(&raw[start]);
+        let mut end = start + 1;
+        while end < raw.len() && endpoint_key(&raw[end]) == key {
+            end += 1;
+        }
+        if end - start > 1 {
+            raw[start..end].sort_unstable_by(|left, right| left.weight.total_cmp(&right.weight));
+        }
+        start = end;
+    }
 }
 
 pub(crate) fn compensated_sum<I>(values: I) -> f64
@@ -435,5 +453,55 @@ mod compact_edge_layout_tests {
                 maximum: u32::MAX as usize,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod two_stage_sort_equivalence_tests {
+    use super::{Edge, compare_raw_edges, sort_compact_edges_two_stage};
+
+    #[test]
+    fn endpoint_then_weight_order_matches_total_comparator() {
+        let mut candidate = vec![
+            Edge {
+                u: 4,
+                v: 9,
+                weight: 2.0,
+            },
+            Edge {
+                u: 1,
+                v: 7,
+                weight: 3.0,
+            },
+            Edge {
+                u: 4,
+                v: 9,
+                weight: 1.0,
+            },
+            Edge {
+                u: 1,
+                v: 7,
+                weight: 1.0,
+            },
+            Edge {
+                u: 2,
+                v: 8,
+                weight: 4.0,
+            },
+            Edge {
+                u: 1,
+                v: 7,
+                weight: 2.0,
+            },
+            Edge {
+                u: 2,
+                v: 8,
+                weight: 0.5,
+            },
+        ];
+        let mut reference = candidate.clone();
+        reference.sort_unstable_by(compare_raw_edges);
+        sort_compact_edges_two_stage(&mut candidate);
+        assert_eq!(candidate, reference);
     }
 }
