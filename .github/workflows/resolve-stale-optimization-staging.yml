@@ -1,0 +1,139 @@
+name: Resolve stale optimization staging
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/resolve-stale-optimization-staging.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Remove stale one-shot gates and refresh recovery records
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import subprocess
+
+          stale = (
+              '.github/workflows/analyze-compact-hierarchy-indices.yml',
+              '.github/workflows/analyze-packed-edge-sort.yml',
+              '.github/workflows/compact-hierarchy-index-metadata-fallback.yml',
+              '.github/workflows/compact-hierarchy-index-v2.yml',
+              '.github/workflows/consolidate-optimization-chain.yml',
+              '.github/workflows/fixed-chunk-norm-sum.yml',
+              '.github/workflows/packed-edge-sort-gate.yml',
+              '.github/workflows/parallel-pcg-vector-updates.yml',
+              '.github/workflows/profile-post-reductions.yml',
+              '.github/workflows/resolve-failed-optimization-gates.yml',
+              '.github/workflows/snapshot-continued-optimization.yml',
+              'scripts/analyze_compact_hierarchy_indices.py',
+              'scripts/analyze_packed_edge_sort.py',
+              'scripts/compact_hierarchy_index_metadata_fallback.py',
+              'scripts/compact_hierarchy_index_gate_v2.py',
+              'scripts/consolidate_optimization_chain.py',
+              'scripts/fixed_chunk_norm_sum_gate.py',
+              'scripts/packed_edge_sort_gate.py',
+              'scripts/parallel_pcg_vector_updates_gate.py',
+              'scripts/profile_post_reductions.py',
+              'scripts/resolve_failed_optimization_gates.py',
+              'scripts/snapshot_continued_optimization.py',
+          )
+          removed = []
+          for raw in stale:
+              path = Path(raw)
+              if path.exists():
+                  path.unlink()
+                  removed.append(raw)
+
+          active_path = Path('.ci/active-optimization-gates.json')
+          previous_active = (
+              json.loads(active_path.read_text()) if active_path.exists() else None
+          )
+          active_path.parent.mkdir(parents=True, exist_ok=True)
+          active_path.write_text(
+              json.dumps({'schema_version': 2, 'workflows': {}}, indent=2, sort_keys=True)
+              + '\n'
+          )
+
+          source_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+          record = {
+              'schema_version': 1,
+              'checkpoint': 'stale-optimization-staging-cleanup',
+              'source_sha': source_sha,
+              'removed_paths': removed,
+              'removed_count': len(removed),
+              'previous_active_record': previous_active,
+              'production_source_changed': False,
+              'next_gate': 'forest-backed-contraction-capacity-hint',
+          }
+          record_path = Path('.ci/performance/stale-gate-cleanup.json')
+          record_path.parent.mkdir(parents=True, exist_ok=True)
+          record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
+
+          status_path = Path('PERFORMANCE_STATUS.md')
+          status = status_path.read_text().rstrip()
+          heading = '## Stale-gate cleanup and resumed optimization\n'
+          block = f'''{heading}
+- Removed `{len(removed)}` obsolete one-shot workflow/script paths left by the interrupted benchmark chain.
+- Archived the former gate status in `.ci/performance/stale-gate-cleanup.json` and reset `.ci/active-optimization-gates.json`.
+- Production numerical source was unchanged.
+- Next gate: exploit the guaranteed internal forest edges to reduce coarse-contraction allocation without a second edge scan.
+'''
+          if heading in status:
+              start = status.index(heading)
+              end = status.find('\n## ', start + len(heading))
+              if end == -1:
+                  end = len(status)
+              status = status[:start] + block + status[end:]
+          else:
+              status += '\n\n' + block
+          status_path.write_text(status.rstrip() + '\n')
+
+          plan_path = Path('PERFORMANCE_PLAN.md')
+          plan = plan_path.read_text()
+          marker = '## Current next action\n'
+          checkpoint_heading = '### Stale optimization cleanup — 2026-08-23\n'
+          checkpoint = f'''{checkpoint_heading}
+- Removed `{len(removed)}` obsolete workflow/script paths from the interrupted gate chain.
+- Production numerical source was unchanged.
+- Evidence: `.ci/performance/stale-gate-cleanup.json`.
+
+'''
+          if checkpoint_heading not in plan:
+              plan = plan.replace(marker, checkpoint + marker, 1)
+          if marker in plan:
+              prefix, _ = plan.split(marker, 1)
+              plan = prefix + marker + '''
+1. Benchmark a forest-backed coarse-edge capacity hint that subtracts the known internal forest-edge count without a second graph scan.
+2. Retain it only if hierarchy timing and exact additional peak allocation both improve while hierarchy bits remain identical.
+3. Re-profile contraction subphases after any retained change.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.
+'''
+          plan_path.write_text(plan)
+
+          Path('.github/workflows/resolve-stale-optimization-staging.yml').unlink()
+
+      - name: Commit cleanup checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: remove stale optimization staging'
+          git pull --rebase origin main
+          git push origin HEAD:main
