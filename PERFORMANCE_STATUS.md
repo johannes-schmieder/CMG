@@ -317,3 +317,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned-case geometric speedup: `1.5911556967322051`.
 - Maximum scaled serial/planned solution difference: `5.605302390305238e-10`.
 - Evidence: `.ci/performance/post-lean-forest-routing.json`.
+
+## Owned internal forest split gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Hierarchy geometric time ratio: `0.9942737661478971`.
+- Geometric / best exact additional-peak ratios: `1.0` / `1.0`.
+- Public borrowed `split_forest` behavior is unchanged.
+- Evidence: `.ci/performance/owned-split-forest-latest.json`.
