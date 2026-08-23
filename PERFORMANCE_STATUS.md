@@ -6,19 +6,17 @@ together with `PERFORMANCE_PLAN.md` and the machine-readable records in
 
 ## Current recovery point
 
-- Repository head before this status refresh: `a560fa4c351a7d30e2ab7b819208c174de07255e`.
+- Repository head before this cleanup: `db6198ec31ccd2b23700081c785be6712a6e4f6e`.
 - Latest retained numerical checkpoint:
   `701036624e312fa4a8e21a26297d8254b7dc0142`
   (`perf: retain packed endpoint-key ordering after exact gate`).
-- The packed-key candidate passed full serial/all-feature qualification and the
-  exact requested-allocation gate; the subsequent contraction profile was
-  benchmark-only and did not alter numerical source.
-- `.ci/latest.json` predates the retained packed-key source. This status commit
-  intentionally triggers formatting, Clippy, rustdoc, benchmark-crate checks,
-  debug/release tests, release build, and Ubuntu/macOS/Windows testing on the
-  exact retained implementation.
-- Do not begin another production numerical mutation until that record reports
-  quality and cross-platform status `success`.
+- The routed exact-capacity candidate completed full qualification but was
+  rejected and reverted; production numerical source remains on the previously
+  cross-platform-qualified one-pass contraction path.
+- `.ci/latest.json` records quality and Ubuntu/macOS/Windows success for
+  `bcc4f0ec3b46b692b055a7c5aef54de5f48768fb`, which contains the retained
+  packed-key implementation. Subsequent commits changed only documentation,
+  benchmark evidence, or completed one-shot automation.
 
 ## Retained performance work
 
@@ -96,27 +94,23 @@ The decision record is
 
 ## Next prepared optimization
 
-Benchmark a routed exact-capacity contraction buffer:
+No numerical candidate is currently staged. The next step is measurement and
+user-facing consolidation:
 
-1. count surviving fine edges only on levels where the aggregation predicts a
-   high internal-edge fraction;
-2. allocate the retained compact edge vector at that exact upper bound;
-3. preserve edge ordering, compensated duplicate summation, hierarchy reports,
-   and serial/parallel determinism;
-4. gate the candidate on serial and four-thread timing, exact requested
-   allocation, process RSS, and the full numerical suite.
+1. document the retained automatic and explicit parallel execution APIs,
+   memory budgeting, and benchmark commands;
+2. instrument hierarchy setup phases read-only on large path, sparse
+   worker–firm, and dense worker–firm graphs;
+3. prepare a retain/revert gate only for the phase that dominates measured
+   end-to-end setup time.
 
 ## Remaining major work
 
-- Complete ordinary Ubuntu/macOS/Windows qualification of the retained packed
-  endpoint-key source.
-- Qualify the routed exact-capacity contraction candidate.
 - Extend user-facing memory/performance guidance for automatic, explicit
   within-solve, and explicit across-RHS execution.
+- Identify the remaining hierarchy-setup bottleneck with read-only phase timing.
 - Obtain controlled 8-, 16-, and 32-thread/high-memory evidence on suitable
   hardware; ordinary hosted runners currently expose only four logical CPUs.
-- Remove obsolete self-removing workflows and staging scripts after active gates
-  are secure.
 
 ## Recovery rule
 

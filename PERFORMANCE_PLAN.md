@@ -347,11 +347,26 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Machine-readable evidence:
   `.ci/performance/exact-capacity-contraction-latest.json`.
 
+### One-shot automation cleanup — 2026-08-23
+
+- Removed `17` completed self-removing experiment,
+  qualification, formatting, and smoke-test workflows that had remained after
+  concurrent CI commits.
+- Removed `6` corresponding source-transformation scripts.
+- All numerical decisions and benchmark evidence remain in Git history and in
+  `.ci/performance/`; persistent workflows are now limited to ordinary Rust CI,
+  serial performance, parallel performance, and pinned-C comparison.
+- Production numerical source was unchanged.
+
 ## Current next action
 
-1. If the serial exact-capacity route is retained, profile a safe executor-side
-   equivalent; otherwise retain the existing one-pass parallel mapper.
-2. Audit and remove obsolete one-shot workflows and staging scripts.
-3. Extend user-facing memory/performance guidance and benchmark commands.
+1. Extend `README.md` and benchmark documentation with automatic, explicit
+   within-solve, and explicit across-RHS execution guidance, thread selection,
+   workspace budgeting, and reproducible benchmark commands.
+2. Add read-only per-phase hierarchy instrumentation to identify whether forest
+   construction, splitting, contraction, or terminal factorization dominates
+   the remaining setup cost on large worker–firm graphs.
+3. Begin another production optimization only after that profile identifies a
+   stable bottleneck and a baseline/candidate retain-revert gate is prepared.
 4. Obtain controlled 8–32-thread and high-memory evidence when suitable hardware
    is available.
