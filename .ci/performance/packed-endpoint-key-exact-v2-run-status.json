@@ -1,0 +1,15 @@
+{
+  "latest": {
+    "conclusion": null,
+    "created_at": "2026-08-23T10:18:20Z",
+    "head_sha": "7f1ffa58374d9dd1a5c7f8e9ace79b81135261eb",
+    "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32633387815",
+    "id": 32633387815,
+    "run_attempt": 1,
+    "run_number": 2,
+    "status": "in_progress",
+    "updated_at": "2026-08-23T10:18:23Z"
+  },
+  "schema_version": 1,
+  "workflow": "packed-endpoint-key-exact-v2.yml"
+}
