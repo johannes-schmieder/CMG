@@ -785,3 +785,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Manual/production timing ratio: `1.044x`.
 - Coarse-graph equality verification: `success`.
 - Evidence: `.ci/performance/contraction-subphase-profile-current.json`.
+
+## Endpoint-axis compact sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Production-contraction / hierarchy-build ratios: `1.012x` / `0.974x`.
+- Worst peak-RSS ratio: `1.035x`.
+- Evidence: `.ci/performance/endpoint-axis-sort-latest.json`.

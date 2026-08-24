@@ -1340,8 +1340,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Evidence: `.ci/performance/contraction-subphase-profile-current.json`.
 
+### Endpoint-axis compact sort checkpoint — 2026-08-24
+
+- Global first-endpoint sorting followed by second-endpoint bucket sorting was **not retained**.
+- Validation: `success`; canonical endpoint order and hierarchy metadata were unchanged.
+- Geometric production-contraction / hierarchy-build ratios: `1.012x` / `0.974x`.
+- Worst contraction / hierarchy / peak-RSS ratios: `1.089x` / `1.001x` / `1.035x`.
+- Decision: correctness passed, but contraction, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/endpoint-axis-sort-latest.json`.
+
 ## Current next action
-1. Profile current compact-edge sorting by level size, density, and duplicate rate.
-2. Test a narrowly routed deterministic sorting candidate against complete hierarchy time.
-3. Re-run the full hierarchy profile after any retained contraction change.
+1. Re-profile current contraction subphases if endpoint-axis sorting is retained.
+2. Otherwise profile endpoint-key run structure before another sorting candidate.
+3. Refresh cumulative retained optimization and memory guidance.
 4. Run manual 1–32 thread qualification when suitable hardware is available.
