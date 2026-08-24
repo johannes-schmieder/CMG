@@ -1,0 +1,332 @@
+{
+  "acceptance_limits": {
+    "geometric_additional_peak_ratio_max": 1.001,
+    "geometric_retained_ratio_max": 1.001,
+    "hierarchy_geometric_time_ratio_max": 0.997,
+    "improved_split_case_count_min": 3,
+    "max_post_drop_delta_bytes": 0,
+    "path_hierarchy_time_ratio_max": 1.01,
+    "split_geometric_time_ratio_max": 0.985,
+    "worst_additional_peak_ratio_max": 1.003,
+    "worst_hierarchy_time_ratio_max": 1.025,
+    "worst_peak_rss_ratio_max": 1.02,
+    "worst_retained_ratio_max": 1.001,
+    "worst_split_time_ratio_max": 1.025
+  },
+  "accepted": false,
+  "allocation_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "3"
+      ],
+      "baseline_median_additional_peak_bytes": 128591048.0,
+      "baseline_median_ns": 408934964.5,
+      "baseline_median_retained_bytes": 125391576.0,
+      "baseline_peak_rss_kib": 154716,
+      "candidate_median_additional_peak_bytes": 128591048.0,
+      "candidate_median_ns": 400390233.0,
+      "candidate_median_retained_bytes": 125391576.0,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_peak_rss": 1.0907469169316684,
+      "candidate_over_baseline_time": 0.9791049133926527,
+      "candidate_peak_rss_kib": 168756,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "hierarchy_matrix_nonzeros": 18003524,
+        "levels": 6,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 3,
+        "scale": 100000,
+        "vertices": 200000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "3"
+      ],
+      "baseline_median_additional_peak_bytes": 47998220.0,
+      "baseline_median_ns": 47968617.0,
+      "baseline_median_retained_bytes": 32014548.0,
+      "baseline_peak_rss_kib": 77300,
+      "candidate_median_additional_peak_bytes": 47998220.0,
+      "candidate_median_ns": 60420633.0,
+      "candidate_median_retained_bytes": 32014548.0,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_peak_rss": 1.050556274256145,
+      "candidate_over_baseline_time": 1.259586721043052,
+      "candidate_peak_rss_kib": 81208,
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "hierarchy_matrix_nonzeros": 3999739,
+        "levels": 7,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 3,
+        "scale": 1000000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "3"
+      ],
+      "baseline_median_additional_peak_bytes": 70346804.0,
+      "baseline_median_ns": 169147263.5,
+      "baseline_median_retained_bytes": 55322004.0,
+      "baseline_peak_rss_kib": 104708,
+      "candidate_median_additional_peak_bytes": 70346804.0,
+      "candidate_median_ns": 166511042.5,
+      "candidate_median_retained_bytes": 55322004.0,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_peak_rss": 1.0006494250678075,
+      "candidate_over_baseline_time": 0.9844146399684438,
+      "candidate_peak_rss_kib": 104776,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "hierarchy_matrix_nonzeros": 7658057,
+        "levels": 9,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 3,
+        "scale": 500000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "3"
+      ],
+      "baseline_median_additional_peak_bytes": 138136088.0,
+      "baseline_median_ns": 321590547.0,
+      "baseline_median_retained_bytes": 107139168.0,
+      "baseline_peak_rss_kib": 203000,
+      "candidate_median_additional_peak_bytes": 138136088.0,
+      "candidate_median_ns": 316441655.0,
+      "candidate_median_retained_bytes": 107139168.0,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_peak_rss": 0.9999211822660099,
+      "candidate_over_baseline_time": 0.9839892930683687,
+      "candidate_peak_rss_kib": 202984,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 3000000,
+        "hierarchy_matrix_nonzeros": 15040407,
+        "levels": 10,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 3,
+        "scale": 1000000,
+        "vertices": 2000000
+      }
+    }
+  },
+  "decision_reason": "correctness passed, but split, hierarchy, or exact/process memory gates were not all met",
+  "experiment": "fused-walk-ancestor-scratch",
+  "geometric_additional_peak_ratio": 1.0,
+  "geometric_retained_ratio": 1.0,
+  "hierarchy_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "4"
+      ],
+      "baseline_median_ns": 408575909.5,
+      "baseline_peak_rss_kib": 154804,
+      "candidate_median_ns": 405041475.0,
+      "candidate_over_baseline_peak_rss": 1.0900493527299036,
+      "candidate_over_baseline_time": 0.9913493810628108,
+      "candidate_peak_rss_kib": 168744,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "repetitions": 4,
+        "scale": 100000,
+        "vertices": 200000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 45106190.0,
+      "baseline_peak_rss_kib": 77372,
+      "candidate_median_ns": 43732373.5,
+      "candidate_over_baseline_peak_rss": 1.0505092281445485,
+      "candidate_over_baseline_time": 0.9695426170997816,
+      "candidate_peak_rss_kib": 81280,
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "repetitions": 4,
+        "scale": 1000000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "4"
+      ],
+      "baseline_median_ns": 168771871.5,
+      "baseline_peak_rss_kib": 104628,
+      "candidate_median_ns": 168225932.0,
+      "candidate_over_baseline_peak_rss": 1.000038230683947,
+      "candidate_over_baseline_time": 0.996765222218917,
+      "candidate_peak_rss_kib": 104632,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "repetitions": 4,
+        "scale": 500000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 323768137.5,
+      "baseline_peak_rss_kib": 202952,
+      "candidate_median_ns": 318245671.0,
+      "candidate_over_baseline_peak_rss": 0.9998817454373448,
+      "candidate_over_baseline_time": 0.9829431439960642,
+      "candidate_peak_rss_kib": 202928,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 3000000,
+        "repetitions": 4,
+        "scale": 1000000,
+        "vertices": 2000000
+      }
+    }
+  },
+  "hierarchy_geometric_time_ratio": 0.985096394424837,
+  "improved_split_case_count": 4,
+  "max_post_drop_delta_bytes": 0,
+  "path_hierarchy_time_ratio": 0.9695426170997816,
+  "schema_version": 1,
+  "source_sha": "ca6db5ee07a2f65586eac3a0bd03b420a46c1bcd",
+  "split_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "4"
+      ],
+      "baseline_median_ns": 20025625.0,
+      "baseline_peak_rss_kib": 158228,
+      "candidate_median_ns": 17795020.5,
+      "candidate_over_baseline_peak_rss": 1.0000252799757312,
+      "candidate_over_baseline_time": 0.8886124902468712,
+      "candidate_peak_rss_kib": 158232,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "checksum": 10072980021049808031,
+        "edges": 1599978,
+        "levels": 6,
+        "parent_sets": 6,
+        "repetitions": 4,
+        "scale": 100000,
+        "total_parent_vertices": 580030,
+        "vertices": 200000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 20888225.5,
+      "baseline_peak_rss_kib": 80408,
+      "candidate_median_ns": 19500333.0,
+      "candidate_over_baseline_peak_rss": 0.9997512685304945,
+      "candidate_over_baseline_time": 0.9335562276460487,
+      "candidate_peak_rss_kib": 80388,
+      "metadata": {
+        "case": "path",
+        "checksum": 5914108976634055773,
+        "edges": 999999,
+        "levels": 7,
+        "parent_sets": 6,
+        "repetitions": 4,
+        "scale": 1000000,
+        "total_parent_vertices": 1333007,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "4"
+      ],
+      "baseline_median_ns": 24841738.0,
+      "baseline_peak_rss_kib": 110724,
+      "candidate_median_ns": 22944294.0,
+      "candidate_over_baseline_peak_rss": 1.0002528810375348,
+      "candidate_over_baseline_time": 0.9236187097698236,
+      "candidate_peak_rss_kib": 110752,
+      "metadata": {
+        "case": "worker-firm",
+        "checksum": 11591927224741261361,
+        "edges": 1499996,
+        "levels": 9,
+        "parent_sets": 8,
+        "repetitions": 4,
+        "scale": 500000,
+        "total_parent_vertices": 1422861,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 66916809.5,
+      "baseline_peak_rss_kib": 215844,
+      "candidate_median_ns": 54150229.0,
+      "candidate_over_baseline_peak_rss": 1.0000370638053409,
+      "candidate_over_baseline_time": 0.8092171369885769,
+      "candidate_peak_rss_kib": 215852,
+      "metadata": {
+        "case": "worker-firm",
+        "checksum": 16306040085227446035,
+        "edges": 2999996,
+        "levels": 10,
+        "parent_sets": 9,
+        "repetitions": 4,
+        "scale": 1000000,
+        "total_parent_vertices": 2817054,
+        "vertices": 2000000
+      }
+    }
+  },
+  "split_geometric_time_ratio": 0.887365769762719,
+  "validation": "success",
+  "worst_additional_peak_ratio": 1.0,
+  "worst_hierarchy_time_ratio": 0.996765222218917,
+  "worst_peak_rss_ratio": 1.0907469169316684,
+  "worst_retained_ratio": 1.0,
+  "worst_split_time_ratio": 0.9335562276460487
+}

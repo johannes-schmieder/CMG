@@ -1206,8 +1206,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
 - Evidence: `.ci/performance/packed-forest-visit-map-latest.json`.
 
+### Fused walk/ancestor scratch checkpoint — 2026-08-24
+
+- Replacing parallel walk and ancestor-prefix vectors with one cache-local entry vector was **not retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `0.887x` / `0.985x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst split / hierarchy / peak-RSS ratios: `0.934x` / `0.997x` / `1.091x`.
+- Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
+- Evidence: `.ci/performance/fused-walk-ancestor-scratch-latest.json`.
+
 ## Current next action
-1. Re-profile split subphases if the packed visit map is retained; otherwise test a fused walk/prefix scratch layout.
+1. Re-profile split subphases if fused scratch is retained; otherwise test bounded inline scratch with a correctness-preserving spill path.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
 4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
