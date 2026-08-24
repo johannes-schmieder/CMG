@@ -1,0 +1,38 @@
+name: Diagnose cumulative performance refresh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-cumulative-performance.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-cumulative-performance-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rerun benchmark and preserve exact output
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/diagnose_cumulative_performance.py
+
+      - name: Show diagnostic
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/cumulative-diagnostic.json || true
+          git show origin/main:.ci/performance/cumulative-latest.json || true
