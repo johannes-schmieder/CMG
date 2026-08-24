@@ -776,3 +776,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
   (66.7% of attributed time).
 - Production/manual hierarchy metadata agreement: `success`.
 - Evidence: `.ci/performance/hierarchy-phase-profile-current.json`.
+
+## Current production contraction profile
+
+- Profiled SHA: `dc557a7f76e8cb6ed13da25122f644b39bd33b8c`.
+- Dominant subphase: `sorting`
+  (76.3% of attributed contraction time).
+- Manual/production timing ratio: `1.044x`.
+- Coarse-graph equality verification: `success`.
+- Evidence: `.ci/performance/contraction-subphase-profile-current.json`.

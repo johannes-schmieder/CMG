@@ -1315,8 +1315,33 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Evidence: `.ci/performance/hierarchy-phase-profile-current.json`.
 
+### Current production contraction profile — 2026-08-24
+
+- Profiled SHA: `dc557a7f76e8cb6ed13da25122f644b39bd33b8c`.
+- Dominant contraction subphase: **sorting**
+  (76.3% of attributed contraction time).
+- Manual/production contraction time ratio: `1.044x`.
+- Every manually reconstructed coarse graph matched production exactly.
+
+| Subphase | Share | Aggregate ns |
+|---|---:|---:|
+| sorting | 76.3% | 466,213,224 |
+| mapping | 8.9% | 54,521,364 |
+| merging | 8.9% | 54,181,585 |
+| diagonal | 5.7% | 34,744,006 |
+| finalize | 0.2% | 1,414,926 |
+
+| Case | Dominant subphase | Share | Mapped edges retained after merge |
+|---|---|---:|---:|
+| path-1m | mapping | 39.8% | 100.0% |
+| worker-firm-1.5m | sorting | 77.2% | 78.9% |
+| worker-firm-3m | sorting | 77.6% | 78.2% |
+| dense-worker-firm-1.6m | sorting | 76.1% | 98.8% |
+
+- Evidence: `.ci/performance/contraction-subphase-profile-current.json`.
+
 ## Current next action
-1. Profile current compact contraction subphases and temporary allocation.
-2. Test only candidates that improve complete hierarchy time and exact memory.
-3. Refresh cumulative retained performance guidance.
+1. Profile current compact-edge sorting by level size, density, and duplicate rate.
+2. Test a narrowly routed deterministic sorting candidate against complete hierarchy time.
+3. Re-run the full hierarchy profile after any retained contraction change.
 4. Run manual 1–32 thread qualification when suitable hardware is available.
