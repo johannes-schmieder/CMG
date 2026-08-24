@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=CMG_BENCH_COMMIT");
     println!("cargo:rerun-if-changed=upstream/sspmv.c");
     println!("cargo:rerun-if-changed=upstream/rmvec.c");
     println!("cargo:rerun-if-changed=upstream/preconditioner_iterative.c");

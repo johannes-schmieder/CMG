@@ -31,6 +31,8 @@ unsafe extern "C" {
 pub(crate) struct ProjectionBenchmark {
     coarse_dimension: usize,
     loops: usize,
+    restriction_rust_samples_ns: Vec<u128>,
+    restriction_c_samples_ns: Vec<u128>,
     restriction_rust_median_ns: u128,
     restriction_c_median_ns: u128,
     restriction_rust_over_c: f64,
@@ -38,6 +40,8 @@ pub(crate) struct ProjectionBenchmark {
     restriction_c_values_per_second: f64,
     restriction_max_abs_error: f64,
     restriction_max_scaled_error: f64,
+    prolongation_rust_samples_ns: Vec<u128>,
+    prolongation_c_samples_ns: Vec<u128>,
     prolongation_rust_median_ns: u128,
     prolongation_c_median_ns: u128,
     prolongation_rust_over_c: f64,
@@ -54,6 +58,8 @@ impl ProjectionBenchmark {
                 "{{\n",
                 "    \"coarse_dimension\": {},\n",
                 "    \"loops\": {},\n",
+                "    \"restriction_rust_samples_ns\": {},\n",
+                "    \"restriction_c_samples_ns\": {},\n",
                 "    \"restriction_rust_median_ns\": {},\n",
                 "    \"restriction_c_median_ns\": {},\n",
                 "    \"restriction_rust_over_c\": {:.17e},\n",
@@ -61,6 +67,8 @@ impl ProjectionBenchmark {
                 "    \"restriction_c_values_per_second\": {:.17e},\n",
                 "    \"restriction_max_abs_error\": {:.17e},\n",
                 "    \"restriction_max_scaled_error\": {:.17e},\n",
+                "    \"prolongation_rust_samples_ns\": {},\n",
+                "    \"prolongation_c_samples_ns\": {},\n",
                 "    \"prolongation_rust_median_ns\": {},\n",
                 "    \"prolongation_c_median_ns\": {},\n",
                 "    \"prolongation_rust_over_c\": {:.17e},\n",
@@ -72,6 +80,8 @@ impl ProjectionBenchmark {
             ),
             self.coarse_dimension,
             self.loops,
+            json_u128(&self.restriction_rust_samples_ns),
+            json_u128(&self.restriction_c_samples_ns),
             self.restriction_rust_median_ns,
             self.restriction_c_median_ns,
             self.restriction_rust_over_c,
@@ -79,6 +89,8 @@ impl ProjectionBenchmark {
             self.restriction_c_values_per_second,
             self.restriction_max_abs_error,
             self.restriction_max_scaled_error,
+            json_u128(&self.prolongation_rust_samples_ns),
+            json_u128(&self.prolongation_c_samples_ns),
             self.prolongation_rust_median_ns,
             self.prolongation_c_median_ns,
             self.prolongation_rust_over_c,
@@ -242,15 +254,17 @@ pub(crate) fn benchmark(
         }
     }
 
-    let restriction_rust_median_ns = median(&mut restriction_rust_times);
-    let restriction_c_median_ns = median(&mut restriction_c_times);
-    let prolongation_rust_median_ns = median(&mut prolongation_rust_times);
-    let prolongation_c_median_ns = median(&mut prolongation_c_times);
+    let restriction_rust_median_ns = median(&restriction_rust_times);
+    let restriction_c_median_ns = median(&restriction_c_times);
+    let prolongation_rust_median_ns = median(&prolongation_rust_times);
+    let prolongation_c_median_ns = median(&prolongation_c_times);
     let visits = fine_dimension as f64 * loops as f64;
 
     Ok(ProjectionBenchmark {
         coarse_dimension: aggregation.coarse_dimension(),
         loops,
+        restriction_rust_samples_ns: restriction_rust_times,
+        restriction_c_samples_ns: restriction_c_times,
         restriction_rust_median_ns,
         restriction_c_median_ns,
         restriction_rust_over_c: restriction_rust_median_ns as f64 / restriction_c_median_ns as f64,
@@ -258,6 +272,8 @@ pub(crate) fn benchmark(
         restriction_c_values_per_second: visits * 1.0e9 / restriction_c_median_ns as f64,
         restriction_max_abs_error,
         restriction_max_scaled_error,
+        prolongation_rust_samples_ns: prolongation_rust_times,
+        prolongation_c_samples_ns: prolongation_c_times,
         prolongation_rust_median_ns,
         prolongation_c_median_ns,
         prolongation_rust_over_c: prolongation_rust_median_ns as f64
@@ -372,9 +388,21 @@ fn verify_error(kernel: &str, scaled_error: f64) -> Result<(), AnyError> {
     }
 }
 
-fn median(values: &mut [u128]) -> u128 {
-    values.sort_unstable();
-    values[values.len() / 2]
+fn median(values: &[u128]) -> u128 {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
+fn json_u128(values: &[u128]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(u128::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 #[cfg(test)]

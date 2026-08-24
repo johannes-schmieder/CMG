@@ -5,3 +5,10 @@ __pycache__/
 *.py[cod]
 *.profraw
 qualification-output/
+benchmark-runs/
+tmp/pdfs/
+benchmarks/report/*.aux
+benchmarks/report/*.fdb_latexmk
+benchmarks/report/*.fls
+benchmarks/report/*.log
+benchmarks/report/*.out

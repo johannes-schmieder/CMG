@@ -178,8 +178,8 @@ fn main() -> Result<(), AnyError> {
         }
     }
 
-    let rust_median_ns = median(&mut rust_times);
-    let c_median_ns = median(&mut c_times);
+    let rust_median_ns = median(&rust_times);
+    let c_median_ns = median(&c_times);
     let rust_over_c = rust_median_ns as f64 / c_median_ns as f64;
     let edge_visits = graph.edge_count() as f64 * loops as f64;
     let rust_edges_per_second = edge_visits * 1.0e9 / rust_median_ns as f64;
@@ -198,6 +198,8 @@ fn main() -> Result<(), AnyError> {
             "  \"canonical_edges\": {},\n",
             "  \"loops\": {},\n",
             "  \"repetitions\": {},\n",
+            "  \"rust_samples_ns\": {},\n",
+            "  \"c_samples_ns\": {},\n",
             "  \"rust_median_ns\": {},\n",
             "  \"c_median_ns\": {},\n",
             "  \"rust_over_c\": {:.17e},\n",
@@ -216,6 +218,8 @@ fn main() -> Result<(), AnyError> {
         graph.edge_count(),
         loops,
         config.repetitions,
+        json_u128(&rust_times),
+        json_u128(&c_times),
         rust_median_ns,
         c_median_ns,
         rust_over_c,
@@ -256,6 +260,17 @@ fn time_c(matrix: &UpperSymmetric, input: &[f64], output: &mut [f64], loops: usi
     start.elapsed().as_nanos()
 }
 
+fn json_u128(values: &[u128]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(u128::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
 fn compare_outputs(left: &[f64], right: &[f64]) -> (f64, f64) {
     left.iter()
         .zip(right)
@@ -266,9 +281,10 @@ fn compare_outputs(left: &[f64], right: &[f64]) -> (f64, f64) {
         })
 }
 
-fn median(values: &mut [u128]) -> u128 {
-    values.sort_unstable();
-    values[values.len() / 2]
+fn median(values: &[u128]) -> u128 {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
 }
 
 fn make_input(vertices: usize) -> Vec<f64> {

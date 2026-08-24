@@ -217,6 +217,8 @@ pub(crate) struct CycleBenchmark {
     dimension: usize,
     hierarchy_levels: usize,
     loops: usize,
+    rust_samples_ns: Vec<u128>,
+    c_samples_ns: Vec<u128>,
     rust_median_ns: u128,
     c_median_ns: u128,
     rust_over_c: f64,
@@ -234,6 +236,8 @@ impl CycleBenchmark {
                 "    \"dimension\": {},\n",
                 "    \"hierarchy_levels\": {},\n",
                 "    \"loops\": {},\n",
+                "    \"rust_samples_ns\": {},\n",
+                "    \"c_samples_ns\": {},\n",
                 "    \"rust_median_ns\": {},\n",
                 "    \"c_median_ns\": {},\n",
                 "    \"rust_over_c\": {:.17e},\n",
@@ -246,6 +250,8 @@ impl CycleBenchmark {
             self.dimension,
             self.hierarchy_levels,
             self.loops,
+            json_u128(&self.rust_samples_ns),
+            json_u128(&self.c_samples_ns),
             self.rust_median_ns,
             self.c_median_ns,
             self.rust_over_c,
@@ -326,13 +332,15 @@ pub(crate) fn benchmark(
             )?);
         }
     }
-    let rust_median_ns = median(&mut rust_times);
-    let c_median_ns = median(&mut c_times);
+    let rust_median_ns = median(&rust_times);
+    let c_median_ns = median(&c_times);
 
     Ok(CycleBenchmark {
         dimension,
         hierarchy_levels,
         loops,
+        rust_samples_ns: rust_times,
+        c_samples_ns: c_times,
         rust_median_ns,
         c_median_ns,
         rust_over_c: rust_median_ns as f64 / c_median_ns as f64,
@@ -433,9 +441,21 @@ fn compare_outputs(left: &[f64], right: &[f64]) -> (f64, f64) {
         })
 }
 
-fn median(values: &mut [u128]) -> u128 {
-    values.sort_unstable();
-    values[values.len() / 2]
+fn median(values: &[u128]) -> u128 {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
+fn json_u128(values: &[u128]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(u128::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 #[cfg(test)]

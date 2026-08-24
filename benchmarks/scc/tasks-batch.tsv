@@ -1,0 +1,4 @@
+worker-firm	300000	batch16	16
+worker-firm	1000000	batch16	16
+dense-worker-firm	300000	batch16	16
+dense-worker-firm	1000000	batch16	16

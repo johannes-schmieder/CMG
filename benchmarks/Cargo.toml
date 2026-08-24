@@ -27,3 +27,7 @@ path = "src/bin/terminal-build.rs"
 [[bin]]
 name = "contraction-subphase-profile"
 path = "src/bin/contraction-subphase-profile.rs"
+
+[[bin]]
+name = "scc-benchmark"
+path = "src/bin/scc-benchmark.rs"

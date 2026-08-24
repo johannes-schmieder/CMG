@@ -6,6 +6,28 @@ This is the maintained performance reference for the crate. Detailed one-shot op
 
 The production implementation includes compact canonical edge storage, shared Laplacian hierarchy ownership, compact aggregation/CSR indices where qualified, compressed terminal factors, reduced CMG/PCG workspaces, cached endpoint keys, optimized forest splitting and contraction, a package-owned Rayon executor, selectively routed within-solve parallelism, memory-bounded concurrency across right-hand sides, deterministic reductions, and final original-system residual certification.
 
+## SCC Rust versus official MATLAB/C study
+
+The controlled large-scale study uses Intel Xeon Gold 6242 nodes, Rust 1.98.0, MATLAB 2026a with its default C MEX compiler, and the official CMG source pinned at `19752fc102f8cae8e34f66457bfaccb1aaa60375`. Five deterministic connected graph families are measured at 100,000, 300,000, and 1,000,000 vertices with 1, 2, 4, 8, 16, and 32 application CPUs. Every primary timing is the median of three repetitions after one warm-up.
+
+At 32 CPUs, the geometric-mean Rust/MATLAB ratios across the 15 graph/size cases are:
+
+| Metric | Ratio | Interpretation |
+|---|---:|---|
+| preconditioner setup | 0.265x | Rust setup takes about 27% of MATLAB time |
+| stationary CMG application | 0.790x | Rust takes about 79% of MATLAB time |
+| reused-preconditioner PCG | 0.783x | Rust takes about 78% of MATLAB time |
+| setup plus one solve | 0.666x | Rust takes about two-thirds of MATLAB time |
+| process peak RSS | 0.150x | Rust uses about one-sixth of MATLAB process RSS |
+
+Rust is faster in setup plus solve for all five one-million-vertex families. The smallest gap is the weighted path (2.96 seconds versus 3.32 seconds); the largest is dense worker-firm degree 16 (6.73 seconds versus 14.8 seconds). The geometric-mean full-workflow speedup from 1 to 32 CPUs at one million vertices is only 1.05x for Rust and 1.15x for MATLAB, with nonmonotone family-level curves. More allocated CPUs therefore do not translate into proportional end-to-end gains when sequential setup and parallel overhead dominate.
+
+All 180 main implementation/thread points pass the scheduler, identity, timing, memory, and numerical validator. The maximum Rust backward error is `9.95e-9`; MATLAB's maximum native reported relative residual is below `1e-8`. Independently recomputed diagnostics are retained because the two packages preserve different native stopping rules. Twelve of 15 graph/size cases have matching intermediate hierarchy sizes but a one-vertex difference in the final coarse level; the three dense cases match exactly. The official MATLAB hierarchy reports its nonzero status flag for the three dense 32-CPU points, which remain included and explicitly marked.
+
+The original main archive is immutable. Its Rust and standalone-C JSON rows recorded `source_commit=unknown` because the wrapper and compiled benchmark driver used different environment-variable names. A derived copy repairs only that field in 96 files from the exact source manifest; its receipt records the raw-tree digest and all before/after hashes. No timing, numerical, input, or environment value is changed. The strengthened validator accepts the derived run, and the report discloses this bookkeeping correction.
+
+The complete report, figures, compact record, and reproduction tooling live in `benchmarks/report/`, `.ci/performance/scc-latest.json`, and `benchmarks/README.md`. Raw repetitions, logs, resource receipts, and SGE accounting remain in the isolated run archive.
+
 ## Cumulative checkpoint
 
 `.ci/performance/cumulative-latest.json` compares numerical checkpoint `f50cbd52734ad84af39131c12ad5dae181d8c7b5` with the frozen early Rust baseline `b45b252f88925028e3ad9a73a3f75eeab05f6754`. Later retained changes are not included, so this is a reproducible checkpoint rather than an exact current-head benchmark.
@@ -27,7 +49,7 @@ Individual cases vary; the JSON record contains the complete measurements.
 
 ## Direct comparison with pinned C kernels
 
-`benchmarks/c-kernel/` checks pinned upstream C sparse kernels against Rust. The latest durable record is `.ci/performance/c-kernel-latest.json`. It provides direct hot-kernel evidence, not an end-to-end MATLAB comparison, because upstream hierarchy construction is primarily MATLAB code.
+`benchmarks/c-kernel/` checks pinned upstream C sparse kernels against Rust. In the SCC study, Rust/C SpMV ratios range from 0.666x to 0.915x, restriction and prolongation are near parity, and the bounded recursive-cycle ratios range from 0.737x to 0.803x. This is direct hot-kernel evidence, not an end-to-end C-solver comparison, because upstream hierarchy construction is primarily MATLAB code.
 
 ## Parallel routing
 
@@ -81,4 +103,4 @@ The library can construct package-owned pools at 1, 2, 4, 8, 16, and 32 threads.
 
 `.github/workflows/manual-32-thread-qualification.yml` is a manually dispatched, read-only workflow for a configured larger runner or controlled self-hosted machine. It records machine topology, compiler versions, numerical agreement, setup/solve timing, iteration counts, hierarchy/workspace bytes, peak RSS, and 1/2/4/8/16/32-thread measurements where hardware permits.
 
-Until controlled large-machine evidence exists, ordinary hosted-runner results should be described as directional only.
+The SCC study now supplies controlled 32-core evidence for the synthetic graph matrix described above. Ordinary hosted-runner results and extrapolations beyond the measured SCC environment should still be described as directional only.

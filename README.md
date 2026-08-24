@@ -91,9 +91,11 @@ Reuse the same solver and workspaces whenever the graph and weights are unchange
 
 ## Performance
 
-A frozen cumulative checkpoint versus the early Rust implementation reports roughly 20% faster graph construction, 28% faster hierarchy construction, 4.4x faster stationary CMG application, 2.7x faster solve-per-RHS, and substantial memory reductions. The current hosted four-CPU routing record reaches about 2.2x planned-versus-serial speedup on its largest dense worker-firm case.
+A controlled SCC study on Intel Gold 6242 nodes compares this Rust package with the official MATLAB/C MEX CMG package on five connected graph families from 100,000 to 1,000,000 vertices. At 32 application CPUs, the geometric-mean Rust/MATLAB ratios across the 15 main cases are 0.265 for preconditioner setup, 0.783 for reused-preconditioner PCG, 0.666 for setup plus solve, and 0.150 for process peak RSS. All main cases converged, but complete-workflow scaling from 1 to 32 CPUs was modest for both packages.
 
-These are project benchmarks, not universal hardware guarantees. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for exact interpretation, maintained benchmark records, current bottlenecks, and the 32-core qualification protocol.
+A frozen cumulative checkpoint versus the early Rust implementation separately reports roughly 20% faster graph construction, 28% faster hierarchy construction, 4.4x faster stationary CMG application, 2.7x faster solve-per-RHS, and substantial memory reductions. The hosted four-CPU routing record reaches about 2.2x planned-versus-serial speedup on its largest dense worker-firm case.
+
+These are project benchmarks, not universal hardware guarantees. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for exact interpretation, accuracy diagnostics, maintained benchmark records, and limitations.
 
 ## Repository layout
 
