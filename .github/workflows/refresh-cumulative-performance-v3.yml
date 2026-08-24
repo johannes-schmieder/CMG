@@ -1,0 +1,37 @@
+name: Robust cumulative performance refresh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-cumulative-performance-v3.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-cumulative-performance-refresh
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare current implementation with frozen benchmark baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/refresh_cumulative_performance_v3.py
+
+      - name: Show cumulative record
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/cumulative-latest.json || true
