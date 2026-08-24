@@ -1,0 +1,30 @@
+{
+  "decision_record_present": true,
+  "gate_sha": "da4dd6bcf8515389f647a7a7f1b9c5d0bd78c54f",
+  "jobs": [
+    {
+      "completed_at": "2026-08-24T11:13:00Z",
+      "conclusion": "success",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32720518683/job/97410750629",
+      "id": 97410750629,
+      "name": "benchmark-and-gate",
+      "started_at": "2026-08-24T11:10:50Z",
+      "status": "completed"
+    }
+  ],
+  "monitor": "dense-endpoint-axis-v3",
+  "monitor_source_sha": "04312da58525869a4e221ff45128ca97f72ca380",
+  "run": {
+    "conclusion": "success",
+    "created_at": "2026-08-24T11:10:47Z",
+    "head_sha": "da4dd6bcf8515389f647a7a7f1b9c5d0bd78c54f",
+    "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32720518683",
+    "id": 32720518683,
+    "name": "Dense endpoint-axis compact sort gate v3",
+    "run_attempt": 1,
+    "status": "completed",
+    "updated_at": "2026-08-24T11:13:01Z"
+  },
+  "schema_version": 1,
+  "status": "completed"
+}
