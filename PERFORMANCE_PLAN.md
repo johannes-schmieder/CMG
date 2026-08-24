@@ -1057,8 +1057,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but direct-split, full-hierarchy, or memory limits were not all met.
 - Evidence: `.ci/performance/inline-forest-walk-latest.json`.
 
+### Recomputed forest ancestor-prefix checkpoint — 2026-08-24
+
+- Removing the recorded ancestor-prefix vector and recomputing prefixes at application time was **not retained**.
+- Validation: `success`; baseline/candidate split checksums and hierarchy metadata were identical.
+- Geometric trusted-split / hierarchy-build ratios: `0.821x` / `0.941x`.
+- Worst hierarchy time / process-RSS ratios: `0.987x` / `1.090x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Decision: correctness passed, but direct-split, full-hierarchy, or memory limits were not all met.
+- Evidence: `.ci/performance/recompute-forest-ancestor-prefix-latest.json`.
+
 ## Current next action
 1. Refresh cumulative retained optimization and memory guidance.
-2. Re-profile hierarchy setup only if the inline buffer is retained.
+2. Re-profile hierarchy setup if the ancestor-prefix change is retained.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Defer further forest mutations unless a new profile shows a material stable target.
+4. Preserve exact split parents and complete hierarchy diagnostics in every further gate.

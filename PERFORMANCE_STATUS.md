@@ -576,3 +576,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Trusted-split / hierarchy-build ratios: `0.981x` / `1.044x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/inline-forest-walk-latest.json`.
+
+## Recomputed forest ancestor-prefix gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Trusted-split / hierarchy-build ratios: `0.821x` / `0.941x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/recompute-forest-ancestor-prefix-latest.json`.
