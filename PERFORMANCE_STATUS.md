@@ -732,7 +732,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Preallocated forest-walk scratch gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Split / hierarchy ratios: `1.000x` / `1.000x`.
+- Validation: `success`.
+- Split / hierarchy ratios: `1.009x` / `0.999x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/preallocate-forest-walk-scratch-latest.json`.
