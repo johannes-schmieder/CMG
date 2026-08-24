@@ -1013,6 +1013,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: validation passed, but plan-build timing or exact-memory gates were not all met.
 - Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
 
+### Compact CSR row offsets checkpoint — 2026-08-24
+
+- Using checked four-byte CSR row offsets was **not retained**.
+- Validation: `success`.
+- Geometric plan-build time ratio: `1.010x`.
+- Exact additional-peak ratio: `0.955x`; retained plan ratio: `0.955x`.
+- Decision: validation passed, but plan-build timing, compact-plan, or exact-memory gates were not all met.
+- Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

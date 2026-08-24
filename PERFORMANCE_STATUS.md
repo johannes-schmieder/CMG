@@ -537,3 +537,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Plan-build time / exact peak ratios: `1.008x` / `1.000x`.
 - Retained plan ratio: `1.000x`.
 - Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
+
+## Compact CSR row offsets gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Plan-build time / exact peak ratios: `1.010x` / `0.955x`.
+- Retained plan ratio: `0.955x`.
+- Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
