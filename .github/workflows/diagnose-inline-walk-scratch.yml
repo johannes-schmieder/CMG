@@ -1,0 +1,38 @@
+name: Diagnose inline walk-scratch launcher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-inline-walk-scratch.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-inline-walk-ancestor-scratch
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Execute target and record exact output
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/diagnose_inline_walk_scratch.py
+
+      - name: Show diagnostic
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/inline-walk-ancestor-scratch-diagnostic.json || true
+          git show origin/main:.ci/performance/inline-walk-ancestor-scratch-latest.json || true
