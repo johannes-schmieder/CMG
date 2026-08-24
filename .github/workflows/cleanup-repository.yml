@@ -1,0 +1,37 @@
+name: Repository cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-repository.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-repository-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Simplify maintained repository tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/repository_cleanup.py
+
+      - name: Show resulting tree summary
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git ls-tree -r --name-only origin/main | sed -n '1,220p'
