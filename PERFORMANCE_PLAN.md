@@ -1151,8 +1151,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: large-case RSS, timing, or exact-memory confirmation limits were not all met.
 - Evidence: `.ci/performance/bounded-prefix-large-path-confirmation.json`.
 
+### Branchless ancestor-recording checkpoint — 2026-08-24
+
+- Replacing the visited branch with a Boolean-to-integer increment was **retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `0.908x` / `0.985x`.
+- Worst split / hierarchy / peak-RSS ratios: `0.951x` / `0.989x` / `1.001x`.
+- Decision: full qualification passed; ancestor-prefix recording no longer branches on every visited-state observation.
+- Evidence: `.ci/performance/branchless-ancestor-recording-latest.json`.
+
 ## Current next action
-1. Re-profile forest-split subphases if the bounded prefix is retained.
+1. Re-profile forest-split subphases if branchless recording is retained.
 2. Run the prepared branch-free diameter-front gate.
 3. Refresh cumulative retained optimization and memory guidance.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.

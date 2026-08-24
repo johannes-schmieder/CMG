@@ -648,3 +648,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Hierarchy timing ratio: `0.954x`.
 - 4m / 8m RSS ratios: `1.000x` / `1.013x`.
 - Evidence: `.ci/performance/bounded-prefix-large-path-confirmation.json`.
+
+## Branchless ancestor-recording gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `0.908x` / `0.985x`.
+- Worst peak-RSS ratio: `1.001x`.
+- Evidence: `.ci/performance/branchless-ancestor-recording-latest.json`.

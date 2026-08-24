@@ -371,12 +371,8 @@ fn split_forest_impl_with_indegree<I: ForestIndegree>(
                 }
                 k += 1;
                 walk.push(current);
-                if visited[current] {
-                    new_ancestors.push(ancestors_in_path);
-                } else {
-                    ancestors_in_path += 1;
-                    new_ancestors.push(ancestors_in_path);
-                }
+                ancestors_in_path += i64::from(u8::from(!visited[current]));
+                new_ancestors.push(ancestors_in_path);
             }
 
             if k > 5 {
@@ -627,6 +623,18 @@ mod branch_free_conductance_tests {
             let split = split_forest(&parent).unwrap();
             assert_eq!(split.len(), parent.len());
             assert!(split.iter().all(|target| *target < split.len()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod branchless_ancestor_recording_tests {
+    #[test]
+    fn boolean_increment_matches_branching_definition() {
+        for visited in [false, true] {
+            let branchless = i64::from(u8::from(!visited));
+            let branching = if visited { 0 } else { 1 };
+            assert_eq!(branchless, branching);
         }
     }
 }
