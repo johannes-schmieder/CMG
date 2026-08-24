@@ -1,0 +1,53 @@
+{
+  "cases": {
+    "path-1m-parallel": {
+      "aggregate_count": 250000,
+      "case": "path",
+      "component_labels_ns": 7886290.0,
+      "component_labels_share": 0.3299630861618838,
+      "correction_ns": 1422507.0,
+      "correction_share": 0.05951782140992569,
+      "edges": 999999,
+      "heavy_edge_ns": 2175194.5,
+      "heavy_edge_share": 0.09101033441863739,
+      "label_checksum": 4104820667897581440,
+      "mode": "parallel",
+      "phase_sum_ns": 23979609.5,
+      "repetitions": 3,
+      "scale": 1000000,
+      "split_ns": 12495618.0,
+      "split_share": 0.5228177861554656,
+      "threads": 4,
+      "total_ns": 23900522.0,
+      "unattributed_ns": 0,
+      "vertices": 1000000
+    },
+    "path-1m-serial": {
+      "aggregate_count": 250000,
+      "case": "path",
+      "component_labels_ns": 7564065.0,
+      "component_labels_share": 0.3102743129102272,
+      "correction_ns": 1421990.0,
+      "correction_share": 0.05832934674876723,
+      "edges": 999999,
+      "heavy_edge_ns": 2090737.0,
+      "heavy_edge_share": 0.08576102745692822,
+      "label_checksum": 4104820667897581440,
+      "mode": "serial",
+      "phase_sum_ns": 23309038.5,
+      "repetitions": 3,
+      "scale": 1000000,
+      "split_ns": 12232246.5,
+      "split_share": 0.5017608756847055,
+      "threads": 4,
+      "total_ns": 24378637.5,
+      "unattributed_ns": 1069599.0,
+      "vertices": 1000000
+    }
+  },
+  "error": "RuntimeError('command failed (101): benchmarks/target/release/forest-phase-profile worker-firm 500000 3 serial 4')",
+  "profile": "forest-aggregation-phases-after-ownership",
+  "schema_version": 1,
+  "source_sha": "c0c761cd9e7024f3b06572747b54f03138b1c645",
+  "status": "failure"
+}

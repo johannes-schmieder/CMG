@@ -553,3 +553,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Planned-solve / plan-size ratios: `0.989x` / `0.955x`.
 - Worst planned-solve / process-RSS ratios: `0.997x` / `1.004x`.
 - Evidence: `.ci/performance/compact-csr-row-offsets-pcg-latest.json`.
+
+## Forest phase profile after ownership and compaction work
+
+- Status: `failure`.
+- Error: `RuntimeError('command failed (101): benchmarks/target/release/forest-phase-profile worker-firm 500000 3 serial 4')`.
+- Production source was restored unchanged.
+- Evidence: `.ci/performance/forest-phase-profile-latest.json`.
+
