@@ -656,3 +656,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `0.908x` / `0.985x`.
 - Worst peak-RSS ratio: `1.001x`.
 - Evidence: `.ci/performance/branchless-ancestor-recording-latest.json`.
+
+## Post-branchless forest-split subphase profile
+
+- Status: `success`.
+- Dominant subphase: `diameter` (62.2%).
+- Allocation / indegree / diameter / conductance shares: `5.4%` / `10.1%` / `62.2%` / `22.3%`.
+- Evidence: `.ci/performance/split-forest-subphase-profile-v3-latest.json`.

@@ -1160,8 +1160,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; ancestor-prefix recording no longer branches on every visited-state observation.
 - Evidence: `.ci/performance/branchless-ancestor-recording-latest.json`.
 
+### Post-branchless forest-split subphase profile — 2026-08-24
+
+- Validation: `success`; the instrumented splitter matched production exactly for every level and repetition.
+- Aggregate shares: allocation `5.4%`, indegree `10.1%`, diameter `62.2%`, conductance `22.3%`.
+- Dominant split subphase: **diameter** (62.2%).
+- Maximum observed walk length: `9`; maximum principal scratch: `40250064` bytes.
+- Evidence: `.ci/performance/split-forest-subphase-profile-v3-latest.json`.
+
 ## Current next action
-1. Re-profile forest-split subphases if branchless recording is retained.
-2. Run the prepared branch-free diameter-front gate.
-3. Refresh cumulative retained optimization and memory guidance.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Profile diameter-walk lengths, revisit rates, and ancestor-update traffic before changing the upstream cut logic.
+2. Refresh cumulative retained optimization and memory guidance.
+3. Run the manual 1–32 thread qualification on suitable hardware when available.
+4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
