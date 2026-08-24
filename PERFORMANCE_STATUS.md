@@ -556,8 +556,8 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 ## Forest phase profile after ownership and compaction work
 
-- Status: `failure`.
-- Error: `RuntimeError('command failed (101): benchmarks/target/release/forest-phase-profile worker-firm 500000 3 serial 4')`.
-- Production source was restored unchanged.
+- Status: `success`.
+- Serial dominant phase: `split` (56.8%).
+- Executor-aware dominant phase: `split` (51.6%).
+- Cross-mode target selected for the next gate: `split`.
 - Evidence: `.ci/performance/forest-phase-profile-latest.json`.
-

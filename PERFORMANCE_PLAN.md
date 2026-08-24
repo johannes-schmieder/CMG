@@ -1031,9 +1031,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full certified-PCG timing and numerical gates passed; compact CSR row offsets retained.
 - Evidence: `.ci/performance/compact-csr-row-offsets-pcg-latest.json`.
 
-## Current next action
+### Forest phase profile — 2026-08-24
 
-1. Re-profile forest splitting/component labeling after the ownership decision.
+- Validation: `success`; exact aggregate labels were stable across all repetitions.
+- Serial aggregate shares: heavy `17.2%`, split `56.8%`, correction `4.6%`, labels `21.4%`.
+- Executor-aware aggregate shares: heavy `26.1%`, split `51.6%`, correction `4.0%`, labels `18.2%`.
+- Dominant profiled forest phase: **split**.
+- Evidence: `.ci/performance/forest-phase-profile-latest.json`.
+
+## Current next action
+1. Profile forest splitting subphases and temporary arrays on path-like and worker-firm forests.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Defer further sort variants unless a materially larger stable opportunity appears.
+4. Retain only end-to-end wins with unchanged hierarchy and residual certificates.
