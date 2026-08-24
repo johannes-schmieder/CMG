@@ -515,8 +515,8 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Rootless forest-label gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Hierarchy-build ratio: `1.000x`.
+- Validation: `success`.
+- Hierarchy-build ratio: `1.011x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
-- Worst process peak-RSS ratio: `1.000x`.
+- Worst process peak-RSS ratio: `1.009x`.
 - Evidence: `.ci/performance/rootless-forest-labels-latest.json`.
