@@ -1,4 +1,4 @@
-name: Final zipped ancestor-update gate
+name: Direct zipped ancestor-update gate
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Qualify zipped walk and ancestor-prefix updates
+      - name: Qualify direct zipped walk and ancestor-prefix updates
         shell: bash
         run: |
           set -euo pipefail
