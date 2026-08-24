@@ -584,3 +584,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Trusted-split / hierarchy-build ratios: `0.821x` / `0.941x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/recompute-forest-ancestor-prefix-latest.json`.
+
+## Recomputed ancestor-prefix RSS requalification
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Hierarchy-time / median-RSS ratios: `1.000x` / `1.000x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/recompute-forest-ancestor-prefix-rss-latest.json`.

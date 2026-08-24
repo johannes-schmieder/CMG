@@ -1067,8 +1067,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but direct-split, full-hierarchy, or memory limits were not all met.
 - Evidence: `.ci/performance/recompute-forest-ancestor-prefix-latest.json`.
 
+### Recomputed ancestor-prefix RSS requalification — 2026-08-24
+
+- The prefix-vector elimination candidate was **not retained** after an independent multi-process memory rerun.
+- Validation: `failure`; hierarchy metadata and exact allocator accounting remained unchanged.
+- Geometric hierarchy-time / median-process-RSS ratios: `1.000x` / `1.000x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Worst per-case median-RSS ratio: `1.000x`.
+- Decision: requalification failed safely: generated ancestor-prefix source marker missing.
+- Evidence: `.ci/performance/recompute-forest-ancestor-prefix-rss-latest.json`.
+
 ## Current next action
-1. Refresh cumulative retained optimization and memory guidance.
-2. Re-profile hierarchy setup if the ancestor-prefix change is retained.
+1. Profile executor heavy-edge routing against the now-qualified forest path.
+2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact split parents and complete hierarchy diagnostics in every further gate.
+4. Preserve exact split parents, hierarchy diagnostics, and residual certificates in every gate.
