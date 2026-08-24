@@ -994,6 +994,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: validation passed, but speed or temporary-memory gates were not all met.
 - Evidence: `.ci/performance/byte-forest-visited-latest.json`.
 
+### Shared Laplacian storage checkpoint — 2026-08-24
+
+- Sharing immutable edge and diagonal buffers across `Laplacian` clones was **not retained**.
+- Validation: `success`.
+- Geometric graph-build / hierarchy-build ratios: `0.994x` / `0.990x`.
+- Exact additional-peak / retained hierarchy ratios: `0.734x` / `0.687x`.
+- Worst process peak-RSS ratio: `1.001x`.
+- Decision: validation passed, but construction timing or exact/process memory gates were not all met.
+- Evidence: `.ci/performance/shared-laplacian-storage-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
