@@ -1,0 +1,37 @@
+name: Repaired forest aggregation phase profile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/profile-forest-phases-v2.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-forest-phase-profile-v2
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compile, validate, and profile forest phases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/profile_forest_phases_v2.py
+
+      - name: Show profile record
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/forest-phase-profile-latest.json || true
