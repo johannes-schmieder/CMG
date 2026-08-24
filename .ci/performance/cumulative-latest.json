@@ -1,0 +1,11 @@
+{
+  "baseline_sha": "b45b252f88925028e3ad9a73a3f75eeab05f6754",
+  "benchmark": "robust-cumulative-current-versus-frozen-baseline",
+  "cases": {},
+  "current_numerical_sha": "ede12658ce0570d14858427bf0162940fbbc88d4",
+  "error": "JSONDecodeError('Expecting property name enclosed in double quotes: line 1 column 2 (char 1)')",
+  "process_peak_rss_comparable": false,
+  "schema_version": 2,
+  "staging_sha": "f50cbd52734ad84af39131c12ad5dae181d8c7b5",
+  "status": "failure"
+}
