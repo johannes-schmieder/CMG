@@ -499,9 +499,9 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Byte forest-visited gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Split / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
+- Validation: `success`.
+- Direct-split / hierarchy-build ratios: `0.963x` / `1.012x`.
+- Exact additional-peak / worst RSS ratios: `1.000x` / `1.001x`.
 - Evidence: `.ci/performance/byte-forest-visited-latest.json`.
 
 ## Direct compact forest-label gate

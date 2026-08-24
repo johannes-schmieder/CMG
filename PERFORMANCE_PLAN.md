@@ -985,6 +985,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but timing or exact/process memory limits were not all met.
 - Evidence: `.ci/performance/rootless-forest-labels-latest.json`.
 
+### Byte forest-visited checkpoint — 2026-08-24
+
+- Replacing bit-packed visited flags with byte flags was **not retained**.
+- Validation: `success`.
+- Geometric direct-split / hierarchy-build ratios: `0.963x` / `1.012x`.
+- Exact additional-peak ratio: `1.000x`; worst process-RSS ratio: `1.001x`.
+- Decision: validation passed, but speed or temporary-memory gates were not all met.
+- Evidence: `.ci/performance/byte-forest-visited-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
