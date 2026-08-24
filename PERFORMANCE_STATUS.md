@@ -615,3 +615,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `0.962x` / `0.981x`.
 - Worst peak-RSS ratio: `1.001x`.
 - Evidence: `.ci/performance/split-conductance-branch-latest.json`.
+
+## Bounded ancestor-prefix gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Split / hierarchy ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/bounded-ancestor-prefix-latest.json`.

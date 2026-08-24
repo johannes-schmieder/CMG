@@ -1,0 +1,17 @@
+{
+  "accepted": false,
+  "decision_reason": "experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "bounded-ancestor-prefix",
+  "hierarchy_cases": {},
+  "hierarchy_geometric_time_ratio": 1.0,
+  "improved_split_case_count": 0,
+  "schema_version": 1,
+  "source_sha": "979a08335242af129db0dfcc5b8cef438e5bb588",
+  "split_cases": {},
+  "split_geometric_time_ratio": 1.0,
+  "validation": "failure",
+  "worst_hierarchy_time_ratio": 1.0,
+  "worst_peak_rss_ratio": 1.0,
+  "worst_split_time_ratio": 1.0
+}

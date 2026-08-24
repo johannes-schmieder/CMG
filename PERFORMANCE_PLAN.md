@@ -1112,8 +1112,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Maximum observed walk length: `9`; maximum principal scratch: `40250064` bytes.
 - Evidence: `.ci/performance/split-forest-subphase-profile-post-conductance.json`.
 
+### Bounded ancestor-prefix checkpoint — 2026-08-24
+
+- Replacing the dynamic `Vec<i64>` walk-prefix stream with a fixed seven-byte table was **not retained**.
+- Validation: `failure`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.000x` / `1.000x` / `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/bounded-ancestor-prefix-latest.json`.
+
 ## Current next action
-1. Profile diameter-walk lengths, revisit rates, and ancestor-update traffic before changing the upstream cut logic.
-2. Refresh cumulative retained optimization and memory guidance.
-3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
+1. Re-profile forest-split subphases if the bounded prefix is retained.
+2. Continue exact-preserving diameter-loop optimization from the updated profile.
+3. Refresh cumulative retained optimization and memory guidance.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.
