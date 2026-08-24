@@ -1,0 +1,11 @@
+{
+  "decision_present_after": false,
+  "decision_present_before": false,
+  "recovery": "bounded-ancestor-prefix",
+  "schema_version": 1,
+  "source_sha": "2cdbb1d33622a8b34f78974a038cf0425f4c90e1",
+  "status": "target_failed",
+  "target_output_tail": "  File \"/home/runner/work/CMG/CMG/scripts/bounded_ancestor_prefix_gate.py\", line 39\n    let mut ancestor_prefix = [0_u8; 7];\n                                ^\nSyntaxError: invalid decimal literal\n",
+  "target_present": true,
+  "target_returncode": 1
+}
