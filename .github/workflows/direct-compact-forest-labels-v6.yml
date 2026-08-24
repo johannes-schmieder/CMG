@@ -1,0 +1,37 @@
+name: Self-contained direct compact forest-label gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/direct-compact-forest-labels-v6.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-direct-compact-forest-labels-v6
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify self-contained direct compact forest labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/direct_compact_forest_labels_gate_v6.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/direct-compact-forest-labels-latest.json || true
