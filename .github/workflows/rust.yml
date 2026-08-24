@@ -16,6 +16,27 @@ permissions:
   contents: write
 
 jobs:
+  repository_cleanup:
+    name: one-shot repository cleanup
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Run cleanup when staged
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f scripts/repository_cleanup.py ]; then
+            python scripts/repository_cleanup.py
+          else
+            echo 'cleanup script already removed; nothing to do'
+          fi
+
   quality:
     name: quality / ubuntu
     runs-on: ubuntu-latest
