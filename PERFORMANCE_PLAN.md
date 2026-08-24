@@ -1419,6 +1419,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Raw process RSS was recorded but is not compared because the current benchmark performs an additional CSR qualification after solving.
 - Evidence: `.ci/performance/cumulative-latest.json`.
 
+### Cached endpoint-key representation checkpoint — 2026-08-24
+
+- Replacing the two compact endpoint fields with one directly sortable packed key was **retained**.
+- Validation: `success`; `Edge` remained 16 bytes and graph/hierarchy/PCG invariants were unchanged.
+- Geometric contraction / hierarchy / solve ratios: `0.926x` / `0.987x` / `1.008x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Decision: full qualification passed; cached endpoint keys materially reduced sorting and hierarchy time without solve or memory regression.
+- Evidence: `.ci/performance/cached-endpoint-key-latest.json`.
+
 ## Current next action
 1. Re-profile current contraction and hierarchy after any retained constructor changes.
 2. Profile parallel setup routing for retained serial constructor optimizations.

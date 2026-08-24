@@ -10,8 +10,7 @@ use std::sync::Arc;
 /// A canonical undirected weighted edge with `u < v` and positive weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edge {
-    u: u32,
-    v: u32,
+    key: u64,
     weight: f64,
 }
 
@@ -19,13 +18,13 @@ impl Edge {
     /// Return the lower-numbered endpoint.
     #[must_use]
     pub const fn u(self) -> usize {
-        self.u as usize
+        (self.key >> 32) as usize
     }
 
     /// Return the higher-numbered endpoint.
     #[must_use]
     pub const fn v(self) -> usize {
-        self.v as usize
+        (self.key as u32) as usize
     }
 
     /// Return the strictly positive edge weight.
@@ -55,7 +54,25 @@ impl Edge {
             vertex: v,
             maximum: u32::MAX as usize,
         })?;
-        Ok(Self { u, v, weight })
+        Ok(Self::from_compact_parts(u, v, weight))
+    }
+
+    #[inline]
+    const fn compact_u(self) -> u32 {
+        (self.key >> 32) as u32
+    }
+
+    #[inline]
+    const fn compact_v(self) -> u32 {
+        self.key as u32
+    }
+
+    #[inline]
+    const fn from_compact_parts(u: u32, v: u32, weight: f64) -> Self {
+        Self {
+            key: pack_endpoint_key(u, v),
+            weight,
+        }
     }
 }
 
@@ -167,11 +184,12 @@ impl Laplacian {
         if weights_are_sorted {
             let mut read_index = 0;
             while read_index < raw.len() {
-                let u = raw[read_index].u;
-                let v = raw[read_index].v;
+                let key = raw[read_index].key;
+                let u = raw[read_index].compact_u();
+                let v = raw[read_index].compact_v();
                 let mut sum = 0.0;
                 let mut correction = 0.0;
-                while read_index < raw.len() && raw[read_index].u == u && raw[read_index].v == v {
+                while read_index < raw.len() && raw[read_index].key == key {
                     compensated_add(&mut sum, &mut correction, raw[read_index].weight);
                     read_index += 1;
                 }
@@ -181,10 +199,11 @@ impl Laplacian {
         } else {
             let mut group_start = 0;
             while group_start < raw.len() {
-                let u = raw[group_start].u;
-                let v = raw[group_start].v;
+                let key = raw[group_start].key;
+                let u = raw[group_start].compact_u();
+                let v = raw[group_start].compact_v();
                 let mut group_end = group_start + 1;
-                while group_end < raw.len() && raw[group_end].u == u && raw[group_end].v == v {
+                while group_end < raw.len() && raw[group_end].key == key {
                     group_end += 1;
                 }
                 if group_end - group_start > 1 {
@@ -382,17 +401,18 @@ where
         } else {
             (right, left)
         };
-        raw.push(Edge {
-            u: u as u32,
-            v: v as u32,
-            weight,
-        });
+        raw.push(Edge::from_compact_parts(u as u32, v as u32, weight));
     }
     Ok(raw)
 }
 
-fn endpoint_key(edge: &Edge) -> u64 {
-    (u64::from(edge.u) << 32) | u64::from(edge.v)
+const fn pack_endpoint_key(u: u32, v: u32) -> u64 {
+    ((u as u64) << 32) | v as u64
+}
+
+#[inline]
+const fn endpoint_key(edge: &Edge) -> u64 {
+    edge.key
 }
 
 fn compare_raw_edges(left: &Edge, right: &Edge) -> core::cmp::Ordering {
@@ -437,7 +457,7 @@ fn write_merged_edge(
             weight,
         });
     }
-    raw[write_index] = Edge { u, v, weight };
+    raw[write_index] = Edge::from_compact_parts(u, v, weight);
     diagonal[u as usize] += weight;
     diagonal[v as usize] += weight;
     Ok(())
@@ -529,41 +549,13 @@ mod two_stage_sort_equivalence_tests {
     #[test]
     fn endpoint_then_weight_order_matches_total_comparator() {
         let mut candidate = vec![
-            Edge {
-                u: 4,
-                v: 9,
-                weight: 2.0,
-            },
-            Edge {
-                u: 1,
-                v: 7,
-                weight: 3.0,
-            },
-            Edge {
-                u: 4,
-                v: 9,
-                weight: 1.0,
-            },
-            Edge {
-                u: 1,
-                v: 7,
-                weight: 1.0,
-            },
-            Edge {
-                u: 2,
-                v: 8,
-                weight: 4.0,
-            },
-            Edge {
-                u: 1,
-                v: 7,
-                weight: 2.0,
-            },
-            Edge {
-                u: 2,
-                v: 8,
-                weight: 0.5,
-            },
+            Edge::from_compact_parts(4, 9, 2.0),
+            Edge::from_compact_parts(1, 7, 3.0),
+            Edge::from_compact_parts(4, 9, 1.0),
+            Edge::from_compact_parts(1, 7, 1.0),
+            Edge::from_compact_parts(2, 8, 4.0),
+            Edge::from_compact_parts(1, 7, 2.0),
+            Edge::from_compact_parts(2, 8, 0.5),
         ];
         let mut reference = candidate.clone();
         reference.sort_unstable_by(compare_raw_edges);
@@ -687,5 +679,20 @@ mod shared_laplacian_storage_tests {
         assert_eq!(left, right);
         assert!(!Arc::ptr_eq(&left.edges, &right.edges));
         assert!(!Arc::ptr_eq(&left.diagonal, &right.diagonal));
+    }
+}
+
+#[cfg(test)]
+mod cached_endpoint_key_tests {
+    use super::{Edge, endpoint_key};
+
+    #[test]
+    fn cached_key_preserves_layout_and_endpoint_access() {
+        let edge = Edge::from_compact_parts(17, 91, 2.5);
+        assert_eq!(std::mem::size_of::<Edge>(), 16);
+        assert_eq!(edge.u(), 17);
+        assert_eq!(edge.v(), 91);
+        assert_eq!(endpoint_key(&edge), (17_u64 << 32) | 91_u64);
+        assert_eq!(edge.weight().to_bits(), 2.5_f64.to_bits());
     }
 }

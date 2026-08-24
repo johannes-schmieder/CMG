@@ -837,3 +837,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Geometric graph / hierarchy / apply / solve ratios: `0.802x` / `0.721x` / `0.225x` / `0.372x`.
 - Geometric graph-core / hierarchy-core / CMG-workspace / PCG-workspace ratios: `0.735x` / `0.770x` / `0.460x` / `0.614x`.
 - Evidence: `.ci/performance/cumulative-latest.json`.
+
+## Cached endpoint-key representation gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Contraction / hierarchy / solve ratios: `0.926x` / `0.987x` / `1.008x`.
+- Exact peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/cached-endpoint-key-latest.json`.
