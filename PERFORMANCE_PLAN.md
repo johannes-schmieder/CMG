@@ -1246,8 +1246,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: name 'ENTRY_TYPES' is not defined.
 - Evidence: `.ci/performance/inline-walk-ancestor-scratch-latest.json`.
 
+### Preallocated forest-walk scratch checkpoint — 2026-08-24
+
+- Preallocating the existing walk and ancestor-prefix vectors to the qualified 16-entry bound was **not retained**.
+- Validation: `failure`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.000x` / `1.000x` / `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/preallocate-forest-walk-scratch-latest.json`.
+
 ## Current next action
-1. Re-profile split subphases after any retained compact scratch change.
+1. Re-profile split subphases if fused scratch is retained; otherwise test bounded inline scratch with a correctness-preserving spill path.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
 4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
