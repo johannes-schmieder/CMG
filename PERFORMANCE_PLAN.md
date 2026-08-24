@@ -1256,6 +1256,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
 - Evidence: `.ci/performance/preallocate-forest-walk-scratch-latest.json`.
 
+### Routed routed fused walk/ancestor scratch checkpoint — 2026-08-24
+
+- Routing worker-like forest fronts to a fused cache-local entry vector while retaining the original path for path-like and dense fronts was **not retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `1.004x` / `1.013x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.022x` / `1.046x` / `1.090x`.
+- Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
+- Evidence: `.ci/performance/routed-fused-walk-scratch-latest.json`.
+
 ## Current next action
 1. Re-profile split subphases if fused scratch is retained; otherwise test bounded inline scratch with a correctness-preserving spill path.
 2. Refresh cumulative retained optimization and memory guidance.

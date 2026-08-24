@@ -736,3 +736,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `1.009x` / `0.999x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/preallocate-forest-walk-scratch-latest.json`.
+
+## Routed routed fused walk/ancestor scratch gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `1.004x` / `1.013x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/routed-fused-walk-scratch-latest.json`.
