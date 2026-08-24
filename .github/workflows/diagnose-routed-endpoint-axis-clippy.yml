@@ -1,0 +1,33 @@
+name: Diagnose routed endpoint-axis Clippy failure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-routed-endpoint-axis-clippy.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Capture exact Clippy diagnostic and restore source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/diagnose_routed_endpoint_axis_clippy.py
+
+      - name: Show diagnostic
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/routed-endpoint-axis-sort-clippy.json || true
