@@ -671,3 +671,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `0.992x` / `0.997x`.
 - Worst peak-RSS ratio: `1.001x`.
 - Evidence: `.ci/performance/zipped-ancestor-updates-latest.json`.
+
+## Branch-free diameter-front gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `1.007x` / `0.995x`.
+- Worst peak-RSS ratio: `1.001x`.
+- Evidence: `.ci/performance/diameter-front-control-latest.json`.

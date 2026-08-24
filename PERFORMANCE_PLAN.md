@@ -1177,8 +1177,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
 - Evidence: `.ci/performance/zipped-ancestor-updates-latest.json`.
 
+### Branch-free diameter-front checkpoint — 2026-08-24
+
+- Replacing the diameter pass's `continue_walk` state with labeled control flow was **not retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `1.007x` / `0.995x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.075x` / `1.006x` / `1.001x`.
+- Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/diameter-front-control-latest.json`.
+
 ## Current next action
-1. Re-profile the diameter pass after the zipped-update decision.
+1. Re-profile forest-split subphases if the diameter-front refactor is retained.
 2. Continue exact-preserving diameter-loop optimization from the updated profile.
 3. Refresh cumulative retained optimization and memory guidance.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.
