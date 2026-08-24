@@ -623,3 +623,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `0.918x` / `0.966x`.
 - Worst peak-RSS ratio: `1.090x`.
 - Evidence: `.ci/performance/bounded-ancestor-prefix-latest.json`.
+
+## Bounded ancestor-prefix exact-memory gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Prior split / rerun hierarchy ratios: `0.918x` / `0.985x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Median RSS geometric / worst ratios: `1.013x` / `1.051x`.
+- Evidence: `.ci/performance/bounded-ancestor-prefix-memory-latest.json`.

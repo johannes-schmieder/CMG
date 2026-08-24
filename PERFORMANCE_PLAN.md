@@ -1121,6 +1121,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
 - Evidence: `.ci/performance/bounded-ancestor-prefix-latest.json`.
 
+### Bounded ancestor-prefix exact-memory checkpoint — 2026-08-24
+
+- The seven-byte bounded ancestor-prefix candidate was **not retained** after exact-memory requalification.
+- Validation: `success`; prior exact split checksums and hierarchy metadata were unchanged.
+- Prior split / rerun hierarchy timing ratios: `0.918x` / `0.985x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Median process-RSS geometric / worst-case ratios: `1.013x` / `1.051x`.
+- Decision: timing, exact allocator, or repeated process-RSS limits were not all met.
+- Evidence: `.ci/performance/bounded-ancestor-prefix-memory-latest.json`.
+
 ## Current next action
 1. Re-profile forest-split subphases if the bounded prefix is retained.
 2. Continue exact-preserving diameter-loop optimization from the updated profile.
