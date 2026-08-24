@@ -1,0 +1,37 @@
+name: Compact CSR row-offset gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-csr-row-offsets.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-compact-csr-row-offsets
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify compact retained CSR row offsets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/compact_csr_row_offsets_gate.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/compact-csr-row-offsets-latest.json || true
