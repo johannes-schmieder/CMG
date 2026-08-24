@@ -1,8 +1,0 @@
-{
-  "decision_record_exists_on_origin": false,
-  "diagnostic": "inline-walk-ancestor-scratch-launcher",
-  "origin_head_after_target": "a180afb4cc1dabbafd7eb7bf66baa7ff875a724f",
-  "schema_version": 1,
-  "target_output": "  File \"/home/runner/work/CMG/CMG/scripts/inline_walk_ancestor_scratch_gate.py\", line 123\n    new_ancestors.push(0_i64);\n                        ^\nSyntaxError: invalid decimal literal\n",
-  "target_returncode": 1
-}
