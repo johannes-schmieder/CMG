@@ -975,6 +975,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: qualification passed, but timing or exact/process memory limits were not all met.
 - Evidence: `.ci/performance/direct-compact-forest-labels-latest.json`.
 
+### Rootless forest-label checkpoint — 2026-08-24
+
+- Reusing `labels[root]` instead of a full root-to-label vector was **not retained**.
+- Validation: `failure`.
+- Geometric hierarchy-build ratio: `1.000x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst process peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/rootless-forest-labels-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.
