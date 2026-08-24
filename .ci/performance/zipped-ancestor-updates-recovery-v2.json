@@ -1,0 +1,11 @@
+{
+  "decision_present": false,
+  "recovery": "zipped-ancestor-updates-v2",
+  "resolved": false,
+  "schema_version": 1,
+  "source_sha": "a3e4ccd8cef8d4f5a8ac9c1a6c0291cc0cc663e3",
+  "status": "target_failed",
+  "target_output": "historical zipped cleanup block changed unexpectedly\n",
+  "target_present": true,
+  "target_returncode": 1
+}
