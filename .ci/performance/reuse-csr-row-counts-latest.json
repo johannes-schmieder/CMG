@@ -1,17 +1,171 @@
 {
+  "acceptance_limits": {
+    "geometric_additional_peak_ratio_max": 0.95,
+    "geometric_retained_ratio_max": 1.001,
+    "geometric_time_ratio_max": 1.01,
+    "max_post_drop_delta_bytes": 0,
+    "worst_additional_peak_ratio_max": 0.98,
+    "worst_retained_ratio_max": 1.001,
+    "worst_time_ratio_max": 1.04
+  },
   "accepted": false,
-  "cases": {},
-  "decision_reason": "experiment failed safely: command failed (101): cargo build --release --features parallel --bin csr-plan-build-gate",
-  "error": "RuntimeError('command failed (101): cargo build --release --features parallel --bin csr-plan-build-gate')",
+  "cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "5",
+        "4"
+      ],
+      "baseline_median_additional_peak_bytes": 180783544,
+      "baseline_median_ns": 102749024,
+      "baseline_median_retained_bytes": 180272424,
+      "candidate_median_additional_peak_bytes": 180783544,
+      "candidate_median_ns": 103178414,
+      "candidate_median_retained_bytes": 180272424,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_ns": 1.004179017797775,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1599978,
+        "levels": 6,
+        "max_post_drop_delta_bytes": 0,
+        "operators": 5,
+        "plan_bytes": 180271608,
+        "repetitions": 5,
+        "scale": 100000,
+        "threads": 4,
+        "vertices": 200000
+      }
+    },
+    "dense-worker-firm-800k": {
+      "arguments": [
+        "dense-worker-firm",
+        "50000",
+        "5",
+        "4"
+      ],
+      "baseline_median_additional_peak_bytes": 90421952,
+      "baseline_median_ns": 41560811,
+      "baseline_median_retained_bytes": 90168136,
+      "candidate_median_additional_peak_bytes": 90421952,
+      "candidate_median_ns": 42241903,
+      "candidate_median_retained_bytes": 90168136,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_ns": 1.0163878419023151,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 799978,
+        "levels": 6,
+        "max_post_drop_delta_bytes": 0,
+        "operators": 5,
+        "plan_bytes": 90167320,
+        "repetitions": 5,
+        "scale": 50000,
+        "threads": 4,
+        "vertices": 100000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "5",
+        "4"
+      ],
+      "baseline_median_additional_peak_bytes": 85787328,
+      "baseline_median_ns": 33965124,
+      "baseline_median_retained_bytes": 85781728,
+      "candidate_median_additional_peak_bytes": 85787328,
+      "candidate_median_ns": 34023840,
+      "candidate_median_retained_bytes": 85781728,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_ns": 1.00172871443072,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1499996,
+        "levels": 9,
+        "max_post_drop_delta_bytes": 0,
+        "operators": 8,
+        "plan_bytes": 85780120,
+        "repetitions": 5,
+        "scale": 500000,
+        "threads": 4,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "5",
+        "4"
+      ],
+      "baseline_median_additional_peak_bytes": 168766720,
+      "baseline_median_ns": 70980560,
+      "baseline_median_retained_bytes": 168760304,
+      "candidate_median_additional_peak_bytes": 168766720,
+      "candidate_median_ns": 72687740,
+      "candidate_median_retained_bytes": 168760304,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_ns": 1.0240513740663642,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 2999996,
+        "levels": 10,
+        "max_post_drop_delta_bytes": 0,
+        "operators": 9,
+        "plan_bytes": 168758688,
+        "repetitions": 5,
+        "scale": 1000000,
+        "threads": 4,
+        "vertices": 2000000
+      }
+    },
+    "worker-firm-600k": {
+      "arguments": [
+        "worker-firm",
+        "200000",
+        "5",
+        "4"
+      ],
+      "baseline_median_additional_peak_bytes": 33151336,
+      "baseline_median_ns": 9792037,
+      "baseline_median_retained_bytes": 33142664,
+      "candidate_median_additional_peak_bytes": 33151336,
+      "candidate_median_ns": 9730442,
+      "candidate_median_retained_bytes": 33142664,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_ns": 0.9937096847162649,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 599996,
+        "levels": 7,
+        "max_post_drop_delta_bytes": 0,
+        "operators": 6,
+        "plan_bytes": 33141840,
+        "repetitions": 5,
+        "scale": 200000,
+        "threads": 4,
+        "vertices": 400000
+      }
+    }
+  },
+  "decision_reason": "validation passed, but plan-build timing or exact-memory gates were not all met",
   "experiment": "reuse-csr-row-counts",
   "geometric_additional_peak_ratio": 1.0,
   "geometric_retained_ratio": 1.0,
-  "geometric_time_ratio": 1.0,
+  "geometric_time_ratio": 1.0079532715685142,
   "max_post_drop_delta_bytes": 0,
   "schema_version": 1,
-  "source_sha": "06dc4449db117d8a2509f5d25ec96f0fc962c221",
-  "validation": "failure",
+  "source_sha": "4410cfcc3888c9c104612c5abd5ae54578b76ef3",
+  "validation": "success",
   "worst_additional_peak_ratio": 1.0,
   "worst_retained_ratio": 1.0,
-  "worst_time_ratio": 1.0
+  "worst_time_ratio": 1.0240513740663642
 }

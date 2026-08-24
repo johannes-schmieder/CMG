@@ -1007,10 +1007,10 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### CSR row-count reuse checkpoint — 2026-08-24
 
 - Reusing row counts as CSR insertion cursors was **not retained**.
-- Validation: `failure`.
-- Geometric plan-build time ratio: `1.000x`.
+- Validation: `success`.
+- Geometric plan-build time ratio: `1.008x`.
 - Exact additional-peak ratio: `1.000x`; retained plan ratio: `1.000x`.
-- Decision: experiment failed safely: command failed (101): cargo build --release --features parallel --bin csr-plan-build-gate.
+- Decision: validation passed, but plan-build timing or exact-memory gates were not all met.
 - Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
 
 ## Current next action

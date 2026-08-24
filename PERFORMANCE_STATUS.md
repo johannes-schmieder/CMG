@@ -533,7 +533,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## CSR row-count reuse gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Plan-build time / exact peak ratios: `1.000x` / `1.000x`.
+- Validation: `success`.
+- Plan-build time / exact peak ratios: `1.008x` / `1.000x`.
 - Retained plan ratio: `1.000x`.
 - Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
