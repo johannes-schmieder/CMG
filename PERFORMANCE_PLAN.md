@@ -1428,6 +1428,21 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; cached endpoint keys materially reduced sorting and hierarchy time without solve or memory regression.
 - Evidence: `.ci/performance/cached-endpoint-key-latest.json`.
 
+### Cached-key contraction profile — 2026-08-24
+
+- The benchmark-only profiler now mirrors the retained packed-key `Edge` layout rather than recomputing endpoint keys.
+- Production/manual equivalence passed for every profiled hierarchy level.
+
+| Case | Production contraction ns | Manual/production | Map share | Sort share | Merge+diagonal share |
+|---|---:|---:|---:|---:|---:|
+| path-500k | 2165840 | 0.993x | 43.3% | 16.6% | 30.6% |
+| worker-firm-750k | 39197097 | 1.037x | 11.8% | 75.3% | 12.3% |
+| worker-firm-1.5m | 85373362 | 1.045x | 13.5% | 73.4% | 12.4% |
+| dense-worker-firm-1.6m | 284127288 | 1.030x | 12.0% | 75.5% | 12.4% |
+
+- Weighted mapping / sorting / merge+diagonal / finalize shares: `12.4%` / `74.7%` / `12.5%` / `0.3%`.
+- Evidence: `.ci/performance/contraction-subphase-profile-cached-key.json`.
+
 ## Current next action
 1. Re-profile current contraction and hierarchy after any retained constructor changes.
 2. Profile parallel setup routing for retained serial constructor optimizations.

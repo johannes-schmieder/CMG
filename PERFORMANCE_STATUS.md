@@ -845,3 +845,9 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Contraction / hierarchy / solve ratios: `0.926x` / `0.987x` / `1.008x`.
 - Exact peak / retained hierarchy ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/cached-endpoint-key-latest.json`.
+
+## Cached-key contraction profile
+
+- Weighted mapping / sorting / merge+diagonal / finalize shares: `12.4%` / `74.7%` / `12.5%` / `0.3%`.
+- The benchmark proxy uses the retained cached endpoint-key representation.
+- Evidence: `.ci/performance/contraction-subphase-profile-cached-key.json`.
