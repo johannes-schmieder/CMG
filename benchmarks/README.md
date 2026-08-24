@@ -35,19 +35,19 @@ cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
 Representative runs:
 
 ```bash
-cargo run --release --manifest-path benchmarks/Cargo.toml -- \
+cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin hierarchy-build -- worker-firm 500000 5
 
-cargo run --release --manifest-path benchmarks/Cargo.toml -- \
+cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin hierarchy-alloc -- worker-firm 500000 5
 
-cargo run --release --manifest-path benchmarks/Cargo.toml -- \
+cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin single-rhs-solve -- worker-firm 100000 7
 
-cargo run --release --manifest-path benchmarks/Cargo.toml -- \
+cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin parallel-pcg-solve -- worker-firm 200000 7 4
 
-cargo run --release --manifest-path benchmarks/Cargo.toml -- \
+cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin prepared-solver-auto -- worker-firm 100000 8 7 4
 ```
 
