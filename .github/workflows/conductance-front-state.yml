@@ -1,0 +1,37 @@
+name: Conductance front-state gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/conductance-front-state.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-conductance-front-state
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify direct conductance front-state reporting
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/conductance_front_state_gate.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/conductance-front-state-latest.json || true
