@@ -823,3 +823,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Active dense contraction / hierarchy ratios: `0.970x` / `0.975x`.
 - Overall hierarchy ratio: `0.998x`.
 - Evidence: `.ci/performance/separate-dense-axis-constructor-latest.json`.
+
+## Presorted sparse-constructor gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Path contraction / hierarchy ratios: `1.009x` / `0.996x`.
+- Evidence: `.ci/performance/presorted-sparse-constructor-latest.json`.

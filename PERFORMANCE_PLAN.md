@@ -1392,8 +1392,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but active, whole-workload, control, hierarchy, or memory gates were not all met.
 - Evidence: `.ci/performance/separate-dense-axis-constructor-latest.json`.
 
+### Presorted sparse-constructor checkpoint — 2026-08-24
+
+- Scanning tree-like coarse edges and skipping packed-key sorting only when exact endpoint order is already monotone was **not retained**.
+- Validation: `success`; unsorted sparse inputs fall back to the original packed sort.
+- Path contraction / hierarchy geometric ratios: `1.009x` / `0.996x`.
+- Overall hierarchy ratio: `0.997x`; worst peak-RSS ratio: `1.007x`.
+- Decision: correctness passed, but path, overall hierarchy, control, or memory gates were not all met.
+- Evidence: `.ci/performance/presorted-sparse-constructor-latest.json`.
+
 ## Current next action
-1. Re-profile contraction and hierarchy if the separate dense constructor is retained.
-2. Otherwise close endpoint-axis routing and test a sorted-input fast path for path-like levels.
+1. Re-profile current contraction and hierarchy after any retained constructor changes.
+2. Profile parallel setup routing for retained serial constructor optimizations.
 3. Refresh cumulative retained optimization and memory guidance.
 4. Run manual 1–32 thread qualification when suitable hardware is available.
