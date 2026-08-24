@@ -1,0 +1,16 @@
+{
+  "runs": [
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-24T06:29:28Z",
+      "head_sha": "b4191705d8bd6038b17febee84323b65aa627f58",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32697547151",
+      "id": 32697547151,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-24T06:30:03Z"
+    }
+  ],
+  "schema_version": 1,
+  "workflow": "internal-serial-heavy-edge.yml"
+}
