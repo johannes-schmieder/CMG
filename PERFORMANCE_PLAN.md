@@ -1186,8 +1186,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
 - Evidence: `.ci/performance/diameter-front-control-latest.json`.
 
+### Diameter traffic profile — 2026-08-24
+
+- Status: `success`; every profiled split parent vector matched production exactly.
+- Profiled vertices / diameter fronts / parent steps: `6152952` / `1927842` / `7768216`.
+- Parent steps per profiled vertex: `1.263`; revisit share: `35.470%`.
+- Diameter ancestor updates per parent step: `1.045`.
+- Counted diameter-work shares: parent traversal `48.9%`, ancestor updates `51.1%`.
+- Maximum walk length: `9`; histogram: `[0, 6378, 883584, 534405, 88367, 35368, 376550, 3150, 40, 0, 0, 0, 0, 0, 0, 0]`.
+- Evidence: `.ci/performance/diameter-traffic-profile-latest.json`.
+
 ## Current next action
-1. Re-profile forest-split subphases if the diameter-front refactor is retained.
-2. Continue exact-preserving diameter-loop optimization from the updated profile.
-3. Refresh cumulative retained optimization and memory guidance.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Use the measured diameter traffic mix to select one exact-preserving traversal or scratch-layout gate.
+2. Refresh cumulative retained optimization and memory guidance.
+3. Run the manual 1–32 thread qualification on suitable hardware when available.
+4. Preserve exact split parents and complete hierarchy diagnostics in every gate.

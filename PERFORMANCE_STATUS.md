@@ -679,3 +679,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `1.007x` / `0.995x`.
 - Worst peak-RSS ratio: `1.001x`.
 - Evidence: `.ci/performance/diameter-front-control-latest.json`.
+
+## Diameter traffic profile
+
+- Status: `success`.
+- Parent steps per profiled vertex: `1.263`.
+- Revisit share: `35.470%`.
+- Counted parent-step / ancestor-update shares: `48.9%` / `51.1%`.
+- Maximum walk length: `9`.
+- Evidence: `.ci/performance/diameter-traffic-profile-latest.json`.
