@@ -1,0 +1,37 @@
+name: Streaming LSD radix-sort feasibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/lsd-radix-sort-feasibility.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-lsd-radix-sort-feasibility
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare streaming LSD radix sort with comparison sort
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/lsd_radix_sort_feasibility.py
+
+      - name: Show feasibility result
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/lsd-radix-sort-feasibility.json || true
