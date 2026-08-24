@@ -1452,6 +1452,23 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but contraction, hierarchy, solve, or temporary-memory gates were not all met.
 - Evidence: `.ci/performance/row-bucket-endpoint-sort-latest.json`.
 
+### Streaming LSD radix feasibility — 2026-08-24
+
+- Four-pass 16-bit stable LSD sorting with constant-pass elimination was classified as **promising-for-memory-routed-production-gate**.
+- Every candidate contraction matched the canonical hierarchy graph bitwise.
+
+| Case | Sort ratio | Full manual-contraction ratio | Process RSS ratio |
+|---|---:|---:|---:|
+| path-500k | 9.415x | 2.435x | 1.025x |
+| worker-firm-750k | 0.604x | 0.697x | 1.139x |
+| worker-firm-1.5m | 0.649x | 0.725x | 1.167x |
+| dense-worker-firm-1.6m | 0.812x | 0.861x | 1.131x |
+
+- Active worker/dense geometric sort / total ratios: `0.683x` / `0.758x`.
+- Worst process-RSS ratio: `1.167x`.
+- No production source changed in this feasibility probe.
+- Evidence: `.ci/performance/lsd-radix-sort-feasibility.json`.
+
 ## Current next action
 1. Re-profile current contraction and hierarchy after any retained constructor changes.
 2. Profile parallel setup routing for retained serial constructor optimizations.

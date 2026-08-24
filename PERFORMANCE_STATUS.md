@@ -859,3 +859,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Active contraction / hierarchy / solve ratios: `1.120x` / `1.157x` / `0.998x`.
 - Exact peak / retained hierarchy ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/row-bucket-endpoint-sort-latest.json`.
+
+## Streaming LSD radix feasibility
+
+- Classification: `promising-for-memory-routed-production-gate`.
+- Active sort / total ratios: `0.683x` / `0.758x`.
+- Worst RSS ratio: `1.167x`.
+- Production was unchanged.
+- Evidence: `.ci/performance/lsd-radix-sort-feasibility.json`.

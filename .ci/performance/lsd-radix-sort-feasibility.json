@@ -1,0 +1,112 @@
+{
+  "active_sort_geometric_ratio": 0.6826198814496504,
+  "active_total_geometric_ratio": 0.7578358918587986,
+  "cases": {
+    "dense-worker-firm-1.6m": {
+      "comparison_mapping_ns": 32966179.0,
+      "comparison_merging_ns": 31283511.5,
+      "comparison_peak_rss_kib": 177264,
+      "comparison_sorting_ns": 194450085.0,
+      "comparison_total_ns": 258918869.5,
+      "lsd_mapping_ns": 33415441.0,
+      "lsd_merging_ns": 31849062.0,
+      "lsd_over_comparison_mapping_ns": 1.013627967014315,
+      "lsd_over_comparison_merging_ns": 1.0180782294852033,
+      "lsd_over_comparison_peak_rss": 1.1311038902428017,
+      "lsd_over_comparison_sorting_ns": 0.8117974209165298,
+      "lsd_over_comparison_total_ns": 0.8613112571928636,
+      "lsd_peak_rss_kib": 200504,
+      "lsd_sorting_ns": 157854077.5,
+      "lsd_total_ns": 223009737.0,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "levels": 6,
+        "profiled_levels": 5,
+        "scale": 100000,
+        "vertices": 200000
+      }
+    },
+    "path-500k": {
+      "comparison_mapping_ns": 826318.0,
+      "comparison_merging_ns": 553807.0,
+      "comparison_peak_rss_kib": 35072,
+      "comparison_sorting_ns": 274530.5,
+      "comparison_total_ns": 1655886.5,
+      "lsd_mapping_ns": 877042.5,
+      "lsd_merging_ns": 552359.5,
+      "lsd_over_comparison_mapping_ns": 1.0613861733618293,
+      "lsd_over_comparison_merging_ns": 0.9973862735573945,
+      "lsd_over_comparison_peak_rss": 1.0247490875912408,
+      "lsd_over_comparison_sorting_ns": 9.414806369419791,
+      "lsd_over_comparison_total_ns": 2.435115269071884,
+      "lsd_peak_rss_kib": 35940,
+      "lsd_sorting_ns": 2584651.5,
+      "lsd_total_ns": 4032274.5,
+      "metadata": {
+        "case": "path",
+        "edges": 499999,
+        "levels": 6,
+        "profiled_levels": 5,
+        "scale": 500000,
+        "vertices": 500000
+      }
+    },
+    "worker-firm-1.5m": {
+      "comparison_mapping_ns": 8921103.5,
+      "comparison_merging_ns": 9692448.5,
+      "comparison_peak_rss_kib": 106332,
+      "comparison_sorting_ns": 58518103.0,
+      "comparison_total_ns": 77124516.0,
+      "lsd_mapping_ns": 8584714.0,
+      "lsd_merging_ns": 9164795.0,
+      "lsd_over_comparison_mapping_ns": 0.9622928374275671,
+      "lsd_over_comparison_merging_ns": 0.9455603504109411,
+      "lsd_over_comparison_peak_rss": 1.167287364104879,
+      "lsd_over_comparison_sorting_ns": 0.6491226227890539,
+      "lsd_over_comparison_total_ns": 0.7253476961852182,
+      "lsd_peak_rss_kib": 124120,
+      "lsd_sorting_ns": 37985424.5,
+      "lsd_total_ns": 55942090.0,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "levels": 9,
+        "profiled_levels": 8,
+        "scale": 500000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-750k": {
+      "comparison_mapping_ns": 4045554.5,
+      "comparison_merging_ns": 4341175.5,
+      "comparison_peak_rss_kib": 54372,
+      "comparison_sorting_ns": 27497782.0,
+      "comparison_total_ns": 35884661.5,
+      "lsd_mapping_ns": 4009000.5,
+      "lsd_merging_ns": 4289291.0,
+      "lsd_over_comparison_mapping_ns": 0.9909644030255926,
+      "lsd_over_comparison_merging_ns": 0.9880482832357272,
+      "lsd_over_comparison_peak_rss": 1.1385271831089532,
+      "lsd_over_comparison_sorting_ns": 0.6036182845583691,
+      "lsd_over_comparison_total_ns": 0.6966572333418835,
+      "lsd_peak_rss_kib": 61904,
+      "lsd_sorting_ns": 16598164.0,
+      "lsd_total_ns": 24999309.0,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 750000,
+        "levels": 7,
+        "profiled_levels": 6,
+        "scale": 250000,
+        "vertices": 500000
+      }
+    }
+  },
+  "classification": "promising-for-memory-routed-production-gate",
+  "experiment": "streaming-lsd-radix-sort-feasibility",
+  "schema_version": 1,
+  "source_sha": "439a8e2818f13f82e00031e161c04a852da5475e",
+  "status": "success",
+  "worst_peak_rss_ratio": 1.167287364104879
+}
