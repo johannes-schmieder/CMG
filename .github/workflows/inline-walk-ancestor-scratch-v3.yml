@@ -1,0 +1,18 @@
+name: Inline scratch gate v3
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inline-walk-ancestor-scratch-v3.yml
+permissions:
+  contents: write
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - run: python scripts/inline_walk_ancestor_scratch_gate_v3.py
