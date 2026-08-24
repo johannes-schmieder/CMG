@@ -1,0 +1,41 @@
+name: Monitor cumulative performance refresh
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/monitor-cumulative-performance.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: cmg-cumulative-performance-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Wait for cumulative benchmark and preserve result or logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/monitor_cumulative_performance.py
+
+      - name: Show benchmark status
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/cumulative-run-status.json || true
+          git show origin/main:.ci/performance/cumulative-latest.json || true
