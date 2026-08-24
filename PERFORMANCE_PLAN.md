@@ -1352,10 +1352,10 @@ After in-place level output and recursive centering, the accepted recursive-cent
 ### Routed routed endpoint-axis compact sort checkpoint — 2026-08-24
 
 - Measured work/density routing between packed-key sorting and endpoint-axis sorting was **not retained**.
-- Validation: `failure`; canonical endpoint order and hierarchy metadata were unchanged.
-- Geometric production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
-- Worst contraction / hierarchy / peak-RSS ratios: `1.000x` / `1.000x` / `1.000x`.
-- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Validation: `success`; canonical endpoint order and hierarchy metadata were unchanged.
+- Geometric production-contraction / hierarchy-build ratios: `0.995x` / `0.992x`.
+- Worst contraction / hierarchy / peak-RSS ratios: `1.009x` / `1.006x` / `1.007x`.
+- Decision: correctness passed, but routed contraction, hierarchy, control, or memory gates were not all met.
 - Evidence: `.ci/performance/routed-endpoint-axis-sort-latest.json`.
 
 ## Current next action
