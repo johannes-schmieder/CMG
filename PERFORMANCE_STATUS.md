@@ -600,3 +600,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worker/dense hierarchy-build ratio: `0.861x`.
 - Worst median-RSS ratio: `1.044x`.
 - Evidence: `.ci/performance/internal-serial-heavy-edge-latest.json`.
+
+## Owned forest-split gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Hierarchy-time / exact additional-peak ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/owned-forest-split-latest.json`.

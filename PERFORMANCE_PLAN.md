@@ -1086,8 +1086,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
 - Evidence: `.ci/performance/internal-serial-heavy-edge-latest.json`.
 
+### Owned forest-split checkpoint — 2026-08-24
+
+- Consuming the hierarchy-owned heavy-parent vector in the trusted splitter was **not retained**.
+- Validation: `failure`; hierarchy diagnostics were identical.
+- Geometric hierarchy-time / exact additional-peak ratios: `1.000x` / `1.000x`.
+- Worst median-process-RSS / retained-hierarchy ratios: `1.000x` / `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/owned-forest-split-latest.json`.
+
 ## Current next action
-1. Refresh cumulative retained optimization and memory guidance.
-2. Re-profile hierarchy setup after the latest retained forest changes.
+1. Re-profile hierarchy setup after the latest retained forest changes.
+2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Keep the public parallel heavy-edge API available for callers with reusable row operators.
+4. Preserve exact hierarchy and residual certificates in every further gate.
