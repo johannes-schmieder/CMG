@@ -409,35 +409,37 @@ fn split_forest_impl_with_indegree<I: ForestIndegree>(
 
     for start in 0..n {
         let mut current = start;
-        let mut continue_walk = true;
-        while continue_walk && indegree[current].is_zero() {
-            continue_walk = false;
+        'new_front: while indegree[current].is_zero() {
             let mut previous = current;
-            let mut cut_mode = false;
-            let mut removed_ancestors = 0_i64;
-            let mut new_front = current;
-
             loop {
                 let next = forest[current];
                 if next == current || next == previous {
-                    break;
+                    break 'new_front;
                 }
-                if !cut_mode && ancestors[current] > 2 && ancestors[next] - ancestors[current] > 2 {
+                if ancestors[current] > 2 && ancestors[next] - ancestors[current] > 2 {
                     forest[current] = current;
                     indegree[next].decrement();
-                    removed_ancestors = ancestors[current];
-                    new_front = next;
-                    cut_mode = true;
+                    let removed_ancestors = ancestors[current];
+
+                    let mut adjustment_previous = current;
+                    let mut adjustment_current = next;
+                    loop {
+                        ancestors[adjustment_current] -= removed_ancestors;
+                        let adjustment_next = forest[adjustment_current];
+                        if adjustment_next == adjustment_current
+                            || adjustment_next == adjustment_previous
+                        {
+                            break;
+                        }
+                        adjustment_previous = adjustment_current;
+                        adjustment_current = adjustment_next;
+                    }
+
+                    current = next;
+                    continue 'new_front;
                 }
                 previous = current;
                 current = next;
-                if cut_mode {
-                    ancestors[current] -= removed_ancestors;
-                }
-            }
-            if cut_mode {
-                continue_walk = true;
-                current = new_front;
             }
         }
     }
@@ -608,5 +610,23 @@ mod compact_forest_indegree_tests {
         assert!(result.iter().enumerate().all(|(vertex, target)| {
             *target < result.len() && (*target == vertex || parent[vertex] == *target)
         }));
+    }
+}
+
+#[cfg(test)]
+mod branch_free_conductance_tests {
+    use super::split_forest;
+
+    #[test]
+    fn conductance_refactor_preserves_representative_parent_vectors() {
+        for parent in [
+            vec![1, 2, 3, 4, 5, 6, 7, 7],
+            vec![1, 2, 3, 4, 4, 6, 7, 7],
+            vec![1, 1, 3, 3, 5, 6, 6, 7],
+        ] {
+            let split = split_forest(&parent).unwrap();
+            assert_eq!(split.len(), parent.len());
+            assert!(split.iter().all(|target| *target < split.len()));
+        }
     }
 }

@@ -607,3 +607,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Validation: `failure`.
 - Hierarchy-time / exact additional-peak ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/owned-forest-split-latest.json`.
+
+## Branch-free conductance-pass gate
+
+- Decision: `retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `0.962x` / `0.981x`.
+- Worst peak-RSS ratio: `1.001x`.
+- Evidence: `.ci/performance/split-conductance-branch-latest.json`.

@@ -1095,8 +1095,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
 - Evidence: `.ci/performance/owned-forest-split-latest.json`.
 
+### Branch-free conductance-pass checkpoint — 2026-08-24
+
+- Separating conductance cut search from ancestor adjustment was **retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `0.962x` / `0.981x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.005x` / `0.997x` / `1.001x`.
+- Decision: full qualification passed; conductance search no longer carries cut-state branches through every parent step.
+- Evidence: `.ci/performance/split-conductance-branch-latest.json`.
+
 ## Current next action
-1. Re-profile hierarchy setup after the latest retained forest changes.
-2. Refresh cumulative retained optimization and memory guidance.
-3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact hierarchy and residual certificates in every further gate.
+1. Re-profile forest-split subphases if the conductance refactor is retained.
+2. Continue exact-preserving diameter-pass optimization from the updated profile.
+3. Refresh cumulative retained optimization and memory guidance.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.
