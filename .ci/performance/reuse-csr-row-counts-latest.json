@@ -1,0 +1,17 @@
+{
+  "accepted": false,
+  "cases": {},
+  "decision_reason": "experiment failed safely: command failed (101): cargo build --release --features parallel --bin csr-plan-build-gate",
+  "error": "RuntimeError('command failed (101): cargo build --release --features parallel --bin csr-plan-build-gate')",
+  "experiment": "reuse-csr-row-counts",
+  "geometric_additional_peak_ratio": 1.0,
+  "geometric_retained_ratio": 1.0,
+  "geometric_time_ratio": 1.0,
+  "max_post_drop_delta_bytes": 0,
+  "schema_version": 1,
+  "source_sha": "06dc4449db117d8a2509f5d25ec96f0fc962c221",
+  "validation": "failure",
+  "worst_additional_peak_ratio": 1.0,
+  "worst_retained_ratio": 1.0,
+  "worst_time_ratio": 1.0
+}

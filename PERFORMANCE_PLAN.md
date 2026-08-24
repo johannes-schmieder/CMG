@@ -1004,6 +1004,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; immutable fine-graph buffers are shared across clones with materially lower hierarchy peak and retained allocation.
 - Evidence: `.ci/performance/shared-laplacian-storage-latest.json`.
 
+### CSR row-count reuse checkpoint — 2026-08-24
+
+- Reusing row counts as CSR insertion cursors was **not retained**.
+- Validation: `failure`.
+- Geometric plan-build time ratio: `1.000x`.
+- Exact additional-peak ratio: `1.000x`; retained plan ratio: `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo build --release --features parallel --bin csr-plan-build-gate.
+- Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

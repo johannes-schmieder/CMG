@@ -529,3 +529,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Exact additional-peak / retained ratios: `0.734x` / `0.687x`.
 - Worst process peak-RSS ratio: `1.003x`.
 - Evidence: `.ci/performance/shared-laplacian-storage-latest.json`.
+
+## CSR row-count reuse gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Plan-build time / exact peak ratios: `1.000x` / `1.000x`.
+- Retained plan ratio: `1.000x`.
+- Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
