@@ -1,0 +1,7 @@
+{
+  "diagnostic": "rootless-forest-labels-clippy",
+  "output": "    Updating crates.io index\n Downloading crates ...\n  Downloaded crossbeam-utils v0.8.22\n  Downloaded either v1.18.0\n  Downloaded crossbeam-deque v0.8.7\n  Downloaded crossbeam-epoch v0.9.20\n  Downloaded rayon v1.12.0\n  Downloaded rayon-core v1.13.0\n   Compiling crossbeam-utils v0.8.22\n   Compiling crossbeam-epoch v0.9.20\n   Compiling crossbeam-deque v0.8.7\n   Compiling rayon-core v1.13.0\n    Checking either v1.18.0\n    Checking rayon v1.12.0\n    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)\nerror[E0432]: unresolved import `super::forest_component_labels`\n   --> src/forest.rs:619:17\n    |\n619 |     use super::{forest_component_labels, forest_component_labels_trusted};\n    |                 ^^^^^^^^^^^^^^^^^^^^^^^ no `forest_component_labels` in `forest`\n    |\nhelp: a similar name exists in the module\n    |\n619 -     use super::{forest_component_labels, forest_component_labels_trusted};\n619 +     use super::{forest_components, forest_component_labels_trusted};\n    |\n\nFor more information about this error, try `rustc --explain E0432`.\nerror: could not compile `cmg` (lib test) due to 1 previous error\nwarning: build failed, waiting for other jobs to finish...\n",
+  "returncode": 101,
+  "schema_version": 1,
+  "source_sha": "07699d62605d368b0e06c68e91faedad7b358882"
+}
