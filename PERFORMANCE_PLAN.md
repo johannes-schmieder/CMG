@@ -1443,6 +1443,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Weighted mapping / sorting / merge+diagonal / finalize shares: `12.4%` / `74.7%` / `12.5%` / `0.3%`.
 - Evidence: `.ci/performance/contraction-subphase-profile-cached-key.json`.
 
+### Row-bucket endpoint-sort checkpoint — 2026-08-24
+
+- In-place endpoint-row partitioning with per-row key sorting was **not retained**.
+- Validation: `success`; graph, hierarchy, iteration, and residual invariants were unchanged.
+- Geometric active contraction / all contraction / hierarchy / solve ratios: `1.120x` / `1.093x` / `1.157x` / `0.998x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Decision: correctness passed, but contraction, hierarchy, solve, or temporary-memory gates were not all met.
+- Evidence: `.ci/performance/row-bucket-endpoint-sort-latest.json`.
+
 ## Current next action
 1. Re-profile current contraction and hierarchy after any retained constructor changes.
 2. Profile parallel setup routing for retained serial constructor optimizations.

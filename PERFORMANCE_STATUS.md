@@ -851,3 +851,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Weighted mapping / sorting / merge+diagonal / finalize shares: `12.4%` / `74.7%` / `12.5%` / `0.3%`.
 - The benchmark proxy uses the retained cached endpoint-key representation.
 - Evidence: `.ci/performance/contraction-subphase-profile-cached-key.json`.
+
+## Row-bucket endpoint-sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Active contraction / hierarchy / solve ratios: `1.120x` / `1.157x` / `0.998x`.
+- Exact peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/row-bucket-endpoint-sort-latest.json`.
