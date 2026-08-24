@@ -867,3 +867,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Worst RSS ratio: `1.167x`.
 - Production was unchanged.
 - Evidence: `.ci/performance/lsd-radix-sort-feasibility.json`.
+
+## Memory-routed LSD radix-sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Active contraction / hierarchy / solve ratios: `0.946x` / `0.957x` / `1.006x`.
+- Exact peak / retained hierarchy ratios: `1.030x` / `1.000x`.
+- Evidence: `.ci/performance/lsd-radix-sort-latest.json`.

@@ -1469,6 +1469,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - No production source changed in this feasibility probe.
 - Evidence: `.ci/performance/lsd-radix-sort-feasibility.json`.
 
+### Memory-routed LSD radix-sort checkpoint — 2026-08-24
+
+- Memory-routed stable LSD radix sorting was **not retained**.
+- Validation: `success`; graph, hierarchy, iteration, and residual invariants were unchanged.
+- Geometric active contraction / all contraction / hierarchy / solve ratios: `0.946x` / `0.967x` / `0.957x` / `1.006x`.
+- Exact additional-peak / retained hierarchy ratios: `1.030x` / `1.000x`.
+- Decision: correctness passed, but contraction, hierarchy, solve, or scratch-memory gates were not all met.
+- Evidence: `.ci/performance/lsd-radix-sort-latest.json`.
+
 ## Current next action
 1. Re-profile current contraction and hierarchy after any retained constructor changes.
 2. Profile parallel setup routing for retained serial constructor optimizations.
