@@ -688,3 +688,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Counted parent-step / ancestor-update shares: `48.9%` / `51.1%`.
 - Maximum walk length: `9`.
 - Evidence: `.ci/performance/diameter-traffic-profile-latest.json`.
+
+## Packed forest visit-map gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `1.071x` / `1.026x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/packed-forest-visit-map-latest.json`.

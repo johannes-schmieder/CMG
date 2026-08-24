@@ -1196,8 +1196,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Maximum walk length: `9`; histogram: `[0, 6378, 883584, 534405, 88367, 35368, 376550, 3150, 40, 0, 0, 0, 0, 0, 0, 0]`.
 - Evidence: `.ci/performance/diameter-traffic-profile-latest.json`.
 
+### Packed forest visit-map checkpoint — 2026-08-24
+
+- Replacing `Vec<bool>` access with an explicit `u64` packed visit map was **not retained**.
+- Validation: `success`; split checksums, hierarchy metadata, and final certificates were unchanged.
+- Geometric split / hierarchy-build ratios: `1.071x` / `1.026x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.083x` / `1.124x` / `1.087x`.
+- Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
+- Evidence: `.ci/performance/packed-forest-visit-map-latest.json`.
+
 ## Current next action
-1. Use the measured diameter traffic mix to select one exact-preserving traversal or scratch-layout gate.
+1. Re-profile split subphases if the packed visit map is retained; otherwise test a fused walk/prefix scratch layout.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
 4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
