@@ -1,0 +1,38 @@
+name: Recover repaired zipped ancestor-update gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/recover-zipped-ancestor-updates-v2.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-zipped-ancestor-updates-v2
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Complete or diagnose repaired zipped ancestor-update gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/recover_zipped_ancestor_updates_v2.py
+
+      - name: Show recovery and decision records
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/zipped-ancestor-updates-recovery-v2.json || true
+          git show origin/main:.ci/performance/zipped-ancestor-updates-latest.json || true
