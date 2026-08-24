@@ -632,3 +632,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Median RSS geometric / worst ratios: `1.013x` / `1.051x`.
 - Evidence: `.ci/performance/bounded-ancestor-prefix-memory-latest.json`.
+
+## Bounded ancestor-prefix path-scaling gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Hierarchy timing ratio: `0.956x`.
+- Maximum RSS delta / largest-case ratio: `4008` KiB / `1.000x`.
+- Evidence: `.ci/performance/bounded-prefix-path-rss-latest.json`.

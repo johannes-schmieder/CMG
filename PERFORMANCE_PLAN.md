@@ -1131,8 +1131,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: timing, exact allocator, or repeated process-RSS limits were not all met.
 - Evidence: `.ci/performance/bounded-ancestor-prefix-memory-latest.json`.
 
+### Bounded ancestor-prefix path-scaling checkpoint — 2026-08-24
+
+- The bounded-prefix candidate was **not retained** after path RSS scaling from 250k to 4m vertices.
+- Validation: `success`.
+- Geometric hierarchy time ratio: `0.956x`.
+- Maximum median-RSS delta: `4008` KiB; largest-case ratio `1.000x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Decision: the RSS difference scales, timing did not reproduce, or exact-memory limits were not met.
+- Evidence: `.ci/performance/bounded-prefix-path-rss-latest.json`.
+
 ## Current next action
 1. Re-profile forest-split subphases if the bounded prefix is retained.
-2. Continue exact-preserving diameter-loop optimization from the updated profile.
+2. Run the prepared branch-free diameter-front gate.
 3. Refresh cumulative retained optimization and memory guidance.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.
