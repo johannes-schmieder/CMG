@@ -1,15 +1,333 @@
 {
+  "acceptance_limits": {
+    "active_geometric_time_ratio_max": 0.97,
+    "all_geometric_time_ratio_max": 0.985,
+    "improved_active_case_count_min": 3,
+    "worst_median_rss_ratio_max": 1.02,
+    "worst_time_ratio_max": 1.03
+  },
   "accepted": false,
-  "active_geometric_time_ratio": 1.0,
-  "all_geometric_time_ratio": 1.0,
-  "cases": {},
-  "decision_reason": "experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
-  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "active_geometric_time_ratio": 0.8611296891703237,
+  "all_geometric_time_ratio": 0.8822092564260563,
+  "cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "3",
+        "4"
+      ],
+      "baseline_median_ns": 428338609,
+      "baseline_median_rss_kib": 247284,
+      "baseline_rss_samples_kib": [
+        243416,
+        247780,
+        247284
+      ],
+      "baseline_time_samples_ns": [
+        428338609,
+        426024004,
+        429628981
+      ],
+      "candidate_median_ns": 346606992,
+      "candidate_median_rss_kib": 218196,
+      "candidate_over_baseline_median_rss": 0.8823700684233513,
+      "candidate_over_baseline_time": 0.8091892365462671,
+      "candidate_rss_samples_kib": [
+        218208,
+        218196,
+        218040
+      ],
+      "candidate_time_samples_ns": [
+        347580773,
+        346606992,
+        346372842
+      ],
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1599978,
+        "matrix_nonzeros": [
+          3399956,
+          3101231,
+          2964889,
+          2888014,
+          2841296,
+          2808138
+        ],
+        "repetitions": 3,
+        "scale": 100000,
+        "terminal_reason": "StagnatedFill",
+        "threads": 4,
+        "vertex_counts": [
+          200000,
+          107569,
+          78693,
+          68060,
+          63944,
+          61764
+        ],
+        "vertices": 200000
+      }
+    },
+    "dense-worker-firm-3.2m": {
+      "arguments": [
+        "dense-worker-firm",
+        "200000",
+        "3",
+        "4"
+      ],
+      "baseline_median_ns": 924836997,
+      "baseline_median_rss_kib": 490352,
+      "baseline_rss_samples_kib": [
+        490052,
+        492084,
+        490352
+      ],
+      "baseline_time_samples_ns": [
+        932618565,
+        917953678,
+        924836997
+      ],
+      "candidate_median_ns": 721215036,
+      "candidate_median_rss_kib": 408488,
+      "candidate_over_baseline_median_rss": 0.8330505432831925,
+      "candidate_over_baseline_time": 0.7798293519176763,
+      "candidate_rss_samples_kib": [
+        408488,
+        417744,
+        389808
+      ],
+      "candidate_time_samples_ns": [
+        721734048,
+        719029572,
+        721215036
+      ],
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 3199978,
+        "matrix_nonzeros": [
+          6799956,
+          6191145,
+          5920761,
+          5780610,
+          5700653,
+          5644445
+        ],
+        "repetitions": 3,
+        "scale": 200000,
+        "terminal_reason": "StagnatedFill",
+        "threads": 4,
+        "vertex_counts": [
+          400000,
+          212659,
+          154925,
+          134510,
+          126989,
+          123207
+        ],
+        "vertices": 400000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "3",
+        "4"
+      ],
+      "baseline_median_ns": 63026629,
+      "baseline_median_rss_kib": 82916,
+      "baseline_rss_samples_kib": [
+        83888,
+        82236,
+        82916
+      ],
+      "baseline_time_samples_ns": [
+        62858241,
+        63658011,
+        63026629
+      ],
+      "candidate_median_ns": 61250252,
+      "candidate_median_rss_kib": 82952,
+      "candidate_over_baseline_median_rss": 1.0004341743451204,
+      "candidate_over_baseline_time": 0.9718154527985307,
+      "candidate_rss_samples_kib": [
+        83564,
+        82952,
+        81616
+      ],
+      "candidate_time_samples_ns": [
+        61250252,
+        61255523,
+        60720741
+      ],
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "matrix_nonzeros": [
+          2999998,
+          749998,
+          187498,
+          46873,
+          11716,
+          2926,
+          730
+        ],
+        "repetitions": 3,
+        "scale": 1000000,
+        "terminal_reason": "Direct",
+        "threads": 4,
+        "vertex_counts": [
+          1000000,
+          250000,
+          62500,
+          15625,
+          3906,
+          976,
+          244
+        ],
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "3",
+        "4"
+      ],
+      "baseline_median_ns": 163370383,
+      "baseline_median_rss_kib": 135452,
+      "baseline_rss_samples_kib": [
+        132396,
+        135452,
+        141980
+      ],
+      "baseline_time_samples_ns": [
+        163370383,
+        164292329,
+        162865365
+      ],
+      "candidate_median_ns": 152631897,
+      "candidate_median_rss_kib": 130636,
+      "candidate_over_baseline_median_rss": 0.9644449694356673,
+      "candidate_over_baseline_time": 0.9342690774006449,
+      "candidate_rss_samples_kib": [
+        128752,
+        131900,
+        130636
+      ],
+      "candidate_time_samples_ns": [
+        152686360,
+        151645200,
+        152631897
+      ],
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1499996,
+        "matrix_nonzeros": [
+          3999992,
+          1859979,
+          756874,
+          423975,
+          259888,
+          162389,
+          99689,
+          59839,
+          35432
+        ],
+        "repetitions": 3,
+        "scale": 500000,
+        "terminal_reason": "Direct",
+        "threads": 4,
+        "vertex_counts": [
+          1000000,
+          326085,
+          63926,
+          19675,
+          7750,
+          3157,
+          1463,
+          805,
+          492
+        ],
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "3",
+        "4"
+      ],
+      "baseline_median_ns": 317730605,
+      "baseline_median_rss_kib": 248644,
+      "baseline_rss_samples_kib": [
+        247888,
+        260292,
+        248644
+      ],
+      "baseline_time_samples_ns": [
+        317730605,
+        319217496,
+        317542339
+      ],
+      "candidate_median_ns": 296354585,
+      "candidate_median_rss_kib": 259484,
+      "candidate_over_baseline_median_rss": 1.0435964672383005,
+      "candidate_over_baseline_time": 0.9327228171802965,
+      "candidate_rss_samples_kib": [
+        256380,
+        284744,
+        259484
+      ],
+      "candidate_time_samples_ns": [
+        303105537,
+        296354585,
+        292769471
+      ],
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 2999996,
+        "matrix_nonzeros": [
+          7999992,
+          3719975,
+          1390513,
+          721444,
+          464405,
+          302731,
+          199676,
+          128116,
+          75384,
+          38171
+        ],
+        "repetitions": 3,
+        "scale": 1000000,
+        "terminal_reason": "Direct",
+        "threads": 4,
+        "vertex_counts": [
+          2000000,
+          652171,
+          115011,
+          28250,
+          11383,
+          5173,
+          2650,
+          1508,
+          908,
+          499
+        ],
+        "vertices": 2000000
+      }
+    }
+  },
+  "decision_reason": "correctness passed, but executor hierarchy timing or RSS limits were not all met",
   "experiment": "internal-serial-heavy-edge-routing",
-  "improved_active_case_count": 0,
+  "improved_active_case_count": 4,
   "schema_version": 1,
-  "source_sha": "b4191705d8bd6038b17febee84323b65aa627f58",
-  "validation": "failure",
-  "worst_median_rss_ratio": 1.0,
-  "worst_time_ratio": 1.0
+  "source_sha": "5f7d829a284b8cd90d7a348a06a7aa03580ed5b5",
+  "validation": "success",
+  "worst_median_rss_ratio": 1.0435964672383005,
+  "worst_time_ratio": 0.9718154527985307
 }

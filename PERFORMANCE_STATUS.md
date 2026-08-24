@@ -596,7 +596,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Internal serial heavy-edge routing gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Worker/dense hierarchy-build ratio: `1.000x`.
-- Worst median-RSS ratio: `1.000x`.
+- Validation: `success`.
+- Worker/dense hierarchy-build ratio: `0.861x`.
+- Worst median-RSS ratio: `1.044x`.
 - Evidence: `.ci/performance/internal-serial-heavy-edge-latest.json`.
