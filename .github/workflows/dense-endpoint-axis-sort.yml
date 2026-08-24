@@ -1,0 +1,37 @@
+name: Dense endpoint-axis compact sort gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dense-endpoint-axis-sort.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-dense-endpoint-axis-sort
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify dense-only endpoint-axis sorting
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/dense_endpoint_axis_sort_gate.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/dense-endpoint-axis-sort-latest.json || true
