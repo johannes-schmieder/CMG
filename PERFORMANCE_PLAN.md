@@ -1276,8 +1276,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
 - Evidence: `.ci/performance/conductance-front-list-latest.json`.
 
+### Cached conductance ancestors checkpoint — 2026-08-24
+
+- Caching current and next ancestor counts across each conductance test was **not retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `0.995x` / `1.005x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.037x` / `1.027x` / `1.002x`.
+- Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/cached-conductance-ancestors-latest.json`.
+
 ## Current next action
-1. Re-profile split subphases if fused scratch is retained; otherwise test bounded inline scratch with a correctness-preserving spill path.
-2. Refresh cumulative retained optimization and memory guidance.
-3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
+1. Re-profile forest-split subphases if cached ancestor loads are retained.
+2. Continue exact-preserving diameter-pass optimization from the updated profile.
+3. Refresh cumulative retained optimization and memory guidance.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.

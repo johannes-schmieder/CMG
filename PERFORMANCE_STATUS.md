@@ -752,3 +752,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `0.952x` / `1.008x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/conductance-front-list-latest.json`.
+
+## Cached conductance ancestors gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `0.995x` / `1.005x`.
+- Worst peak-RSS ratio: `1.002x`.
+- Evidence: `.ci/performance/cached-conductance-ancestors-latest.json`.
