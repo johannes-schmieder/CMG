@@ -1226,8 +1226,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
 - Evidence: `.ci/performance/fused-walk-ancestor-scratch-confirmation.json`.
 
+### Compact walk/ancestor scratch checkpoint — 2026-08-24
+
+- Storing realistic-size walk vertices and ancestor prefixes in one 8-byte entry was **not retained**, with a native-width fallback above `u32::MAX` vertices.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `0.887x` / `0.996x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst split / hierarchy / peak-RSS ratios: `0.912x` / `1.015x` / `1.090x`.
+- Decision: correctness passed, but split, hierarchy, or exact/process memory gates were not all met.
+- Evidence: `.ci/performance/compact-walk-ancestor-scratch-latest.json`.
+
 ## Current next action
-1. Re-profile split subphases if fused scratch is retained; otherwise test bounded inline scratch with a correctness-preserving spill path.
+1. Re-profile split subphases after any retained compact scratch change.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
 4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
