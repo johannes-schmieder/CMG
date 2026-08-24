@@ -1285,8 +1285,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
 - Evidence: `.ci/performance/cached-conductance-ancestors-latest.json`.
 
+### Conductance front-state checkpoint — 2026-08-24
+
+- Returning the new front state directly from the conductance indegree decrement was **not retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `1.014x` / `1.004x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.051x` / `1.007x` / `1.000x`.
+- Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/conductance-front-state-latest.json`.
+
 ## Current next action
-1. Re-profile forest-split subphases if cached ancestor loads are retained.
+1. Re-profile forest-split subphases if direct front-state reporting is retained.
 2. Continue exact-preserving diameter-pass optimization from the updated profile.
 3. Refresh cumulative retained optimization and memory guidance.
 4. Run the manual 1–32 thread qualification on suitable hardware when available.
