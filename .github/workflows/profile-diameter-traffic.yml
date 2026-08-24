@@ -1,0 +1,37 @@
+name: Profile diameter traversal traffic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/profile-diameter-traffic.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-diameter-traffic-profile
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate exact equivalence and count diameter traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/profile_diameter_traffic.py
+
+      - name: Show profile
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/diameter-traffic-profile-latest.json || true
