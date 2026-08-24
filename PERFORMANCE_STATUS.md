@@ -568,3 +568,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Dominant subphase: `diameter` (60.4%).
 - Allocation / indegree / diameter / conductance shares: `5.2%` / `7.5%` / `60.4%` / `26.8%`.
 - Evidence: `.ci/performance/split-forest-subphase-profile-latest.json`.
+
+## Inline forest-walk gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Trusted-split / hierarchy-build ratios: `0.981x` / `1.044x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/inline-forest-walk-latest.json`.

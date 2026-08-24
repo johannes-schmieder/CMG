@@ -1047,8 +1047,18 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Maximum observed walk length: `9`; maximum principal scratch: `40250064` bytes.
 - Evidence: `.ci/performance/split-forest-subphase-profile-latest.json`.
 
+### Inline forest-walk checkpoint — 2026-08-24
+
+- A 16-entry inline diameter-walk buffer with safe heap spill was **not retained**.
+- Validation: `success`; baseline/candidate split checksums and hierarchy metadata were identical.
+- Geometric trusted-split / hierarchy-build ratios: `0.981x` / `1.044x`.
+- Worst hierarchy time / process-RSS ratios: `1.149x` / `1.039x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Decision: correctness passed, but direct-split, full-hierarchy, or memory limits were not all met.
+- Evidence: `.ci/performance/inline-forest-walk-latest.json`.
+
 ## Current next action
-1. Profile diameter-walk lengths, revisit rates, and ancestor-update traffic before changing the upstream cut logic.
-2. Refresh cumulative retained optimization and memory guidance.
+1. Refresh cumulative retained optimization and memory guidance.
+2. Re-profile hierarchy setup only if the inline buffer is retained.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
+4. Defer further forest mutations unless a new profile shows a material stable target.
