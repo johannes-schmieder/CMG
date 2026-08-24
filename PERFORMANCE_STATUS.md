@@ -830,3 +830,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Validation: `success`.
 - Path contraction / hierarchy ratios: `1.009x` / `0.996x`.
 - Evidence: `.ci/performance/presorted-sparse-constructor-latest.json`.
+
+## Robust cumulative performance refresh
+
+- Current numerical SHA: `f50cbd52734ad84af39131c12ad5dae181d8c7b5`; baseline: `b45b252f88925028e3ad9a73a3f75eeab05f6754`.
+- Geometric graph / hierarchy / apply / solve ratios: `0.802x` / `0.721x` / `0.225x` / `0.372x`.
+- Geometric graph-core / hierarchy-core / CMG-workspace / PCG-workspace ratios: `0.735x` / `0.770x` / `0.460x` / `0.614x`.
+- Evidence: `.ci/performance/cumulative-latest.json`.

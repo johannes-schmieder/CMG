@@ -1401,6 +1401,24 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but path, overall hierarchy, control, or memory gates were not all met.
 - Evidence: `.ci/performance/presorted-sparse-constructor-latest.json`.
 
+### Robust cumulative performance refresh — 2026-08-24
+
+- Current numerical SHA: `f50cbd52734ad84af39131c12ad5dae181d8c7b5`; frozen benchmark baseline: `b45b252f88925028e3ad9a73a3f75eeab05f6754`.
+- Both binaries were built with the same Rust compiler, release mode, and `target-cpu=native` setting.
+- All baseline and current solves passed original-system backward-error checks; hierarchy structure was unchanged.
+
+| Case | Graph build | Hierarchy build | CMG apply | PCG solve/RHS | Graph core bytes | PCG workspace |
+|---|---:|---:|---:|---:|---:|---:|
+| path-100k | 1.283x | 0.887x | 0.303x | 0.392x | 0.750x | 0.613x |
+| worker-firm-100k | 0.772x | 0.766x | 0.456x | 0.825x | 0.721x | 0.615x |
+| path-500k | 0.637x | 0.690x | 0.366x | 0.551x | 0.750x | 0.613x |
+| worker-firm-500k | 0.656x | 0.578x | 0.050x | 0.108x | 0.721x | 0.614x |
+
+- Geometric graph / hierarchy / apply / solve ratios: `0.802x` / `0.721x` / `0.225x` / `0.372x`.
+- Geometric graph-core / hierarchy-core / CMG-workspace / PCG-workspace ratios: `0.735x` / `0.770x` / `0.460x` / `0.614x`.
+- Raw process RSS was recorded but is not compared because the current benchmark performs an additional CSR qualification after solving.
+- Evidence: `.ci/performance/cumulative-latest.json`.
+
 ## Current next action
 1. Re-profile current contraction and hierarchy after any retained constructor changes.
 2. Profile parallel setup routing for retained serial constructor optimizations.
