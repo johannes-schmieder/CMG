@@ -1,0 +1,38 @@
+name: Recover byte forest-visited gate v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/recover-byte-forest-visited-v2.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-byte-forest-visited-v2
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Cancel stale run and complete exact gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/recover_byte_forest_visited_v2.py
+
+      - name: Show recovery record
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/byte-forest-visited-recovery.json || true
+          git show origin/main:.ci/performance/byte-forest-visited-latest.json || true
