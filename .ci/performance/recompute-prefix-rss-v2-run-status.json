@@ -1,0 +1,16 @@
+{
+  "runs": [
+    {
+      "conclusion": "success",
+      "created_at": "2026-08-24T06:25:40Z",
+      "head_sha": "467836df814dd6c2a134452af15cb8943d27d7f6",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32697282356",
+      "id": 32697282356,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-24T06:27:39Z"
+    }
+  ],
+  "schema_version": 1,
+  "workflow": "requalify-recomputed-ancestor-prefix-v2.yml"
+}
