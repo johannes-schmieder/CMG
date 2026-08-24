@@ -1294,8 +1294,29 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
 - Evidence: `.ci/performance/conductance-front-state-latest.json`.
 
+### Current production hierarchy profile — 2026-08-24
+
+- Profiled SHA: `8c8be0790e2ca5eecc5af4dadc730766830cb574`.
+- Dominant attributed phase: **contraction**
+  (66.7%).
+- All manual hierarchy metadata matched the production hierarchy in every case.
+
+| Phase | Share of attributed time |
+|---|---:|
+| contraction | 66.7% |
+| forest_split | 12.1% |
+| forest_components | 9.1% |
+| heavy_edge | 8.9% |
+| low_degree | 1.9% |
+| aggregation | 0.7% |
+| inverse_diagonal | 0.6% |
+| bookkeeping | 0.0% |
+| graph_clone | 0.0% |
+
+- Evidence: `.ci/performance/hierarchy-phase-profile-current.json`.
+
 ## Current next action
-1. Re-profile forest-split subphases if direct front-state reporting is retained.
-2. Continue exact-preserving diameter-pass optimization from the updated profile.
-3. Refresh cumulative retained optimization and memory guidance.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Profile current compact contraction subphases and temporary allocation.
+2. Test only candidates that improve complete hierarchy time and exact memory.
+3. Refresh cumulative retained performance guidance.
+4. Run manual 1–32 thread qualification when suitable hardware is available.

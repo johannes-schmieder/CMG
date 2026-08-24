@@ -768,3 +768,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `1.014x` / `1.004x`.
 - Worst peak-RSS ratio: `1.000x`.
 - Evidence: `.ci/performance/conductance-front-state-latest.json`.
+
+## Current production hierarchy profile
+
+- Profiled SHA: `8c8be0790e2ca5eecc5af4dadc730766830cb574`.
+- Dominant phase: `contraction`
+  (66.7% of attributed time).
+- Production/manual hierarchy metadata agreement: `success`.
+- Evidence: `.ci/performance/hierarchy-phase-profile-current.json`.
