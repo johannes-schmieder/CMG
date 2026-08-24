@@ -588,7 +588,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Recomputed ancestor-prefix RSS requalification
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Hierarchy-time / median-RSS ratios: `1.000x` / `1.000x`.
+- Validation: `success`.
+- Hierarchy-time / median-RSS ratios: `0.971x` / `1.035x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/recompute-forest-ancestor-prefix-rss-latest.json`.

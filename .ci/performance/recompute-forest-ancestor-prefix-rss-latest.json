@@ -1,21 +1,536 @@
 {
+  "acceptance_limits": {
+    "allocation_geometric_additional_peak_ratio_max": 1.001,
+    "allocation_geometric_retained_ratio_max": 1.001,
+    "allocation_worst_additional_peak_ratio_max": 1.003,
+    "allocation_worst_retained_ratio_max": 1.001,
+    "hierarchy_geometric_median_rss_ratio_max": 1.015,
+    "hierarchy_geometric_time_ratio_max": 0.98,
+    "hierarchy_worst_max_rss_ratio_max": 1.05,
+    "hierarchy_worst_median_rss_ratio_max": 1.03,
+    "hierarchy_worst_time_ratio_max": 1.02,
+    "max_post_drop_delta_bytes": 0,
+    "prior_hierarchy_geometric_time_ratio_max": 0.97,
+    "prior_split_geometric_time_ratio_max": 0.9
+  },
   "accepted": false,
-  "allocation_cases": {},
+  "allocation_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 154908,
+      "baseline_median_additional_peak_bytes": 128591048,
+      "baseline_median_additional_peak_bytes_samples": [
+        128591048,
+        128591048,
+        128591048
+      ],
+      "baseline_median_ns": 413487409,
+      "baseline_median_retained_bytes": 125391576,
+      "baseline_median_retained_bytes_samples": [
+        125391576,
+        125391576,
+        125391576
+      ],
+      "baseline_median_rss_kib": 154828,
+      "baseline_rss_samples_kib": [
+        154908,
+        154828,
+        154756
+      ],
+      "baseline_time_samples_ns": [
+        413487409,
+        411521475,
+        413620057
+      ],
+      "candidate_max_rss_kib": 168796,
+      "candidate_median_additional_peak_bytes": 128591048,
+      "candidate_median_additional_peak_bytes_samples": [
+        128591048,
+        128591048,
+        128591048
+      ],
+      "candidate_median_ns": 412149538,
+      "candidate_median_retained_bytes": 125391576,
+      "candidate_median_retained_bytes_samples": [
+        125391576,
+        125391576,
+        125391576
+      ],
+      "candidate_median_rss_kib": 168740,
+      "candidate_over_baseline_max_rss": 1.089653213520283,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_median_rss": 1.0898545482729223,
+      "candidate_over_baseline_time": 0.9967644214288518,
+      "candidate_rss_samples_kib": [
+        168700,
+        168796,
+        168740
+      ],
+      "candidate_time_samples_ns": [
+        411848504,
+        412532565,
+        412149538
+      ],
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "hierarchy_matrix_nonzeros": 18003524,
+        "levels": 6,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 2,
+        "scale": 100000,
+        "vertices": 200000
+      },
+      "rounds": 3
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 77508,
+      "baseline_median_additional_peak_bytes": 47998220,
+      "baseline_median_additional_peak_bytes_samples": [
+        47998220,
+        47998220,
+        47998220
+      ],
+      "baseline_median_ns": 52104441,
+      "baseline_median_retained_bytes": 32014548,
+      "baseline_median_retained_bytes_samples": [
+        32014548,
+        32014548,
+        32014548
+      ],
+      "baseline_median_rss_kib": 77388,
+      "baseline_rss_samples_kib": [
+        77236,
+        77508,
+        77388
+      ],
+      "baseline_time_samples_ns": [
+        52040241,
+        52104441,
+        52105993
+      ],
+      "candidate_max_rss_kib": 81196,
+      "candidate_median_additional_peak_bytes": 47998220,
+      "candidate_median_additional_peak_bytes_samples": [
+        47998220,
+        47998220,
+        47998220
+      ],
+      "candidate_median_ns": 44798989,
+      "candidate_median_retained_bytes": 32014548,
+      "candidate_median_retained_bytes_samples": [
+        32014548,
+        32014548,
+        32014548
+      ],
+      "candidate_median_rss_kib": 81176,
+      "candidate_over_baseline_max_rss": 1.0475821850647675,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_median_rss": 1.048948157337055,
+      "candidate_over_baseline_time": 0.8597921432455249,
+      "candidate_rss_samples_kib": [
+        81176,
+        81196,
+        81132
+      ],
+      "candidate_time_samples_ns": [
+        44378383,
+        44798989,
+        45082449
+      ],
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "hierarchy_matrix_nonzeros": 3999739,
+        "levels": 7,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 2,
+        "scale": 1000000,
+        "vertices": 1000000
+      },
+      "rounds": 3
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 104680,
+      "baseline_median_additional_peak_bytes": 70346804,
+      "baseline_median_additional_peak_bytes_samples": [
+        70346804,
+        70346804,
+        70346804
+      ],
+      "baseline_median_ns": 174740245,
+      "baseline_median_retained_bytes": 55322004,
+      "baseline_median_retained_bytes_samples": [
+        55322004,
+        55322004,
+        55322004
+      ],
+      "baseline_median_rss_kib": 104656,
+      "baseline_rss_samples_kib": [
+        104556,
+        104656,
+        104680
+      ],
+      "baseline_time_samples_ns": [
+        172485006,
+        174740245,
+        175068363
+      ],
+      "candidate_max_rss_kib": 104712,
+      "candidate_median_additional_peak_bytes": 70346804,
+      "candidate_median_additional_peak_bytes_samples": [
+        70346804,
+        70346804,
+        70346804
+      ],
+      "candidate_median_ns": 170179064,
+      "candidate_median_retained_bytes": 55322004,
+      "candidate_median_retained_bytes_samples": [
+        55322004,
+        55322004,
+        55322004
+      ],
+      "candidate_median_rss_kib": 104624,
+      "candidate_over_baseline_max_rss": 1.0003056935422239,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_median_rss": 0.9996942363552973,
+      "candidate_over_baseline_time": 0.9738973640560021,
+      "candidate_rss_samples_kib": [
+        104596,
+        104624,
+        104712
+      ],
+      "candidate_time_samples_ns": [
+        170179064,
+        169417991,
+        170281059
+      ],
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "hierarchy_matrix_nonzeros": 7658057,
+        "levels": 9,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 2,
+        "scale": 500000,
+        "vertices": 1000000
+      },
+      "rounds": 3
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 202936,
+      "baseline_median_additional_peak_bytes": 138136088,
+      "baseline_median_additional_peak_bytes_samples": [
+        138136088,
+        138136088,
+        138136088
+      ],
+      "baseline_median_ns": 333308719,
+      "baseline_median_retained_bytes": 107139168,
+      "baseline_median_retained_bytes_samples": [
+        107139168,
+        107139168,
+        107139168
+      ],
+      "baseline_median_rss_kib": 202900,
+      "baseline_rss_samples_kib": [
+        202828,
+        202936,
+        202900
+      ],
+      "baseline_time_samples_ns": [
+        333308719,
+        331935280,
+        339537356
+      ],
+      "candidate_max_rss_kib": 203016,
+      "candidate_median_additional_peak_bytes": 138136088,
+      "candidate_median_additional_peak_bytes_samples": [
+        138136088,
+        138136088,
+        138136088
+      ],
+      "candidate_median_ns": 321816770,
+      "candidate_median_retained_bytes": 107139168,
+      "candidate_median_retained_bytes_samples": [
+        107139168,
+        107139168,
+        107139168
+      ],
+      "candidate_median_rss_kib": 202904,
+      "candidate_over_baseline_max_rss": 1.0003942129538377,
+      "candidate_over_baseline_median_additional_peak_bytes": 1.0,
+      "candidate_over_baseline_median_retained_bytes": 1.0,
+      "candidate_over_baseline_median_rss": 1.000019714144899,
+      "candidate_over_baseline_time": 0.9655216070120266,
+      "candidate_rss_samples_kib": [
+        202848,
+        203016,
+        202904
+      ],
+      "candidate_time_samples_ns": [
+        321816770,
+        320075143,
+        326516004
+      ],
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 3000000,
+        "hierarchy_matrix_nonzeros": 15040407,
+        "levels": 10,
+        "max_post_drop_delta_bytes": 0,
+        "repetitions": 2,
+        "scale": 1000000,
+        "vertices": 2000000
+      },
+      "rounds": 3
+    }
+  },
   "allocation_geometric_additional_peak_ratio": 1.0,
   "allocation_geometric_retained_ratio": 1.0,
   "allocation_worst_additional_peak_ratio": 1.0,
   "allocation_worst_retained_ratio": 1.0,
-  "decision_reason": "requalification failed safely: generated ancestor-prefix source marker missing",
-  "error": "RuntimeError('generated ancestor-prefix source marker missing')",
+  "decision_reason": "timing, repeated process RSS, or exact allocator limits were not all met",
   "experiment": "recomputed-ancestor-prefix-rss-requalification",
-  "hierarchy_cases": {},
-  "hierarchy_geometric_median_rss_ratio": 1.0,
-  "hierarchy_geometric_time_ratio": 1.0,
-  "hierarchy_worst_max_rss_ratio": 1.0,
-  "hierarchy_worst_median_rss_ratio": 1.0,
-  "hierarchy_worst_time_ratio": 1.0,
+  "hierarchy_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 154808,
+      "baseline_median_ns": 418124731,
+      "baseline_median_rss_kib": 154712,
+      "baseline_rss_samples_kib": [
+        154712,
+        154780,
+        154668,
+        154692,
+        154808
+      ],
+      "baseline_time_samples_ns": [
+        416572457,
+        416691452,
+        418623945,
+        418124731,
+        422135438
+      ],
+      "candidate_max_rss_kib": 168892,
+      "candidate_median_ns": 407542073,
+      "candidate_median_rss_kib": 168748,
+      "candidate_over_baseline_max_rss": 1.0909772104800786,
+      "candidate_over_baseline_median_rss": 1.0907234086560835,
+      "candidate_over_baseline_time": 0.9746901887991888,
+      "candidate_rss_samples_kib": [
+        168892,
+        168636,
+        168748,
+        168632,
+        168820
+      ],
+      "candidate_time_samples_ns": [
+        405614751,
+        407542073,
+        407683623,
+        408248039,
+        407179614
+      ],
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "repetitions": 2,
+        "scale": 100000,
+        "vertices": 200000
+      },
+      "rounds": 5
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 77308,
+      "baseline_median_ns": 50250614,
+      "baseline_median_rss_kib": 77188,
+      "baseline_rss_samples_kib": [
+        77008,
+        77212,
+        77140,
+        77188,
+        77308
+      ],
+      "baseline_time_samples_ns": [
+        49901908,
+        50573808,
+        56491174,
+        50250614,
+        50046984
+      ],
+      "candidate_max_rss_kib": 81240,
+      "candidate_median_ns": 47944341,
+      "candidate_median_rss_kib": 81172,
+      "candidate_over_baseline_max_rss": 1.050861489108501,
+      "candidate_over_baseline_median_rss": 1.0516142405555267,
+      "candidate_over_baseline_time": 0.9541045806922877,
+      "candidate_rss_samples_kib": [
+        81188,
+        81172,
+        81240,
+        81152,
+        81120
+      ],
+      "candidate_time_samples_ns": [
+        47605648,
+        49706346,
+        47944341,
+        47764424,
+        47947547
+      ],
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "repetitions": 2,
+        "scale": 1000000,
+        "vertices": 1000000
+      },
+      "rounds": 5
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 104744,
+      "baseline_median_ns": 173325849,
+      "baseline_median_rss_kib": 104648,
+      "baseline_rss_samples_kib": [
+        104560,
+        104732,
+        104648,
+        104744,
+        104528
+      ],
+      "baseline_time_samples_ns": [
+        172869083,
+        174446735,
+        173325849,
+        172674641,
+        174651598
+      ],
+      "candidate_max_rss_kib": 104592,
+      "candidate_median_ns": 169653311,
+      "candidate_median_rss_kib": 104560,
+      "candidate_over_baseline_max_rss": 0.998548842893149,
+      "candidate_over_baseline_median_rss": 0.9991590856968122,
+      "candidate_over_baseline_time": 0.9788113658684574,
+      "candidate_rss_samples_kib": [
+        104544,
+        104564,
+        104552,
+        104592,
+        104560
+      ],
+      "candidate_time_samples_ns": [
+        168912886,
+        170228626,
+        169653311,
+        201227762,
+        169257330
+      ],
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "repetitions": 2,
+        "scale": 500000,
+        "vertices": 1000000
+      },
+      "rounds": 5
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "2"
+      ],
+      "baseline_max_rss_kib": 202976,
+      "baseline_median_ns": 334864755,
+      "baseline_median_rss_kib": 202892,
+      "baseline_rss_samples_kib": [
+        202900,
+        202840,
+        202976,
+        202892,
+        202848
+      ],
+      "baseline_time_samples_ns": [
+        333549015,
+        332130201,
+        334864755,
+        342909850,
+        338818201
+      ],
+      "candidate_max_rss_kib": 202916,
+      "candidate_median_ns": 326893508,
+      "candidate_median_rss_kib": 202840,
+      "candidate_over_baseline_max_rss": 0.9997043985495823,
+      "candidate_over_baseline_median_rss": 0.9997437060110798,
+      "candidate_over_baseline_time": 0.9761956226178536,
+      "candidate_rss_samples_kib": [
+        202840,
+        202884,
+        202784,
+        202820,
+        202916
+      ],
+      "candidate_time_samples_ns": [
+        326509499,
+        326893508,
+        330333895,
+        328407875,
+        323020338
+      ],
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 3000000,
+        "repetitions": 2,
+        "scale": 1000000,
+        "vertices": 2000000
+      },
+      "rounds": 5
+    }
+  },
+  "hierarchy_geometric_median_rss_ratio": 1.0346026899878777,
+  "hierarchy_geometric_time_ratio": 0.970900240689095,
+  "hierarchy_worst_max_rss_ratio": 1.0909772104800786,
+  "hierarchy_worst_median_rss_ratio": 1.0907234086560835,
+  "hierarchy_worst_time_ratio": 0.9788113658684574,
   "max_post_drop_delta_bytes": 0,
-  "prior_hierarchy_geometric_time_ratio": 1.0,
+  "prior_hierarchy_geometric_time_ratio": 0.9412424006588764,
   "prior_record": {
     "acceptance_limits": {
       "geometric_additional_peak_ratio_max": 1.001,
@@ -350,8 +865,8 @@
     "worst_retained_ratio": 1.0,
     "worst_split_time_ratio": 0.9052948820196445
   },
-  "prior_split_geometric_time_ratio": 1.0,
+  "prior_split_geometric_time_ratio": 0.8210821564098406,
   "schema_version": 1,
-  "source_sha": "d7061a861385665d3ff9ed4d135104397325b4a8",
-  "validation": "failure"
+  "source_sha": "467836df814dd6c2a134452af15cb8943d27d7f6",
+  "validation": "success"
 }
