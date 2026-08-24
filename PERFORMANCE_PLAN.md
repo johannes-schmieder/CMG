@@ -965,6 +965,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: experiment failed safely: expected two visited loop conditions.
 - Evidence: `.ci/performance/byte-forest-visited-latest.json`.
 
+### Direct compact forest-label checkpoint — 2026-08-23
+
+- Constructing hierarchy forest labels directly in compact storage was **not retained**.
+- Validation: `failure`.
+- Geometric hierarchy-build ratio: `1.000x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Worst process peak-RSS ratio: `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/direct-compact-forest-labels-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

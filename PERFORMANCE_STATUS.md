@@ -503,3 +503,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy-build ratios: `1.000x` / `1.000x`.
 - Worst peak-RSS ratio: `1.000x`.
 - Evidence: `.ci/performance/byte-forest-visited-latest.json`.
+
+## Direct compact forest-label gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Hierarchy-build ratio: `1.000x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/direct-compact-forest-labels-latest.json`.

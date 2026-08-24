@@ -1,0 +1,19 @@
+{
+  "accepted": false,
+  "allocation_cases": {},
+  "decision_reason": "experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "direct-compact-forest-labels",
+  "geometric_additional_peak_ratio": 1.0,
+  "geometric_retained_ratio": 1.0,
+  "max_post_drop_delta_bytes": 0,
+  "schema_version": 1,
+  "source_sha": "ca871b25ba10645f6fde29d2e668939d9977636d",
+  "time_cases": {},
+  "time_geometric_ratio": 1.0,
+  "validation": "failure",
+  "worst_additional_peak_ratio": 1.0,
+  "worst_peak_rss_ratio": 1.0,
+  "worst_retained_ratio": 1.0,
+  "worst_time_ratio": 1.0
+}
