@@ -132,7 +132,7 @@ text = text[:start] + CANDIDATE + text[end:]
 
 text = text.replace(
     "# Deliberately do not execute here. This file is prepared for the next serial gate\n# after any active bounded-prefix decision resolves.",
-    "# Prepared only. Arm after the active zipped-update decision resolves.",
+    "# Execute the prepared gate now that the zipped-update decision is resolved.",
 )
 
 required = (
@@ -146,5 +146,5 @@ for marker in required:
     if marker not in text:
         raise SystemExit(f"adaptive diameter-front gate missing marker: {marker}")
 
-compile(text, str(Path(__file__)), "exec")
-# Prepared only. The generated gate remains available as `text`.
+compiled = compile(text, str(Path(__file__)), "exec")
+exec(compiled, {"__name__": "__main__", "__file__": __file__})
