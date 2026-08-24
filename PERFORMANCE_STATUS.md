@@ -592,3 +592,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Hierarchy-time / median-RSS ratios: `0.971x` / `1.035x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/recompute-forest-ancestor-prefix-rss-latest.json`.
+
+## Internal serial heavy-edge routing gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Worker/dense hierarchy-build ratio: `1.000x`.
+- Worst median-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/internal-serial-heavy-edge-latest.json`.

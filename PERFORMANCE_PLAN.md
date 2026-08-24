@@ -1077,8 +1077,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: requalification failed safely: generated ancestor-prefix source marker missing.
 - Evidence: `.ci/performance/recompute-forest-ancestor-prefix-rss-latest.json`.
 
+### Internal serial heavy-edge routing checkpoint — 2026-08-24
+
+- Using the compact serial edge scan for hierarchy-internal heavy-edge selection was **not retained**.
+- Validation: `failure`; executor-built and serial hierarchies remained identical.
+- Active worker/dense geometric hierarchy-build ratio: `1.000x`.
+- Worst all-case time / median-RSS ratios: `1.000x` / `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/internal-serial-heavy-edge-latest.json`.
+
 ## Current next action
-1. Profile executor heavy-edge routing against the now-qualified forest path.
-2. Refresh cumulative retained optimization and memory guidance.
+1. Refresh cumulative retained optimization and memory guidance.
+2. Re-profile hierarchy setup after the latest retained forest changes.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact split parents, hierarchy diagnostics, and residual certificates in every gate.
+4. Keep the public parallel heavy-edge API available for callers with reusable row operators.

@@ -1,0 +1,15 @@
+{
+  "accepted": false,
+  "active_geometric_time_ratio": 1.0,
+  "all_geometric_time_ratio": 1.0,
+  "cases": {},
+  "decision_reason": "experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "internal-serial-heavy-edge-routing",
+  "improved_active_case_count": 0,
+  "schema_version": 1,
+  "source_sha": "b4191705d8bd6038b17febee84323b65aa627f58",
+  "validation": "failure",
+  "worst_median_rss_ratio": 1.0,
+  "worst_time_ratio": 1.0
+}
