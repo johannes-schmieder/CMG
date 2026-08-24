@@ -1,0 +1,37 @@
+name: Requalify recomputed ancestor-prefix memory
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/requalify-recomputed-ancestor-prefix.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-requalify-recomputed-ancestor-prefix
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Requalify timing, process RSS, and exact allocator memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/requalify_recomputed_ancestor_prefix.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/recompute-forest-ancestor-prefix-rss-latest.json || true
