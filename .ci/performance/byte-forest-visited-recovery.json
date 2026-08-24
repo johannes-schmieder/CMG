@@ -1,8 +1,0 @@
-{
-  "error": "RuntimeError('command failed (1): python scripts/byte_forest_visited_gate_v2.py')",
-  "recovery": "byte-forest-visited-v2",
-  "schema_version": 1,
-  "source_sha": "da62a4b6243d43ab847bf1b28d642a3ec9498cbf",
-  "status": "failure",
-  "target_present": true
-}

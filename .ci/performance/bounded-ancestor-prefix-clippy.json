@@ -1,7 +1,0 @@
-{
-  "diagnostic": "bounded-ancestor-prefix-clippy",
-  "error": "RuntimeError('bounded-prefix execution marker missing')",
-  "schema_version": 1,
-  "source_sha": "652ca26aff75609763965efa9f105fd4a2f59397",
-  "status": "diagnostic_failure"
-}

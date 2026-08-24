@@ -1,9 +1,0 @@
-{
-  "cases": {},
-  "decision_reason": "fresh phase profiling was skipped after instrumentation failure; production baseline qualification succeeded and independent same-host full-solve gates remain authoritative",
-  "experiment": "pcg-phase-profile-post-reductions",
-  "profiling_skipped_due_instrumentation_failure": true,
-  "schema_version": 1,
-  "source_sha": "ccdf6da7b21a5533efa4ab047be77f732f65f0fb",
-  "status": "success"
-}

@@ -1,30 +1,16 @@
 # CMG in Rust
 
-A deterministic Rust implementation of stationary Combinatorial Multigrid
-(CMG) for weighted graph Laplacians and symmetric diagonally dominant
-M-matrices (SDDM), with certified preconditioned conjugate-gradient solves.
+A deterministic Rust implementation of stationary Combinatorial Multigrid (CMG) for weighted graph Laplacians and symmetric diagonally dominant M-matrices (SDDM), with certified preconditioned conjugate-gradient solves.
 
-The implementation follows the official `ikoutis/cmg-solver` source pinned at
-commit `19752fc102f8cae8e34f66457bfaccb1aaa60375`. Provenance and routine
-coverage are recorded in [`UPSTREAM.md`](UPSTREAM.md); numerical qualification
-is documented in [`PLAN.md`](PLAN.md), the active optimization record is in
-[`PERFORMANCE_PLAN.md`](PERFORMANCE_PLAN.md), and deployment/tuning guidance is
-in [`PERFORMANCE_GUIDE.md`](PERFORMANCE_GUIDE.md).
+The implementation follows the official `ikoutis/cmg-solver` source pinned at commit `19752fc102f8cae8e34f66457bfaccb1aaa60375`. See [`docs/UPSTREAM.md`](docs/UPSTREAM.md) for provenance and routine coverage.
 
 ## Status
 
-The complete stationary CMG path is implemented and tested on Linux, macOS,
-and Windows. The suite covers exact small systems, disconnected graphs,
-weighted adversarial cases, deterministic hierarchy construction, SDDM
-augmentation, terminal factorization, repeated right-hand sides, and
-original-system residual certification.
+The stationary CMG path is implemented and tested on Linux, macOS, and Windows. Tests cover exact small systems, disconnected graphs, weighted adversarial cases, deterministic hierarchy construction, SDDM augmentation, terminal factorization, repeated right-hand sides, and original-system residual certification.
 
-The serial crate has no runtime dependency. Optional multicore support uses a
-package-owned Rayon pool behind the `parallel` Cargo feature. Performance work
-is active; the repository does not yet claim controlled 8--32-core or NUMA
-scaling because ordinary hosted CI exposes only four logical CPUs.
+The default crate has no parallel runtime dependency. Optional multicore support uses a package-owned Rayon pool behind the `parallel` feature. Functional thread-pool coverage extends through 32 threads; controlled 8/16/32-core performance qualification still requires suitable hardware.
 
-## Serial Laplacian solve
+## Quick start
 
 For the weighted path
 
@@ -32,27 +18,23 @@ For the weighted path
 0 --1-- 1 --1-- 2
 ```
 
-the Laplacian and a compatible right-hand side are
+the Laplacian is
 
 ```text
-L = [ 1 -1  0 ]       b = [ 1 ]
-    [-1  2 -1 ]           [ 0 ]
-    [ 0 -1  1 ]           [-1 ]
+L = [ 1 -1  0 ]
+    [-1  2 -1 ]
+    [ 0 -1  1 ]
 ```
 
-The zero-mean solution of `L x = b` is `[1, 0, -1]`.
+and `b = [1, 0, -1]` has zero-mean solution `x = [1, 0, -1]`.
 
 ```rust
 use cmg::{CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, solve_pcg};
 
 fn main() -> Result<(), cmg::CmgError> {
-    let graph = Laplacian::from_edges(
-        3,
-        [(0, 1, 1.0), (1, 2, 1.0)],
-    )?;
+    let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 1.0)])?;
     let rhs = [1.0, 0.0, -1.0];
 
-    // Build once, then reuse for every RHS on the unchanged weighted graph.
     let cmg = CmgPreconditioner::build(&graph, CmgOptions::default())?;
     let result = solve_pcg(&graph, &cmg, &rhs, PcgOptions::default())?;
 
@@ -63,83 +45,28 @@ fn main() -> Result<(), cmg::CmgError> {
 }
 ```
 
-Run the complete example with:
+Run it with:
 
-```text
+```bash
 cargo run --example laplacian_pcg
 ```
 
-A graph Laplacian is singular. The submitted right-hand side must sum to zero
-within every connected component, up to the configured compatibility tolerance.
-Solutions are returned with a deterministic component-wise zero-mean
-normalization.
+A graph Laplacian is singular. Each connected component of the submitted right-hand side must sum to zero within the configured compatibility tolerance. Solutions use a deterministic component-wise zero-mean normalization.
 
-## Opt-in parallel PCG
+## Parallel and repeated-RHS solves
 
-Enable multicore support in `Cargo.toml`:
+Enable multicore support with:
 
 ```toml
 cmg = { git = "https://github.com/johannes-schmieder/CMG", features = ["parallel"] }
 ```
 
-Build a reusable executor and a selectively routed parallel plan:
+For application code, `ParallelPcgSolver` is the preferred high-level API. It owns the reusable hierarchy, selectively routed parallel plan, package-owned thread pool, and reusable workspaces. It chooses among serial PCG, planned within-solve PCG, and memory-bounded concurrency across independent right-hand sides.
+
+The default single-RHS routing threshold is **350,000 canonical retained edges**. This is a measured performance heuristic, not a mathematical CMG constant, and can be overridden through `ParallelPcgPolicy`.
 
 ```rust,ignore
-use cmg::{
-    CmgOptions, CmgPreconditioner, ParallelCmgPlan, ParallelExecutor,
-    ParallelOptions, PcgOptions, PcgWorkspace,
-    solve_pcg_with_plan_and_workspace,
-};
-
-let cmg = CmgPreconditioner::build(&graph, CmgOptions::default())?;
-let executor = ParallelExecutor::new(ParallelOptions {
-    threads: 16,
-    ..ParallelOptions::default()
-})?;
-let plan = ParallelCmgPlan::build(&cmg, &executor)?;
-let mut workspace = PcgWorkspace::new(&cmg);
-
-let result = solve_pcg_with_plan_and_workspace(
-    &graph,
-    &cmg,
-    &plan,
-    &rhs,
-    PcgOptions::default(),
-    &mut workspace,
-    &executor,
-)?;
-```
-
-`ParallelCmgPlan` stores row-oriented operators only for hierarchy levels where
-the graph size and density clear conservative routing thresholds. Sparse
-path-like hierarchies can therefore retain zero parallel operators and use the
-compact serial edge kernels. `plan.operator_count()` and `plan.byte_len()` make
-the routing and memory cost observable.
-
-Run the worker--firm example with:
-
-```text
-cargo run --release --example parallel_pcg --features parallel
-```
-
-## Prepared automatic parallel solver
-
-`ParallelPcgSolver` packages one immutable graph hierarchy, selectively routed
-parallel plan, package-owned thread pool, and explicit routing policy. It
-chooses among:
-
-- certified serial PCG;
-- within-solve planned PCG for one sufficiently large graph;
-- independent serial PCG solves distributed across right-hand sides.
-
-The router never nests the two forms of parallelism. Its report exposes the
-selected strategy, concurrency, plan storage, and retained workspace-pool
-bytes.
-
-```rust,ignore
-use cmg::{
-    CmgOptions, ParallelOptions, ParallelPcgSolver, PcgOptions,
-};
+use cmg::{CmgOptions, ParallelOptions, ParallelPcgSolver, PcgOptions};
 
 let solver = ParallelPcgSolver::build(
     &graph,
@@ -150,65 +77,42 @@ let solver = ParallelPcgSolver::build(
         ..ParallelOptions::default()
     },
 )?;
+
 let mut workspace = solver.workspace();
 let batch = solver.solve_batch_with_workspace(
     &right_hand_sides,
     PcgOptions::default(),
     &mut workspace,
 )?;
-
 println!("execution = {:?}", batch.report().execution());
-println!("concurrency = {}", batch.report().concurrency());
-println!("plan bytes = {}", batch.report().plan_bytes());
-println!(
-    "workspace-pool bytes = {}",
-    batch.report().workspace_pool_bytes(),
-);
 ```
 
-Run the compiled prepared-solver example with:
+Reuse the same solver and workspaces whenever the graph and weights are unchanged. For many RHSs, across-RHS parallelism is generally the lowest-overhead strategy when memory permits.
+
+## Performance
+
+A frozen cumulative checkpoint versus the early Rust implementation reports roughly 20% faster graph construction, 28% faster hierarchy construction, 4.4x faster stationary CMG application, 2.7x faster solve-per-RHS, and substantial memory reductions. The current hosted four-CPU routing record reaches about 2.2x planned-versus-serial speedup on its largest dense worker-firm case.
+
+These are project benchmarks, not universal hardware guarantees. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for exact interpretation, maintained benchmark records, current bottlenecks, and the 32-core qualification protocol.
+
+## Repository layout
 
 ```text
-cargo run --release --example prepared_parallel_pcg --features parallel
+src/                 numerical library and optional parallel implementation
+examples/            small runnable API examples
+tests/               correctness, determinism, adversarial, and parity tests
+benchmarks/           durable benchmark/profiling harnesses
+benchmarks/c-kernel/  isolated comparison with pinned upstream C kernels
+docs/                 maintained design, performance, and provenance notes
+.github/workflows/    durable CI and benchmark workflows
+.ci/                  latest machine-readable CI/performance records only
 ```
 
-Reuse the same `ParallelPcgSolver` and `ParallelPcgWorkspace` whenever the graph
-and weights are unchanged. Set `workspace_memory_budget_bytes` when several
-large right-hand sides may otherwise retain more simultaneous workspaces than
-the machine should support. `select_batch_execution(rhs_count)` can inspect the
-router's decision before allocating or solving.
-
-## Choosing a parallel strategy
-
-- **Automatic repeated-RHS use:** use `ParallelPcgSolver` and inspect its report.
-- **One large or relatively dense RHS:** build one `ParallelCmgPlan` and use the
-  explicit planned PCG API when direct control is preferred.
-- **Several independent RHSs:** `solve_pcg_batch_with_executor` runs independent
-  certified serial solves concurrently and limits simultaneous workspaces with
-  `workspace_memory_budget_bytes`.
-- **Small or very sparse systems:** the serial solver is usually preferable.
-- **Repeated solves:** reuse the preconditioner, plan, executor, and caller-owned
-  workspace. Do not rebuild them for every RHS.
-
-On the available four-logical-CPU hosted runner, the qualified planned-PCG
-benchmark showed no change in iteration counts, residuals, backward errors, or
-measured solutions. Directional full-solve speedups ranged from near parity on
-a path graph to about 2.17x on the tested dense worker--firm graph. The robust
-prepared-solver gate matched its selected explicit strategy within measurement
-noise and remained within 5.4% of the best explicit strategy in every qualified
-case. These are benchmark records, not a general hardware guarantee; see
-[`PERFORMANCE_PLAN.md`](PERFORMANCE_PLAN.md) for exact cases and gates.
-
-## SDDM systems
-
-`SddmMatrix` validates symmetric matrices with nonpositive off-diagonals and
-diagonal dominance. `SddmSolver` performs the CMG Laplacian augmentation,
-reuses the hierarchy for repeated right-hand sides, extracts the original SDDM
-solution, and verifies the residual against the original system.
+Completed one-shot optimization experiments are intentionally kept in Git history rather than the current source tree.
 
 ## Build and test
 
-```text
+```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets
@@ -216,16 +120,19 @@ cargo test --all-targets --release
 cargo test --all-targets --all-features
 cargo test --all-targets --all-features --release
 cargo build --release --all-features
+cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
 ```
 
-## Scope boundary
+## Documentation
 
-The current crate implements the stationary CMG algorithm, certified PCG,
-repeated-RHS operation, optional deterministic multicore kernels, and SDDM
-wrapping. K-cycles, flexible CG, GPU kernels, NUMA-specific placement, the C
-ABI, and Stata integration are separate future layers rather than hidden parts
-of the current implementation.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — module map, testing, repository policy, and performance-change discipline.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — current evidence, routing guidance, bottlenecks, and large-machine qualification.
+- [`docs/UPSTREAM.md`](docs/UPSTREAM.md) — pinned upstream source, behavioral constants, implementation mapping, and attribution.
+
+## Scope
+
+The crate implements stationary CMG, certified PCG, repeated-RHS operation, optional deterministic multicore kernels, and SDDM wrapping. K-cycles, flexible CG, GPU kernels, NUMA-specific placement, a C ABI, and Stata integration are future layers.
 
 ## License
 
-GNU GPL version 3 only. See [`LICENSE`](LICENSE) and [`UPSTREAM.md`](UPSTREAM.md).
+GNU GPL version 3 only. See [`LICENSE`](LICENSE) and [`docs/UPSTREAM.md`](docs/UPSTREAM.md).

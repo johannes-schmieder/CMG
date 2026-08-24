@@ -3,3 +3,5 @@ target/
 .DS_Store
 __pycache__/
 *.py[cod]
+*.profraw
+qualification-output/

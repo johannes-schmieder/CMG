@@ -11,9 +11,5 @@ PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 SPDX-License-Identifier: GPL-3.0-only
 
-The complete license text is available from the Free Software Foundation at
-https://www.gnu.org/licenses/gpl-3.0.txt and will be distributed with packaged
-releases of this project.
-
 The upstream CMG implementation is Copyright (c) 2008-2020 Ioannis Koutis and
-Gary Miller and is distributed under GNU GPL version 3. See UPSTREAM.md.
+Gary Miller and is distributed under GNU GPL version 3. See docs/UPSTREAM.md.

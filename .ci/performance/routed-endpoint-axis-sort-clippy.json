@@ -1,7 +1,0 @@
-{
-  "diagnostic": "routed-endpoint-axis-sort-clippy",
-  "output": "    Updating crates.io index\n Downloading crates ...\n  Downloaded crossbeam-deque v0.8.7\n  Downloaded either v1.18.0\n  Downloaded crossbeam-epoch v0.9.20\n  Downloaded crossbeam-utils v0.8.22\n  Downloaded rayon-core v1.13.0\n  Downloaded rayon v1.12.0\n   Compiling crossbeam-utils v0.8.22\n   Compiling crossbeam-epoch v0.9.20\n   Compiling crossbeam-deque v0.8.7\n   Compiling rayon-core v1.13.0\n    Checking either v1.18.0\n    Checking rayon v1.12.0\n    Checking cmg v0.1.0 (/home/runner/work/CMG/CMG)\nerror[E0061]: this function takes 2 arguments but 1 argument was supplied\n   --> src/graph.rs:696:9\n    |\n696 |         sort_compact_edge_endpoints(&mut compact);\n    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ------------ argument #1 of type `usize` is missing\n    |\nnote: function defined here\n   --> src/graph.rs:415:4\n    |\n415 | fn sort_compact_edge_endpoints(vertex_count: usize, raw: &mut [Edge]) {\n    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ -------------------\nhelp: provide the argument\n    |\n696 |         sort_compact_edge_endpoints(/* usize */, &mut compact);\n    |                                     ++++++++++++\n\nFor more information about this error, try `rustc --explain E0061`.\nerror: could not compile `cmg` (lib test) due to 1 previous error\nwarning: build failed, waiting for other jobs to finish...\n",
-  "returncode": 101,
-  "schema_version": 1,
-  "source_sha": "6b22f54c0c82fd61af034dbf69661be44c59e173"
-}

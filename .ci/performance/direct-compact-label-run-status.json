@@ -1,7 +1,0 @@
-{
-  "api_returncode": 1,
-  "raw_output": "{\n  \"message\": \"Not Found\",\n  \"documentation_url\": \"https://docs.github.com/rest\",\n  \"status\": \"404\"\n}gh: Not Found (HTTP 404)\n",
-  "runs": [],
-  "schema_version": 1,
-  "workflow": "direct-compact-forest-labels.yml"
-}
