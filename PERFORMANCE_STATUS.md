@@ -801,3 +801,9 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Production-contraction / hierarchy-build ratios: `0.995x` / `0.992x`.
 - Worst peak-RSS ratio: `1.007x`.
 - Evidence: `.ci/performance/routed-endpoint-axis-sort-latest.json`.
+
+## Mapped endpoint-key structure profile
+
+- Profiled SHA: `8190469de87d0336e5a4fbfe49119ba378a51e1a`.
+- Cases: `6`; production source mutation: `none`.
+- Evidence: `.ci/performance/endpoint-key-structure-profile.json`.

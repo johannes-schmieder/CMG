@@ -1358,8 +1358,24 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but routed contraction, hierarchy, control, or memory gates were not all met.
 - Evidence: `.ci/performance/routed-endpoint-axis-sort-latest.json`.
 
+### Mapped endpoint-key structure profile — 2026-08-24
+
+- Profiled SHA: `8190469de87d0336e5a4fbfe49119ba378a51e1a`.
+- Profiles preserve production code and inspect mapped coarse endpoints before sorting.
+
+| Case | Levels | Estimated axis/packed comparison work | Duplicate rate | Descent rate | Large low-axis-work levels |
+|---|---:|---:|---:|---:|---:|
+| path-1m | 6 | 0.000 | 0.0% | 0.0% | 0 |
+| worker-firm-1.5m | 8 | 0.212 | 21.1% | 38.3% | 1 |
+| worker-firm-2.25m | 8 | 0.211 | 21.7% | 38.4% | 2 |
+| worker-firm-3m | 9 | 0.212 | 21.8% | 38.6% | 3 |
+| dense-worker-firm-800k | 6 | 0.288 | 1.2% | 17.1% | 6 |
+| dense-worker-firm-1.6m | 6 | 0.275 | 1.2% | 17.0% | 6 |
+
+- Evidence: `.ci/performance/endpoint-key-structure-profile.json`.
+
 ## Current next action
-1. Re-profile current contraction subphases if endpoint-axis sorting is retained.
-2. Otherwise profile endpoint-key run structure before another sorting candidate.
-3. Refresh cumulative retained optimization and memory guidance.
+1. Resolve the routed endpoint-axis benchmark decision.
+2. Use measured bucket work and crossover evidence for any revised router.
+3. Re-profile contraction and hierarchy after any retained sorting change.
 4. Run manual 1–32 thread qualification when suitable hardware is available.
