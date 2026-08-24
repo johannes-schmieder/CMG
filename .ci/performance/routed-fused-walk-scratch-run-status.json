@@ -1,0 +1,32 @@
+{
+  "decision_record_present": false,
+  "failed_job_log_tails": {
+    "97393034636": "log retrieval failed: <HTTPError 401: 'Server failed to authenticate the request. Please refer to the information in the www-authenticate header.'>"
+  },
+  "jobs": [
+    {
+      "completed_at": "2026-08-24T10:01:13Z",
+      "conclusion": "failure",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32714590633/job/97393034636",
+      "id": 97393034636,
+      "name": "benchmark-and-gate",
+      "started_at": "2026-08-24T10:01:06Z",
+      "status": "completed"
+    }
+  ],
+  "monitor": "routed-fused-walk-scratch-v2",
+  "monitor_source_sha": "e3fd32c20c91ba87ab913b131e88230e77eb40ae",
+  "run": {
+    "conclusion": "failure",
+    "created_at": "2026-08-24T10:01:03Z",
+    "head_sha": "4394b6c1da37070a6c4862ae385e08cac9da6b82",
+    "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32714590633",
+    "id": 32714590633,
+    "name": "Repaired routed fused forest-scratch gate",
+    "run_attempt": 1,
+    "status": "completed",
+    "updated_at": "2026-08-24T10:01:13Z"
+  },
+  "schema_version": 1,
+  "status": "completed"
+}
