@@ -744,3 +744,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Split / hierarchy ratios: `1.004x` / `1.013x`.
 - Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
 - Evidence: `.ci/performance/routed-fused-walk-scratch-latest.json`.
+
+## Compact conductance-front list gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Split / hierarchy ratios: `0.952x` / `1.008x`.
+- Exact additional-peak / retained ratios: `1.000x` / `1.000x`.
+- Evidence: `.ci/performance/conductance-front-list-latest.json`.
