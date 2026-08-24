@@ -1374,8 +1374,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Evidence: `.ci/performance/endpoint-key-structure-profile.json`.
 
+### Dense dense endpoint-axis compact sort checkpoint — 2026-08-24
+
+- Density-only routing between packed-key sorting and endpoint-axis sorting was **not retained**.
+- Validation: `success`; canonical endpoint order and hierarchy metadata were unchanged.
+- Geometric production-contraction / hierarchy-build ratios: `0.988x` / `0.990x`.
+- Worst contraction / hierarchy / peak-RSS ratios: `1.022x` / `1.015x` / `1.003x`.
+- Decision: correctness passed, but dense active, control, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/dense-endpoint-axis-sort-latest.json`.
+
 ## Current next action
-1. Resolve the routed endpoint-axis benchmark decision.
-2. Use measured bucket work and crossover evidence for any revised router.
-3. Re-profile contraction and hierarchy after any retained sorting change.
+1. Re-profile current contraction subphases if endpoint-axis sorting is retained.
+2. Otherwise profile endpoint-key run structure before another sorting candidate.
+3. Refresh cumulative retained optimization and memory guidance.
 4. Run manual 1–32 thread qualification when suitable hardware is available.

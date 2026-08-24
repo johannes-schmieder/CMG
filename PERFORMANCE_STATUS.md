@@ -807,3 +807,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Profiled SHA: `8190469de87d0336e5a4fbfe49119ba378a51e1a`.
 - Cases: `6`; production source mutation: `none`.
 - Evidence: `.ci/performance/endpoint-key-structure-profile.json`.
+
+## Dense dense endpoint-axis compact sort gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Production-contraction / hierarchy-build ratios: `0.988x` / `0.990x`.
+- Worst peak-RSS ratio: `1.003x`.
+- Evidence: `.ci/performance/dense-endpoint-axis-sort-latest.json`.
