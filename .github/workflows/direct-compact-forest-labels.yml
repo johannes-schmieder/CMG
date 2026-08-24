@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/direct_compact_forest_labels_gate_v2.py
+          python scripts/direct_compact_forest_labels_gate_v3.py
 
       - name: Show retained decision
         if: always()
