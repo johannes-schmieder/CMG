@@ -1039,8 +1039,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Dominant profiled forest phase: **split**.
 - Evidence: `.ci/performance/forest-phase-profile-latest.json`.
 
+### Forest-split subphase profile — 2026-08-24
+
+- Validation: `success`; the instrumented splitter matched production exactly for every level and repetition.
+- Aggregate shares: allocation `5.2%`, indegree `7.5%`, diameter `60.4%`, conductance `26.8%`.
+- Dominant split subphase: **diameter** (60.4%).
+- Maximum observed walk length: `9`; maximum principal scratch: `40250064` bytes.
+- Evidence: `.ci/performance/split-forest-subphase-profile-latest.json`.
+
 ## Current next action
-1. Profile forest splitting subphases and temporary arrays on path-like and worker-firm forests.
+1. Profile diameter-walk lengths, revisit rates, and ancestor-update traffic before changing the upstream cut logic.
 2. Refresh cumulative retained optimization and memory guidance.
 3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Retain only end-to-end wins with unchanged hierarchy and residual certificates.
+4. Preserve exact split parents and complete hierarchy diagnostics in every gate.

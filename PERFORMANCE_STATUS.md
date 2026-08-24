@@ -561,3 +561,10 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Executor-aware dominant phase: `split` (51.6%).
 - Cross-mode target selected for the next gate: `split`.
 - Evidence: `.ci/performance/forest-phase-profile-latest.json`.
+
+## Forest-split subphase profile
+
+- Status: `success`.
+- Dominant subphase: `diameter` (60.4%).
+- Allocation / indegree / diameter / conductance shares: `5.2%` / `7.5%` / `60.4%` / `26.8%`.
+- Evidence: `.ci/performance/split-forest-subphase-profile-latest.json`.
