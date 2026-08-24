@@ -640,3 +640,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Hierarchy timing ratio: `0.956x`.
 - Maximum RSS delta / largest-case ratio: `4008` KiB / `1.000x`.
 - Evidence: `.ci/performance/bounded-prefix-path-rss-latest.json`.
+
+## Bounded ancestor-prefix large-path confirmation
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Hierarchy timing ratio: `0.954x`.
+- 4m / 8m RSS ratios: `1.000x` / `1.013x`.
+- Evidence: `.ci/performance/bounded-prefix-large-path-confirmation.json`.

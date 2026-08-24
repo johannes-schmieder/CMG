@@ -1141,6 +1141,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: the RSS difference scales, timing did not reproduce, or exact-memory limits were not met.
 - Evidence: `.ci/performance/bounded-prefix-path-rss-latest.json`.
 
+### Bounded ancestor-prefix large-path confirmation — 2026-08-24
+
+- The bounded-prefix candidate was **not retained** after repeated 2m, 4m, and 8m-vertex path runs.
+- Validation: `success`.
+- Geometric hierarchy time ratio: `0.954x`.
+- Maximum median-RSS delta: `7856` KiB; 4m / 8m ratios `1.000x` / `1.013x`.
+- Exact additional-peak / retained hierarchy ratios: `1.000x` / `1.000x`.
+- Decision: large-case RSS, timing, or exact-memory confirmation limits were not all met.
+- Evidence: `.ci/performance/bounded-prefix-large-path-confirmation.json`.
+
 ## Current next action
 1. Re-profile forest-split subphases if the bounded prefix is retained.
 2. Run the prepared branch-free diameter-front gate.
