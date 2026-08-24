@@ -6,7 +6,6 @@ on:
     paths:
       - 'src/**'
       - 'Cargo.toml'
-      - 'PERFORMANCE_PLAN.md'
       - '.github/workflows/parallel-performance.yml'
   workflow_dispatch:
     inputs:
