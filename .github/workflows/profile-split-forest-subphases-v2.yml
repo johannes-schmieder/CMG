@@ -1,0 +1,37 @@
+name: Profile split-forest subphases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/profile-split-forest-subphases-v2.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-split-forest-subphase-profile
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compile, validate, and profile split-forest subphases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/profile_split_forest_subphases_v2.py
+
+      - name: Show profile record
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/split-forest-subphase-profile-latest.json || true
