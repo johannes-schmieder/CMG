@@ -1,0 +1,16 @@
+{
+  "runs": [
+    {
+      "conclusion": "failure",
+      "created_at": "2026-08-24T07:32:14Z",
+      "head_sha": "ab2dc5ad32306162ebc97d0baa1bdf661ef9e88b",
+      "html_url": "https://github.com/johannes-schmieder/CMG/actions/runs/32701936257",
+      "id": 32701936257,
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-08-24T07:32:25Z"
+    }
+  ],
+  "schema_version": 1,
+  "workflow": "bounded-prefix-large-path-confirmation-v2.yml"
+}
