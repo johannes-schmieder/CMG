@@ -1022,6 +1022,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: validation passed, but plan-build timing, compact-plan, or exact-memory gates were not all met.
 - Evidence: `.ci/performance/reuse-csr-row-counts-latest.json`.
 
+### Compact CSR row-offset full-PCG checkpoint — 2026-08-24
+
+- Compact checked CSR row offsets were **retained** after full certified-PCG qualification.
+- Validation: `success`.
+- Geometric planned-solve / plan-size ratios: `0.989x` / `0.955x`.
+- Worst planned-solve ratio: `0.997x`; worst process-RSS ratio: `1.004x`.
+- Decision: full certified-PCG timing and numerical gates passed; compact CSR row offsets retained.
+- Evidence: `.ci/performance/compact-csr-row-offsets-pcg-latest.json`.
+
 ## Current next action
 
 1. Re-profile forest splitting/component labeling after the ownership decision.

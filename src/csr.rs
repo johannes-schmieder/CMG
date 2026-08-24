@@ -8,6 +8,48 @@ use rayon::prelude::*;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
+enum RowOffsets {
+    Compact(Vec<u32>),
+    Native(Vec<usize>),
+}
+
+impl RowOffsets {
+    fn byte_len(&self) -> usize {
+        match self {
+            Self::Compact(values) => values.len().saturating_mul(core::mem::size_of::<u32>()),
+            Self::Native(values) => values.len().saturating_mul(core::mem::size_of::<usize>()),
+        }
+    }
+
+    const fn is_compact(&self) -> bool {
+        matches!(self, Self::Compact(_))
+    }
+
+    fn row_count(&self) -> usize {
+        match self {
+            Self::Compact(values) => values.len().saturating_sub(1),
+            Self::Native(values) => values.len().saturating_sub(1),
+        }
+    }
+
+    fn last(&self) -> usize {
+        match self {
+            Self::Compact(values) => values.last().copied().unwrap_or(0) as usize,
+            Self::Native(values) => values.last().copied().unwrap_or(0),
+        }
+    }
+
+    #[inline]
+    fn bounds(&self, row: usize) -> (usize, usize) {
+        debug_assert!(row < self.row_count());
+        match self {
+            Self::Compact(values) => (values[row] as usize, values[row + 1] as usize),
+            Self::Native(values) => (values[row], values[row + 1]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum ColumnIndices {
     Compact(Vec<u32>),
     Native(Vec<usize>),
@@ -35,7 +77,7 @@ impl ColumnIndices {
 #[derive(Debug, Clone)]
 pub struct CsrLaplacian {
     vertex_count: usize,
-    row_offsets: Vec<usize>,
+    row_offsets: RowOffsets,
     columns: ColumnIndices,
     weights: Vec<f64>,
     source_lineage: Arc<()>,
@@ -67,26 +109,48 @@ impl CsrLaplacian {
             row_counts[edge.u()] += 1;
             row_counts[edge.v()] += 1;
         }
-        let mut row_offsets = Vec::with_capacity(vertex_count + 1);
-        row_offsets.push(0);
-        for count in row_counts {
-            let next = row_offsets
-                .last()
-                .copied()
-                .unwrap_or(0_usize)
-                .checked_add(count)
-                .ok_or(CmgError::InvalidHierarchy {
-                    context: "CSR row offsets overflowed usize",
-                })?;
-            row_offsets.push(next);
-        }
-        if row_offsets.last().copied().unwrap_or(0) != directed_entries {
+        let row_offsets = if directed_entries <= u32::MAX as usize {
+            let mut offsets = Vec::with_capacity(vertex_count + 1);
+            offsets.push(0_u32);
+            let mut running = 0_usize;
+            for count in row_counts {
+                running = running
+                    .checked_add(count)
+                    .ok_or(CmgError::InvalidHierarchy {
+                        context: "CSR row offsets overflowed usize",
+                    })?;
+                offsets.push(
+                    u32::try_from(running).map_err(|_| CmgError::InvalidHierarchy {
+                        context: "CSR compact row offset exceeded u32::MAX",
+                    })?,
+                );
+            }
+            RowOffsets::Compact(offsets)
+        } else {
+            let mut offsets = Vec::with_capacity(vertex_count + 1);
+            offsets.push(0_usize);
+            for count in row_counts {
+                let next = offsets
+                    .last()
+                    .copied()
+                    .unwrap_or(0_usize)
+                    .checked_add(count)
+                    .ok_or(CmgError::InvalidHierarchy {
+                        context: "CSR row offsets overflowed usize",
+                    })?;
+                offsets.push(next);
+            }
+            RowOffsets::Native(offsets)
+        };
+        if row_offsets.last() != directed_entries {
             return Err(CmgError::InvalidHierarchy {
                 context: "CSR row counts do not match directed-entry count",
             });
         }
 
-        let mut next = row_offsets[..vertex_count].to_vec();
+        let mut next = (0..vertex_count)
+            .map(|row| row_offsets.bounds(row).0)
+            .collect::<Vec<_>>();
         let mut weights = vec![0.0; directed_entries];
         let columns = if vertex_count <= u32::MAX as usize {
             let mut columns = vec![0_u32; directed_entries];
@@ -150,12 +214,17 @@ impl CsrLaplacian {
         self.columns.is_compact()
     }
 
+    /// Return whether row offsets use four-byte storage.
+    #[must_use]
+    pub const fn uses_compact_row_offsets(&self) -> bool {
+        self.row_offsets.is_compact()
+    }
+
     /// Return the principal retained heap bytes.
     #[must_use]
     pub fn byte_len(&self) -> usize {
         self.row_offsets
-            .len()
-            .saturating_mul(core::mem::size_of::<usize>())
+            .byte_len()
             .saturating_add(self.columns.byte_len())
             .saturating_add(
                 self.weights
@@ -173,7 +242,8 @@ impl CsrLaplacian {
                 for row in 0..self.vertex_count {
                     let center = input[row];
                     let mut sum = 0.0;
-                    for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                    let (start, end) = self.row_offsets.bounds(row);
+                    for index in start..end {
                         sum += self.weights[index] * (center - input[columns[index] as usize]);
                     }
                     output[row] = sum;
@@ -183,7 +253,8 @@ impl CsrLaplacian {
                 for row in 0..self.vertex_count {
                     let center = input[row];
                     let mut sum = 0.0;
-                    for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                    let (start, end) = self.row_offsets.bounds(row);
+                    for index in start..end {
                         sum += self.weights[index] * (center - input[columns[index]]);
                     }
                     output[row] = sum;
@@ -221,7 +292,8 @@ impl CsrLaplacian {
                         let row = first_row + offset;
                         let center = input[row];
                         let mut sum = 0.0;
-                        for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                        let (start, end) = self.row_offsets.bounds(row);
+                        for index in start..end {
                             sum += self.weights[index] * (center - input[columns[index] as usize]);
                         }
                         *value = sum;
@@ -236,7 +308,8 @@ impl CsrLaplacian {
                         let row = first_row + offset;
                         let center = input[row];
                         let mut sum = 0.0;
-                        for index in self.row_offsets[row]..self.row_offsets[row + 1] {
+                        let (start, end) = self.row_offsets.bounds(row);
+                        for index in start..end {
                             sum += self.weights[index] * (center - input[columns[index]]);
                         }
                         *value = sum;
@@ -276,8 +349,7 @@ impl CsrLaplacian {
         let mut best_weight = 0.0;
         match &self.columns {
             ColumnIndices::Compact(columns) => {
-                let start = self.row_offsets[row];
-                let end = self.row_offsets[row + 1];
+                let (start, end) = self.row_offsets.bounds(row);
                 for (&neighbor, &weight) in
                     columns[start..end].iter().zip(&self.weights[start..end])
                 {
@@ -289,8 +361,7 @@ impl CsrLaplacian {
                 }
             }
             ColumnIndices::Native(columns) => {
-                let start = self.row_offsets[row];
-                let end = self.row_offsets[row + 1];
+                let (start, end) = self.row_offsets.bounds(row);
                 for (&neighbor, &weight) in
                     columns[start..end].iter().zip(&self.weights[start..end])
                 {
@@ -330,19 +401,18 @@ impl CsrLaplacian {
     }
 }
 
-fn rows_are_sorted(row_offsets: &[usize], columns: &ColumnIndices) -> bool {
-    match columns {
-        ColumnIndices::Compact(columns) => row_offsets.windows(2).all(|window| {
-            columns[window[0]..window[1]]
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-        }),
-        ColumnIndices::Native(columns) => row_offsets.windows(2).all(|window| {
-            columns[window[0]..window[1]]
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-        }),
-    }
+fn rows_are_sorted(row_offsets: &RowOffsets, columns: &ColumnIndices) -> bool {
+    (0..row_offsets.row_count()).all(|row| {
+        let (start, end) = row_offsets.bounds(row);
+        match columns {
+            ColumnIndices::Compact(columns) => {
+                columns[start..end].windows(2).all(|pair| pair[0] < pair[1])
+            }
+            ColumnIndices::Native(columns) => {
+                columns[start..end].windows(2).all(|pair| pair[0] < pair[1])
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -395,7 +465,8 @@ mod tests {
         let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 1.0)]).unwrap();
         let csr = CsrLaplacian::from_laplacian(&graph).unwrap();
         assert!(csr.uses_compact_indices());
-        assert!(csr.byte_len() >= (graph.vertex_count() + 1) * core::mem::size_of::<usize>());
+        assert!(csr.uses_compact_row_offsets());
+        assert!(csr.byte_len() >= (graph.vertex_count() + 1) * core::mem::size_of::<u32>());
     }
 
     #[cfg(feature = "parallel")]
@@ -424,5 +495,24 @@ mod tests {
         csr.matvec_into_parallel(&input, &mut parallel, &executor)
             .unwrap();
         assert_eq!(serial, parallel);
+    }
+}
+
+#[cfg(test)]
+mod compact_row_offset_tests {
+    use super::CsrLaplacian;
+    use crate::Laplacian;
+
+    #[test]
+    fn compact_offsets_preserve_row_matvec() {
+        let graph = Laplacian::from_edges(
+            10,
+            (0..9).map(|vertex| (vertex, vertex + 1, 1.0 + vertex as f64)),
+        )
+        .unwrap();
+        let csr = CsrLaplacian::from_laplacian(&graph).unwrap();
+        assert!(csr.uses_compact_row_offsets());
+        let input: Vec<_> = (0..10).map(|index| index as f64 - 4.0).collect();
+        assert_eq!(csr.matvec(&input).unwrap(), graph.matvec(&input).unwrap());
     }
 }
