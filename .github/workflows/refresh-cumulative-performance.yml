@@ -1,0 +1,37 @@
+name: Refresh cumulative performance evidence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-cumulative-performance.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-cumulative-performance-refresh
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare current production to frozen optimization baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/refresh_cumulative_performance.py
+
+      - name: Show cumulative evidence
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/cumulative-latest.json || true
