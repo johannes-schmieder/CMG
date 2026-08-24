@@ -1,0 +1,37 @@
+name: Cached conductance-ancestor gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cached-conductance-ancestors.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-cached-conductance-ancestors
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify cached conductance ancestor loads
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/cached_conductance_ancestors_gate.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/cached-conductance-ancestors-latest.json || true
