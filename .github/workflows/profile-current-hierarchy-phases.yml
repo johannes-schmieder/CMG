@@ -1,0 +1,37 @@
+name: Current hierarchy phase profile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/profile-current-hierarchy-phases.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-current-hierarchy-phase-profile
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Profile current production hierarchy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/profile_current_hierarchy_phases.py
+
+      - name: Show profile
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/hierarchy-phase-profile-current.json || true
