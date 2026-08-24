@@ -1,0 +1,202 @@
+{
+  "acceptance_limits": {
+    "hierarchy_geometric_time_ratio_max": 0.998,
+    "improved_split_case_count_min": 3,
+    "split_geometric_time_ratio_max": 0.99,
+    "worst_hierarchy_time_ratio_max": 1.025,
+    "worst_peak_rss_ratio_max": 1.02,
+    "worst_split_time_ratio_max": 1.025
+  },
+  "accepted": false,
+  "decision_reason": "correctness passed, but split, hierarchy, or memory gates were not all met",
+  "experiment": "zipped-ancestor-updates",
+  "hierarchy_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "4"
+      ],
+      "baseline_median_ns": 337324227.5,
+      "baseline_peak_rss_kib": 154960,
+      "candidate_median_ns": 338271751.5,
+      "candidate_over_baseline_peak_rss": 0.9995095508518327,
+      "candidate_over_baseline_time": 1.0028089414360253,
+      "candidate_peak_rss_kib": 154884,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "edges": 1600000,
+        "repetitions": 4,
+        "scale": 100000,
+        "vertices": 200000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 35496844.5,
+      "baseline_peak_rss_kib": 77492,
+      "candidate_median_ns": 35473501.0,
+      "candidate_over_baseline_peak_rss": 0.9982965983585402,
+      "candidate_over_baseline_time": 0.9993423781654732,
+      "candidate_peak_rss_kib": 77360,
+      "metadata": {
+        "case": "path",
+        "edges": 999999,
+        "repetitions": 4,
+        "scale": 1000000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "4"
+      ],
+      "baseline_median_ns": 140617096.0,
+      "baseline_peak_rss_kib": 104848,
+      "candidate_median_ns": 139964477.5,
+      "candidate_over_baseline_peak_rss": 0.9983976804517015,
+      "candidate_over_baseline_time": 0.9953588964744372,
+      "candidate_peak_rss_kib": 104680,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 1500000,
+        "repetitions": 4,
+        "scale": 500000,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 274449243.5,
+      "baseline_peak_rss_kib": 203072,
+      "candidate_median_ns": 271445564.0,
+      "candidate_over_baseline_peak_rss": 1.0001969744721084,
+      "candidate_over_baseline_time": 0.9890556102042963,
+      "candidate_peak_rss_kib": 203112,
+      "metadata": {
+        "case": "worker-firm",
+        "edges": 3000000,
+        "repetitions": 4,
+        "scale": 1000000,
+        "vertices": 2000000
+      }
+    }
+  },
+  "hierarchy_geometric_time_ratio": 0.9966283314991121,
+  "improved_split_case_count": 3,
+  "schema_version": 1,
+  "source_sha": "65769cd5b81f86e54b8c701e6fe53384ddd53efc",
+  "split_cases": {
+    "dense-worker-firm-1.6m": {
+      "arguments": [
+        "dense-worker-firm",
+        "100000",
+        "4"
+      ],
+      "baseline_median_ns": 16338784.5,
+      "baseline_peak_rss_kib": 158320,
+      "candidate_median_ns": 15992856.5,
+      "candidate_over_baseline_peak_rss": 0.9999494694290045,
+      "candidate_over_baseline_time": 0.9788278008073367,
+      "candidate_peak_rss_kib": 158312,
+      "metadata": {
+        "case": "dense-worker-firm",
+        "checksum": 10072980021049808031,
+        "edges": 1599978,
+        "levels": 6,
+        "parent_sets": 6,
+        "repetitions": 4,
+        "scale": 100000,
+        "total_parent_vertices": 580030,
+        "vertices": 200000
+      }
+    },
+    "path-1m": {
+      "arguments": [
+        "path",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 17241703.5,
+      "baseline_peak_rss_kib": 80508,
+      "candidate_median_ns": 16972675.0,
+      "candidate_over_baseline_peak_rss": 1.000496845034034,
+      "candidate_over_baseline_time": 0.9843966403899708,
+      "candidate_peak_rss_kib": 80548,
+      "metadata": {
+        "case": "path",
+        "checksum": 5914108976634055773,
+        "edges": 999999,
+        "levels": 7,
+        "parent_sets": 6,
+        "repetitions": 4,
+        "scale": 1000000,
+        "total_parent_vertices": 1333007,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-1.5m": {
+      "arguments": [
+        "worker-firm",
+        "500000",
+        "4"
+      ],
+      "baseline_median_ns": 18683636.5,
+      "baseline_peak_rss_kib": 110852,
+      "candidate_median_ns": 19150628.5,
+      "candidate_over_baseline_peak_rss": 0.9994587377764947,
+      "candidate_over_baseline_time": 1.024994705928902,
+      "candidate_peak_rss_kib": 110792,
+      "metadata": {
+        "case": "worker-firm",
+        "checksum": 11591927224741261361,
+        "edges": 1499996,
+        "levels": 9,
+        "parent_sets": 8,
+        "repetitions": 4,
+        "scale": 500000,
+        "total_parent_vertices": 1422861,
+        "vertices": 1000000
+      }
+    },
+    "worker-firm-3m": {
+      "arguments": [
+        "worker-firm",
+        "1000000",
+        "4"
+      ],
+      "baseline_median_ns": 49464896.0,
+      "baseline_peak_rss_kib": 215832,
+      "candidate_median_ns": 48484832.5,
+      "candidate_over_baseline_peak_rss": 1.0006301197227474,
+      "candidate_over_baseline_time": 0.9801866863320606,
+      "candidate_peak_rss_kib": 215968,
+      "metadata": {
+        "case": "worker-firm",
+        "checksum": 16306040085227446035,
+        "edges": 2999996,
+        "levels": 10,
+        "parent_sets": 9,
+        "repetitions": 4,
+        "scale": 1000000,
+        "total_parent_vertices": 2817054,
+        "vertices": 2000000
+      }
+    }
+  },
+  "split_geometric_time_ratio": 0.9919201439972203,
+  "validation": "success",
+  "worst_hierarchy_time_ratio": 1.0028089414360253,
+  "worst_peak_rss_ratio": 1.0006301197227474,
+  "worst_split_time_ratio": 1.024994705928902
+}

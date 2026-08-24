@@ -1168,8 +1168,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Maximum observed walk length: `9`; maximum principal scratch: `40250064` bytes.
 - Evidence: `.ci/performance/split-forest-subphase-profile-v3-latest.json`.
 
+### Zipped ancestor-update checkpoint — 2026-08-24
+
+- Replacing two indexed walk/prefix traversals with exact zipped-slice traversals was **not retained**.
+- Validation: `success`; split checksums and hierarchy metadata were unchanged.
+- Geometric split / hierarchy-build ratios: `0.992x` / `0.997x`.
+- Worst split / hierarchy / peak-RSS ratios: `1.025x` / `1.003x` / `1.001x`.
+- Decision: correctness passed, but split, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/zipped-ancestor-updates-latest.json`.
+
 ## Current next action
-1. Profile diameter-walk lengths, revisit rates, and ancestor-update traffic before changing the upstream cut logic.
-2. Refresh cumulative retained optimization and memory guidance.
-3. Run the manual 1–32 thread qualification on suitable hardware when available.
-4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
+1. Re-profile the diameter pass after the zipped-update decision.
+2. Continue exact-preserving diameter-loop optimization from the updated profile.
+3. Refresh cumulative retained optimization and memory guidance.
+4. Run the manual 1–32 thread qualification on suitable hardware when available.
