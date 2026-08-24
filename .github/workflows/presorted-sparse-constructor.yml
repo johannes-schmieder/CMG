@@ -1,0 +1,37 @@
+name: Presorted sparse-constructor gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/presorted-sparse-constructor.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-presorted-sparse-constructor
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify presorted sparse constructor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/presorted_sparse_constructor_gate.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/presorted-sparse-constructor-latest.json || true
