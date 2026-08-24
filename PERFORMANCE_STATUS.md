@@ -562,12 +562,12 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Cross-mode target selected for the next gate: `split`.
 - Evidence: `.ci/performance/forest-phase-profile-latest.json`.
 
-## Forest-split subphase profile
+## Post-conductance forest-split subphase profile
 
 - Status: `success`.
-- Dominant subphase: `diameter` (60.4%).
-- Allocation / indegree / diameter / conductance shares: `5.2%` / `7.5%` / `60.4%` / `26.8%`.
-- Evidence: `.ci/performance/split-forest-subphase-profile-latest.json`.
+- Dominant subphase: `diameter` (63.1%).
+- Allocation / indegree / diameter / conductance shares: `5.4%` / `10.4%` / `63.1%` / `21.2%`.
+- Evidence: `.ci/performance/split-forest-subphase-profile-post-conductance.json`.
 
 ## Inline forest-walk gate
 

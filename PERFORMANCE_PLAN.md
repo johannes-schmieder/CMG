@@ -1104,8 +1104,16 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: full qualification passed; conductance search no longer carries cut-state branches through every parent step.
 - Evidence: `.ci/performance/split-conductance-branch-latest.json`.
 
+### Post-conductance forest-split subphase profile — 2026-08-24
+
+- Validation: `success`; the instrumented splitter matched production exactly for every level and repetition.
+- Aggregate shares: allocation `5.4%`, indegree `10.4%`, diameter `63.1%`, conductance `21.2%`.
+- Dominant split subphase: **diameter** (63.1%).
+- Maximum observed walk length: `9`; maximum principal scratch: `40250064` bytes.
+- Evidence: `.ci/performance/split-forest-subphase-profile-post-conductance.json`.
+
 ## Current next action
-1. Re-profile forest-split subphases if the conductance refactor is retained.
-2. Continue exact-preserving diameter-pass optimization from the updated profile.
-3. Refresh cumulative retained optimization and memory guidance.
-4. Run the manual 1–32 thread qualification on suitable hardware when available.
+1. Profile diameter-walk lengths, revisit rates, and ancestor-update traffic before changing the upstream cut logic.
+2. Refresh cumulative retained optimization and memory guidance.
+3. Run the manual 1–32 thread qualification on suitable hardware when available.
+4. Preserve exact split parents and complete hierarchy diagnostics in every gate.
