@@ -1,0 +1,41 @@
+name: Monitor presorted sparse-constructor gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/monitor-presorted-sparse-gate.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: cmg-presorted-sparse-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Wait for gate and preserve result or logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/monitor_presorted_sparse_gate.py
+
+      - name: Show gate status
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/presorted-sparse-constructor-run-status.json || true
+          git show origin/main:.ci/performance/presorted-sparse-constructor-latest.json || true
