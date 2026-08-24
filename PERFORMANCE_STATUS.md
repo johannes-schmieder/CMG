@@ -815,3 +815,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Production-contraction / hierarchy-build ratios: `0.991x` / `0.996x`.
 - Worst peak-RSS ratio: `1.005x`.
 - Evidence: `.ci/performance/dense-endpoint-axis-sort-latest.json`.
+
+## Separate dense axis-constructor gate
+
+- Decision: `not retained`.
+- Validation: `success`.
+- Active dense contraction / hierarchy ratios: `0.970x` / `0.975x`.
+- Overall hierarchy ratio: `0.998x`.
+- Evidence: `.ci/performance/separate-dense-axis-constructor-latest.json`.

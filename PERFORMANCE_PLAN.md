@@ -1383,8 +1383,17 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: confirmation preserved correctness, but whole-workload, dense active, full-hierarchy control, or memory gates were not all met.
 - Evidence: `.ci/performance/dense-endpoint-axis-sort-latest.json`.
 
+### Separate dense axis-constructor checkpoint — 2026-08-24
+
+- Routing only qualified dense coarse graphs to a separate axis-sorted constructor was **not retained**.
+- Validation: `success`; packed controls use the original constructor unchanged.
+- Active dense contraction / hierarchy ratios: `0.970x` / `0.975x`.
+- Overall hierarchy ratio: `0.998x`; worst peak-RSS ratio: `1.006x`.
+- Decision: correctness passed, but active, whole-workload, control, hierarchy, or memory gates were not all met.
+- Evidence: `.ci/performance/separate-dense-axis-constructor-latest.json`.
+
 ## Current next action
-1. Re-profile current contraction subphases if endpoint-axis sorting is retained.
-2. Otherwise profile endpoint-key run structure before another sorting candidate.
+1. Re-profile contraction and hierarchy if the separate dense constructor is retained.
+2. Otherwise close endpoint-axis routing and test a sorted-input fast path for path-like levels.
 3. Refresh cumulative retained optimization and memory guidance.
 4. Run manual 1–32 thread qualification when suitable hardware is available.
