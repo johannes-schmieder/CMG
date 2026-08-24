@@ -1,0 +1,37 @@
+name: Repaired CSR row-count reuse gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/reuse-csr-row-counts-v3.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-reuse-csr-row-counts-v3
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify repaired CSR row-count reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/reuse_csr_row_counts_gate_v3.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/reuse-csr-row-counts-latest.json || true
