@@ -1,0 +1,37 @@
+name: Compact walk-ancestor scratch gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-walk-ancestor-scratch.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cmg-compact-walk-ancestor-scratch
+  cancel-in-progress: false
+
+jobs:
+  benchmark-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Qualify compact walk and ancestor-prefix scratch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/compact_walk_ancestor_scratch_gate.py
+
+      - name: Show retained decision
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/compact-walk-ancestor-scratch-latest.json || true
