@@ -1349,6 +1349,15 @@ After in-place level output and recursive centering, the accepted recursive-cent
 - Decision: correctness passed, but contraction, hierarchy, or memory gates were not all met.
 - Evidence: `.ci/performance/endpoint-axis-sort-latest.json`.
 
+### Routed routed endpoint-axis compact sort checkpoint — 2026-08-24
+
+- Measured work/density routing between packed-key sorting and endpoint-axis sorting was **not retained**.
+- Validation: `failure`; canonical endpoint order and hierarchy metadata were unchanged.
+- Geometric production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst contraction / hierarchy / peak-RSS ratios: `1.000x` / `1.000x` / `1.000x`.
+- Decision: experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings.
+- Evidence: `.ci/performance/routed-endpoint-axis-sort-latest.json`.
+
 ## Current next action
 1. Re-profile current contraction subphases if endpoint-axis sorting is retained.
 2. Otherwise profile endpoint-key run structure before another sorting candidate.

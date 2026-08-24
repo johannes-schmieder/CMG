@@ -1,0 +1,18 @@
+{
+  "accepted": false,
+  "active_contraction_geometric_time_ratio": 1.0,
+  "contraction_cases": {},
+  "contraction_geometric_time_ratio": 1.0,
+  "decision_reason": "experiment failed safely: command failed (101): cargo clippy --all-targets --all-features -- -D warnings",
+  "error": "RuntimeError('command failed (101): cargo clippy --all-targets --all-features -- -D warnings')",
+  "experiment": "routed-endpoint-axis-compact-sort",
+  "hierarchy_cases": {},
+  "hierarchy_geometric_time_ratio": 1.0,
+  "improved_active_contraction_count": 0,
+  "schema_version": 1,
+  "source_sha": "faf3f82206ad61ca1bce5ac216e80752e44cb7a3",
+  "validation": "failure",
+  "worst_contraction_time_ratio": 1.0,
+  "worst_hierarchy_time_ratio": 1.0,
+  "worst_peak_rss_ratio": 1.0
+}

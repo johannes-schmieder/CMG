@@ -793,3 +793,11 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 - Production-contraction / hierarchy-build ratios: `1.012x` / `0.974x`.
 - Worst peak-RSS ratio: `1.035x`.
 - Evidence: `.ci/performance/endpoint-axis-sort-latest.json`.
+
+## Routed routed endpoint-axis compact sort gate
+
+- Decision: `not retained`.
+- Validation: `failure`.
+- Production-contraction / hierarchy-build ratios: `1.000x` / `1.000x`.
+- Worst peak-RSS ratio: `1.000x`.
+- Evidence: `.ci/performance/routed-endpoint-axis-sort-latest.json`.
