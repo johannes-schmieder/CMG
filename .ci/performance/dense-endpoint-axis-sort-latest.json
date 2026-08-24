@@ -2,32 +2,34 @@
   "acceptance_limits": {
     "active_contraction_geometric_time_ratio_max": 0.985,
     "active_hierarchy_geometric_time_ratio_max": 0.985,
+    "contraction_geometric_time_ratio_max": 0.995,
     "hierarchy_geometric_time_ratio_max": 0.995,
     "improved_active_contraction_count_min": 3,
     "improved_active_hierarchy_count_min": 3,
     "worst_contraction_time_ratio_max": 1.03,
-    "worst_control_contraction_time_ratio_max": 1.02,
+    "worst_control_contraction_time_ratio_max": 1.03,
     "worst_control_hierarchy_time_ratio_max": 1.02,
     "worst_hierarchy_time_ratio_max": 1.03,
     "worst_peak_rss_ratio_max": 1.02
   },
   "accepted": false,
-  "active_contraction_geometric_time_ratio": 0.9680775560969378,
-  "active_hierarchy_geometric_time_ratio": 0.9679894994171607,
+  "active_contraction_geometric_time_ratio": 0.9660469402621128,
+  "active_hierarchy_geometric_time_ratio": 0.9806139335325991,
+  "confirmation": true,
   "contraction_cases": {
     "dense-worker-firm-1.6m": {
       "arguments": [
         "dense-worker-firm",
         "100000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 304704568.5,
-      "baseline_peak_rss_kib": 200728,
-      "candidate_metric": 296602963.5,
-      "candidate_over_baseline_peak_rss": 0.9994021760790722,
-      "candidate_over_baseline_time": 0.9734116063967055,
-      "candidate_peak_rss_kib": 200608,
+      "baseline_metric": 288891031.0,
+      "baseline_peak_rss_kib": 200544,
+      "candidate_metric": 278483779.5,
+      "candidate_over_baseline_peak_rss": 1.0003390777086325,
+      "candidate_over_baseline_time": 0.9639751657779919,
+      "candidate_peak_rss_kib": 200612,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 1600000,
@@ -42,15 +44,15 @@
       "arguments": [
         "dense-worker-firm",
         "25000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 69814402.5,
-      "baseline_peak_rss_kib": 52160,
-      "candidate_metric": 71375161.5,
-      "candidate_over_baseline_peak_rss": 0.9959355828220859,
-      "candidate_over_baseline_time": 1.0223558312341068,
-      "candidate_peak_rss_kib": 51948,
+      "baseline_metric": 64780434.0,
+      "baseline_peak_rss_kib": 51760,
+      "candidate_metric": 65168852.0,
+      "candidate_over_baseline_peak_rss": 1.0050231839258115,
+      "candidate_over_baseline_time": 1.0059959153716074,
+      "candidate_peak_rss_kib": 52020,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 400000,
@@ -65,15 +67,15 @@
       "arguments": [
         "dense-worker-firm",
         "37500",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 105241477.0,
-      "baseline_peak_rss_kib": 76292,
-      "candidate_metric": 100748440.0,
-      "candidate_over_baseline_peak_rss": 1.0027787972526607,
-      "candidate_over_baseline_time": 0.9573073551599812,
-      "candidate_peak_rss_kib": 76504,
+      "baseline_metric": 98899256.5,
+      "baseline_peak_rss_kib": 76012,
+      "candidate_metric": 95471682.0,
+      "candidate_over_baseline_peak_rss": 1.00542019681103,
+      "candidate_over_baseline_time": 0.9653427677689367,
+      "candidate_peak_rss_kib": 76424,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 600000,
@@ -88,15 +90,15 @@
       "arguments": [
         "dense-worker-firm",
         "50000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 144083086.0,
-      "baseline_peak_rss_kib": 101688,
-      "candidate_metric": 140279930.0,
-      "candidate_over_baseline_peak_rss": 1.0034222327118245,
-      "candidate_over_baseline_time": 0.9736044243250037,
-      "candidate_peak_rss_kib": 102036,
+      "baseline_metric": 134880679.0,
+      "baseline_peak_rss_kib": 101784,
+      "candidate_metric": 130676363.0,
+      "candidate_over_baseline_peak_rss": 0.9957557179910399,
+      "candidate_over_baseline_time": 0.9688293680668675,
+      "candidate_peak_rss_kib": 101352,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 800000,
@@ -111,15 +113,15 @@
       "arguments": [
         "path",
         "1000000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 4672155.5,
-      "baseline_peak_rss_kib": 73428,
-      "candidate_metric": 4657049.0,
-      "candidate_over_baseline_peak_rss": 0.9530969112600098,
-      "candidate_over_baseline_time": 0.9967666958002575,
-      "candidate_peak_rss_kib": 69984,
+      "baseline_metric": 4006943.5,
+      "baseline_peak_rss_kib": 70992,
+      "candidate_metric": 4030908.0,
+      "candidate_over_baseline_peak_rss": 0.9820824881676808,
+      "candidate_over_baseline_time": 1.0059807431774368,
+      "candidate_peak_rss_kib": 69720,
       "metadata": {
         "case": "path",
         "edges": 999999,
@@ -134,15 +136,15 @@
       "arguments": [
         "worker-firm",
         "500000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 91722385.5,
-      "baseline_peak_rss_kib": 118036,
-      "candidate_metric": 91246890.0,
-      "candidate_over_baseline_peak_rss": 0.9998644481344674,
-      "candidate_over_baseline_time": 0.9948159274597148,
-      "candidate_peak_rss_kib": 118020,
+      "baseline_metric": 84188200.5,
+      "baseline_peak_rss_kib": 118008,
+      "candidate_metric": 84694180.5,
+      "candidate_over_baseline_peak_rss": 0.9987797437461867,
+      "candidate_over_baseline_time": 1.0060101058936401,
+      "candidate_peak_rss_kib": 117864,
       "metadata": {
         "case": "worker-firm",
         "edges": 1500000,
@@ -157,15 +159,15 @@
       "arguments": [
         "worker-firm",
         "750000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 135483224.0,
-      "baseline_peak_rss_kib": 176472,
-      "candidate_metric": 135472613.0,
-      "candidate_over_baseline_peak_rss": 1.000634661589374,
-      "candidate_over_baseline_time": 0.9999216803402907,
-      "candidate_peak_rss_kib": 176584,
+      "baseline_metric": 124882255.0,
+      "baseline_peak_rss_kib": 176304,
+      "candidate_metric": 126059733.0,
+      "candidate_over_baseline_peak_rss": 1.0,
+      "candidate_over_baseline_time": 1.0094287054633984,
+      "candidate_peak_rss_kib": 176304,
       "metadata": {
         "case": "worker-firm",
         "edges": 2250000,
@@ -180,15 +182,15 @@
       "arguments": [
         "worker-firm",
         "1000000",
-        "3",
+        "5",
         "comparison"
       ],
-      "baseline_metric": 182673692.0,
-      "baseline_peak_rss_kib": 230192,
-      "candidate_metric": 179925445.5,
-      "candidate_over_baseline_peak_rss": 0.9999826232015013,
-      "candidate_over_baseline_time": 0.9849554335388371,
-      "candidate_peak_rss_kib": 230188,
+      "baseline_metric": 166871751.0,
+      "baseline_peak_rss_kib": 230088,
+      "candidate_metric": 167410075.5,
+      "candidate_over_baseline_peak_rss": 0.9999478460415145,
+      "candidate_over_baseline_time": 1.0032259774154344,
+      "candidate_peak_rss_kib": 230076,
       "metadata": {
         "case": "worker-firm",
         "edges": 3000000,
@@ -200,26 +202,26 @@
       "metric": "production_total_ns"
     }
   },
-  "contraction_geometric_time_ratio": 0.9877144749067396,
-  "decision_reason": "correctness passed, but dense active, control, hierarchy, or memory gates were not all met",
-  "experiment": "dense-endpoint-axis-compact-sort",
+  "contraction_geometric_time_ratio": 0.9909053358437729,
+  "decision_reason": "confirmation preserved correctness, but whole-workload, dense active, full-hierarchy control, or memory gates were not all met",
+  "experiment": "dense-endpoint-axis-compact-sort-confirmation",
   "hierarchy_cases": {
     "dense-worker-firm-1.6m": {
       "arguments": [
         "dense-worker-firm",
         "100000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 428927411.5,
-      "baseline_peak_rss_kib": 154992,
-      "candidate_metric": 419362655.0,
-      "candidate_over_baseline_peak_rss": 0.9991483431402911,
-      "candidate_over_baseline_time": 0.9777007571827804,
-      "candidate_peak_rss_kib": 154860,
+      "baseline_metric": 404974798.5,
+      "baseline_peak_rss_kib": 154924,
+      "candidate_metric": 398245218.0,
+      "candidate_over_baseline_peak_rss": 0.9991479693268958,
+      "candidate_over_baseline_time": 0.9833827178260822,
+      "candidate_peak_rss_kib": 154792,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 1600000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 100000,
         "vertices": 200000
       },
@@ -229,18 +231,18 @@
       "arguments": [
         "dense-worker-firm",
         "25000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 98901821.0,
-      "baseline_peak_rss_kib": 44116,
-      "candidate_metric": 98409670.0,
-      "candidate_over_baseline_peak_rss": 1.001269380723547,
-      "candidate_over_baseline_time": 0.9950238428875845,
-      "candidate_peak_rss_kib": 44172,
+      "baseline_metric": 88622931.5,
+      "baseline_peak_rss_kib": 44028,
+      "candidate_metric": 89039187.5,
+      "candidate_over_baseline_peak_rss": 0.9999091487235395,
+      "candidate_over_baseline_time": 1.0046969333213718,
+      "candidate_peak_rss_kib": 44024,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 400000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 25000,
         "vertices": 50000
       },
@@ -250,18 +252,18 @@
       "arguments": [
         "dense-worker-firm",
         "37500",
-        "3"
+        "5"
       ],
-      "baseline_metric": 147307307.0,
-      "baseline_peak_rss_kib": 64804,
-      "candidate_metric": 138238943.5,
-      "candidate_over_baseline_peak_rss": 1.0019751867168694,
-      "candidate_over_baseline_time": 0.9384391468102801,
-      "candidate_peak_rss_kib": 64932,
+      "baseline_metric": 134108227.0,
+      "baseline_peak_rss_kib": 64712,
+      "candidate_metric": 131450872.0,
+      "candidate_over_baseline_peak_rss": 1.0019779948077636,
+      "candidate_over_baseline_time": 0.9801849964059252,
+      "candidate_peak_rss_kib": 64840,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 600000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 37500,
         "vertices": 75000
       },
@@ -271,18 +273,18 @@
       "arguments": [
         "dense-worker-firm",
         "50000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 209194189.5,
-      "baseline_peak_rss_kib": 78512,
-      "candidate_metric": 206799502.0,
-      "candidate_over_baseline_peak_rss": 0.9986244141023028,
-      "candidate_over_baseline_time": 0.9885528010805482,
-      "candidate_peak_rss_kib": 78404,
+      "baseline_metric": 192769640.0,
+      "baseline_peak_rss_kib": 78532,
+      "candidate_metric": 188582849.5,
+      "candidate_over_baseline_peak_rss": 0.9969948556002649,
+      "candidate_over_baseline_time": 0.9782808615506051,
+      "candidate_peak_rss_kib": 78296,
       "metadata": {
         "case": "dense-worker-firm",
         "edges": 800000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 50000,
         "vertices": 100000
       },
@@ -292,18 +294,18 @@
       "arguments": [
         "path",
         "1000000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 44672776.0,
-      "baseline_peak_rss_kib": 77504,
-      "candidate_metric": 44555205.0,
-      "candidate_over_baseline_peak_rss": 0.9994322873658134,
-      "candidate_over_baseline_time": 0.9973681734038646,
-      "candidate_peak_rss_kib": 77460,
+      "baseline_metric": 45175560.5,
+      "baseline_peak_rss_kib": 77324,
+      "candidate_metric": 45154901.5,
+      "candidate_over_baseline_peak_rss": 1.0004655734312762,
+      "candidate_over_baseline_time": 0.999542695214595,
+      "candidate_peak_rss_kib": 77360,
       "metadata": {
         "case": "path",
         "edges": 999999,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 1000000,
         "vertices": 1000000
       },
@@ -313,18 +315,18 @@
       "arguments": [
         "worker-firm",
         "500000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 181053906.0,
-      "baseline_peak_rss_kib": 104848,
-      "candidate_metric": 183825883.0,
-      "candidate_over_baseline_peak_rss": 0.9995421944147719,
-      "candidate_over_baseline_time": 1.0153102303133963,
-      "candidate_peak_rss_kib": 104800,
+      "baseline_metric": 167675350.0,
+      "baseline_peak_rss_kib": 104612,
+      "candidate_metric": 169951211.5,
+      "candidate_over_baseline_peak_rss": 1.0002294191870913,
+      "candidate_over_baseline_time": 1.0135730237032456,
+      "candidate_peak_rss_kib": 104636,
       "metadata": {
         "case": "worker-firm",
         "edges": 1500000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 500000,
         "vertices": 1000000
       },
@@ -334,18 +336,18 @@
       "arguments": [
         "worker-firm",
         "750000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 278635792.0,
-      "baseline_peak_rss_kib": 153748,
-      "candidate_metric": 281287356.5,
-      "candidate_over_baseline_peak_rss": 0.9998959336056404,
-      "candidate_over_baseline_time": 1.009516237956967,
-      "candidate_peak_rss_kib": 153732,
+      "baseline_metric": 253293137.5,
+      "baseline_peak_rss_kib": 153592,
+      "candidate_metric": 254192966.5,
+      "candidate_over_baseline_peak_rss": 0.9998958279077035,
+      "candidate_over_baseline_time": 1.003552520249389,
+      "candidate_peak_rss_kib": 153576,
       "metadata": {
         "case": "worker-firm",
         "edges": 2250000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 750000,
         "vertices": 1500000
       },
@@ -355,33 +357,33 @@
       "arguments": [
         "worker-firm",
         "1000000",
-        "3"
+        "5"
       ],
-      "baseline_metric": 357293040.0,
-      "baseline_peak_rss_kib": 203016,
-      "candidate_metric": 357636146.5,
-      "candidate_over_baseline_peak_rss": 1.0003152460889781,
-      "candidate_over_baseline_time": 1.0009602943846878,
-      "candidate_peak_rss_kib": 203080,
+      "baseline_metric": 318213561.5,
+      "baseline_peak_rss_kib": 203020,
+      "candidate_metric": 319138226.5,
+      "candidate_over_baseline_peak_rss": 0.9995468426755985,
+      "candidate_over_baseline_time": 1.0029058001036828,
+      "candidate_peak_rss_kib": 202928,
       "metadata": {
         "case": "worker-firm",
         "edges": 3000000,
-        "repetitions": 3,
+        "repetitions": 5,
         "scale": 1000000,
         "vertices": 2000000
       },
       "metric": "median_ns"
     }
   },
-  "hierarchy_geometric_time_ratio": 0.9900992502305731,
+  "hierarchy_geometric_time_ratio": 0.9956879178957718,
   "improved_active_contraction_count": 3,
   "improved_active_hierarchy_count": 3,
   "schema_version": 1,
-  "source_sha": "da4dd6bcf8515389f647a7a7f1b9c5d0bd78c54f",
+  "source_sha": "3ad2a691edbe1c420e2948baf2cbaf200b796306",
   "validation": "success",
-  "worst_contraction_time_ratio": 1.0223558312341068,
-  "worst_control_contraction_time_ratio": 1.0223558312341068,
-  "worst_control_hierarchy_time_ratio": 1.0153102303133963,
-  "worst_hierarchy_time_ratio": 1.0153102303133963,
-  "worst_peak_rss_ratio": 1.0034222327118245
+  "worst_contraction_time_ratio": 1.0094287054633984,
+  "worst_control_contraction_time_ratio": 1.0094287054633984,
+  "worst_control_hierarchy_time_ratio": 1.0135730237032456,
+  "worst_hierarchy_time_ratio": 1.0135730237032456,
+  "worst_peak_rss_ratio": 1.00542019681103
 }

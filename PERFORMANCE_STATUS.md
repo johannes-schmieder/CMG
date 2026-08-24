@@ -812,6 +812,6 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 - Decision: `not retained`.
 - Validation: `success`.
-- Production-contraction / hierarchy-build ratios: `0.988x` / `0.990x`.
-- Worst peak-RSS ratio: `1.003x`.
+- Production-contraction / hierarchy-build ratios: `0.991x` / `0.996x`.
+- Worst peak-RSS ratio: `1.005x`.
 - Evidence: `.ci/performance/dense-endpoint-axis-sort-latest.json`.

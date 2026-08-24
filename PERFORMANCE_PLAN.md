@@ -1378,9 +1378,9 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 - Density-only routing between packed-key sorting and endpoint-axis sorting was **not retained**.
 - Validation: `success`; canonical endpoint order and hierarchy metadata were unchanged.
-- Geometric production-contraction / hierarchy-build ratios: `0.988x` / `0.990x`.
-- Worst contraction / hierarchy / peak-RSS ratios: `1.022x` / `1.015x` / `1.003x`.
-- Decision: correctness passed, but dense active, control, hierarchy, or memory gates were not all met.
+- Geometric production-contraction / hierarchy-build ratios: `0.991x` / `0.996x`.
+- Worst contraction / hierarchy / peak-RSS ratios: `1.009x` / `1.014x` / `1.005x`.
+- Decision: confirmation preserved correctness, but whole-workload, dense active, full-hierarchy control, or memory gates were not all met.
 - Evidence: `.ci/performance/dense-endpoint-axis-sort-latest.json`.
 
 ## Current next action
