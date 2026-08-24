@@ -619,7 +619,7 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 ## Bounded ancestor-prefix gate
 
 - Decision: `not retained`.
-- Validation: `failure`.
-- Split / hierarchy ratios: `1.000x` / `1.000x`.
-- Worst peak-RSS ratio: `1.000x`.
+- Validation: `success`.
+- Split / hierarchy ratios: `0.918x` / `0.966x`.
+- Worst peak-RSS ratio: `1.090x`.
 - Evidence: `.ci/performance/bounded-ancestor-prefix-latest.json`.
