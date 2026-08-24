@@ -1,0 +1,41 @@
+name: Monitor routed fused scratch gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/monitor-routed-fused-gate.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: cmg-routed-fused-gate-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Wait for gate and preserve its result or logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/monitor_routed_fused_gate.py
+
+      - name: Show monitor record
+        if: always()
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.ci/performance/routed-fused-walk-scratch-run-status.json || true
+          git show origin/main:.ci/performance/routed-fused-walk-scratch-latest.json || true
