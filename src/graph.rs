@@ -63,8 +63,8 @@ impl Edge {
 #[derive(Debug, Clone)]
 pub struct Laplacian {
     vertex_count: usize,
-    edges: Vec<Edge>,
-    diagonal: Vec<f64>,
+    edges: Arc<Vec<Edge>>,
+    diagonal: Arc<Vec<f64>>,
     matrix_nnz: usize,
     operator_norm_bound: f64,
     lineage: Arc<()>,
@@ -220,8 +220,8 @@ impl Laplacian {
 
         Ok(Self {
             vertex_count,
-            edges: raw,
-            diagonal,
+            edges: Arc::new(raw),
+            diagonal: Arc::new(diagonal),
             matrix_nnz,
             operator_norm_bound,
             lineage: Arc::new(()),
@@ -243,13 +243,13 @@ impl Laplacian {
     /// Return the canonical edge slice.
     #[must_use]
     pub fn edges(&self) -> &[Edge] {
-        &self.edges
+        self.edges.as_slice()
     }
 
     /// Return the weighted degree (Laplacian diagonal) of every vertex.
     #[must_use]
     pub fn diagonal(&self) -> &[f64] {
-        &self.diagonal
+        self.diagonal.as_slice()
     }
 
     /// Return the number of nonzero entries in the corresponding symmetric
@@ -290,7 +290,7 @@ impl Laplacian {
             ));
         }
         output.fill(0.0);
-        for edge in &self.edges {
+        for edge in self.edges.iter() {
             let difference = edge.weight * (input[edge.u()] - input[edge.v()]);
             output[edge.u()] += difference;
             output[edge.v()] -= difference;
@@ -326,7 +326,7 @@ impl Laplacian {
     #[must_use]
     pub fn to_dense(&self) -> Vec<Vec<f64>> {
         let mut dense = vec![vec![0.0; self.vertex_count]; self.vertex_count];
-        for edge in &self.edges {
+        for edge in self.edges.iter() {
             dense[edge.u()][edge.u()] += edge.weight;
             dense[edge.v()][edge.v()] += edge.weight;
             dense[edge.u()][edge.v()] -= edge.weight;
@@ -661,5 +661,31 @@ mod local_duplicate_merge_tests {
         sort_compact_edge_endpoints(&mut compact);
         let local = Laplacian::from_endpoint_sorted_raw_edges(6, compact).unwrap();
         assert_eq!(local, public);
+    }
+}
+
+#[cfg(test)]
+mod shared_laplacian_storage_tests {
+    use super::Laplacian;
+    use std::sync::Arc;
+
+    #[test]
+    fn clones_share_immutable_edge_and_diagonal_storage() {
+        let graph =
+            Laplacian::from_edges(5, [(0, 1, 1.0), (1, 2, 2.0), (2, 3, 3.0), (3, 4, 4.0)]).unwrap();
+        let clone = graph.clone();
+        assert!(Arc::ptr_eq(&graph.edges, &clone.edges));
+        assert!(Arc::ptr_eq(&graph.diagonal, &clone.diagonal));
+        assert!(graph.shares_lineage(&clone));
+        assert_eq!(graph, clone);
+    }
+
+    #[test]
+    fn independently_built_equal_graphs_do_not_share_storage() {
+        let left = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 2.0)]).unwrap();
+        let right = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 2.0)]).unwrap();
+        assert_eq!(left, right);
+        assert!(!Arc::ptr_eq(&left.edges, &right.edges));
+        assert!(!Arc::ptr_eq(&left.diagonal, &right.diagonal));
     }
 }

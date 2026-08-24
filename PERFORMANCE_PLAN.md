@@ -996,12 +996,12 @@ After in-place level output and recursive centering, the accepted recursive-cent
 
 ### Shared Laplacian storage checkpoint — 2026-08-24
 
-- Sharing immutable edge and diagonal buffers across `Laplacian` clones was **not retained**.
+- Sharing immutable edge and diagonal buffers across `Laplacian` clones was **retained**.
 - Validation: `success`.
-- Geometric graph-build / hierarchy-build ratios: `0.994x` / `0.990x`.
+- Geometric graph-build / hierarchy-build ratios: `1.008x` / `0.983x`.
 - Exact additional-peak / retained hierarchy ratios: `0.734x` / `0.687x`.
-- Worst process peak-RSS ratio: `1.001x`.
-- Decision: validation passed, but construction timing or exact/process memory gates were not all met.
+- Worst process peak-RSS ratio: `1.003x`.
+- Decision: full qualification passed; immutable fine-graph buffers are shared across clones with materially lower hierarchy peak and retained allocation.
 - Evidence: `.ci/performance/shared-laplacian-storage-latest.json`.
 
 ## Current next action

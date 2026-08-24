@@ -523,9 +523,9 @@ Single-RHS routing and threshold qualification are complete. The next performanc
 
 ## Shared Laplacian storage gate
 
-- Decision: `not retained`.
+- Decision: `retained`.
 - Validation: `success`.
-- Graph-build / hierarchy-build ratios: `0.994x` / `0.990x`.
+- Graph-build / hierarchy-build ratios: `1.008x` / `0.983x`.
 - Exact additional-peak / retained ratios: `0.734x` / `0.687x`.
-- Worst process peak-RSS ratio: `1.001x`.
+- Worst process peak-RSS ratio: `1.003x`.
 - Evidence: `.ci/performance/shared-laplacian-storage-latest.json`.
