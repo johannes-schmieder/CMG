@@ -793,7 +793,7 @@ fn original_residual_norm(
 }
 
 #[cfg(feature = "parallel")]
-fn dot_with_executor(left: &[f64], right: &[f64], executor: &ParallelExecutor) -> f64 {
+pub(crate) fn dot_with_executor(left: &[f64], right: &[f64], executor: &ParallelExecutor) -> f64 {
     debug_assert_eq!(left.len(), right.len());
     let options = executor.options();
     let parallel_floor = options
@@ -880,7 +880,7 @@ fn dot(left: &[f64], right: &[f64]) -> f64 {
 }
 
 #[cfg(feature = "parallel")]
-fn euclidean_norm_with_executor(values: &[f64], executor: &ParallelExecutor) -> f64 {
+pub(crate) fn euclidean_norm_with_executor(values: &[f64], executor: &ParallelExecutor) -> f64 {
     let options = executor.options();
     let parallel_floor = options
         .reduction_chunk_size
