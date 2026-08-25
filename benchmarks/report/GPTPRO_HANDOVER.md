@@ -9,11 +9,9 @@ Use the following prompt with GPT Pro. Attach these repository artifacts:
 - `docs/PERFORMANCE.md`
 - `benchmarks/README.md`
 
-The PDF is an interim main-run report. The four `batch16` SCC tasks were still
-queued when this snapshot was committed, so the repeated-right-hand-side figure
-and text are explicitly marked pending. Do not interpret that marker as a
-measurement. Review the accepted 180-row main matrix and the six standalone
-C-kernel records only. A later report revision will add the 48 batch rows.
+The final report contains the accepted 180-row single-RHS matrix, 48 repeated-RHS
+rows, and six standalone C-kernel records. Review all three scopes, keeping the
+standalone kernels distinct from an end-to-end C solver.
 
 ## Prompt
 
@@ -80,6 +78,15 @@ and plan costs erase much of its benefit. For path, grid, and weak-community
 graphs, PCG is roughly flat or slower at 32 CPUs. MATLAB PCG and stationary
 apply are approximately flat across CPU counts in nearly every family.
 
+The accepted 16-RHS supplement contains sparse and dense worker-firm graphs at
+300,000 and 1,000,000 vertices. At 32 CPUs, the geometric-mean Rust/MATLAB
+normalized per-RHS ratio is 0.122. Rust's geometric-mean 1-to-32-CPU speedup is
+7.76x, versus 1.03x for MATLAB. Individual Rust batch speedups are 7.81x, 7.08x,
+9.89x, and 6.63x; individual MATLAB speedups range from 0.99x to 1.09x. Assess
+what this contrast reveals about coarse-grained across-RHS concurrency versus
+within-solve parallelism, plan amortization, memory bandwidth, and task
+granularity.
+
 All main cases passed scheduler, identity, timing, memory, and numerical checks.
 The maximum Rust backward error is `9.95e-9`; native MATLAB PCG reports success.
 Independent residual and reference-solution diagnostics are retained because
@@ -123,6 +130,7 @@ Please produce a rigorous review with the following sections:
    optimization, more diagnostic testing, or both. Rank proposed actions by
    expected information value and likely end-to-end benefit. Separate changes
    aimed at single-RHS latency, repeated-RHS throughput, setup reuse, and memory.
+   Use the strong batch scaling as evidence when ranking those priorities.
 6. **Targeted next experiments.** Specify a minimal experiment matrix capable of
    distinguishing the main scaling hypotheses. Consider 1/8/16/32 cores,
    one-socket versus two-socket binding, compact versus spread placement,
@@ -140,6 +148,5 @@ Please produce a rigorous review with the following sections:
    maintained performance reference.
 
 Be concrete. Cite exact rows or figure patterns for important claims. Do not
-attribute causality from elapsed-time curves alone. Treat the pending batch16
-results as unknown, and explain how those results could change the recommendation
-when they arrive.
+attribute causality from elapsed-time curves alone. Explain why the batch16
+evidence changes, or does not change, the optimization and testing priorities.

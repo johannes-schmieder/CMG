@@ -38,7 +38,7 @@
 
 \begin{abstract}
 This report compares the current Rust Combinatorial Multigrid (CMG) package with the official MATLAB solver and its C MEX kernels at upstream commit
-\texttt{19752fc102f8cae8e34f66457bfaccb1aaa60375}.  It separately reports CMG hierarchy construction, stationary preconditioner application, single-right-hand-side preconditioned conjugate gradient (PCG), setup-plus-solve time, input assembly, memory, CPU scaling, and a compact sixteen-right-hand-side supplement.  At 32 application CPUs, Rust required a geometric-mean \BenchmarkSetupRatio{} times the MATLAB setup time and \BenchmarkTotalRatio{} times the setup-plus-solve time across the 15 main graph/size cases; its process peak RSS was \BenchmarkMemoryRatio{} times MATLAB's.  Scaling from 1 to 32 CPUs was modest for both packages, so the largest cross-package gains arise mainly from lower setup cost and memory use rather than near-linear CPU scaling.  The standalone pinned-C measurements are intentionally limited to hot kernels and a small recursive-cycle comparison; they are not described as an end-to-end C solver.
+\texttt{19752fc102f8cae8e34f66457bfaccb1aaa60375}.  It separately reports CMG hierarchy construction, stationary preconditioner application, single-right-hand-side preconditioned conjugate gradient (PCG), setup-plus-solve time, input assembly, memory, CPU scaling, and a compact sixteen-right-hand-side supplement.  At 32 application CPUs, Rust required a geometric-mean \BenchmarkSetupRatio{} times the MATLAB setup time and \BenchmarkTotalRatio{} times the setup-plus-solve time across the 15 main graph/size cases; its process peak RSS was \BenchmarkMemoryRatio{} times MATLAB's.  Single-RHS scaling from 1 to 32 CPUs was modest, but Rust's across-RHS workflow achieved a \BenchmarkRustBatchSpeedup{}-fold batch speedup and \BenchmarkBatchRatio{} times MATLAB's per-RHS time.  The standalone pinned-C measurements are intentionally limited to hot kernels and a small recursive-cycle comparison; they are not described as an end-to-end C solver.
 \end{abstract}
 
 \section{Scope and interpretation}
@@ -210,7 +210,7 @@ Figures~\ref{fig:cpu-path}--\ref{fig:cpu-community} show time against applicatio
 \end{figure}
 
 Rust uses the package's memory-bounded across-RHS executor for this supplement;
-the official MATLAB workflow invokes \texttt{pcg} sequentially for each right-hand side while allowing each invocation the requested MATLAB computational-thread limit.  \BenchmarkBatchSummary{}  When results are present, the figure compares the native supported repeated-RHS workflows rather than forcing identical internal scheduling.
+the official MATLAB workflow invokes \texttt{pcg} sequentially for each right-hand side while allowing each invocation the requested MATLAB computational-thread limit.  \BenchmarkBatchSummary{}  The figure compares the native supported repeated-RHS workflows rather than forcing identical internal scheduling.
 
 \begin{figure}[p]\centering
 \includegraphics[width=\textwidth]{\BenchmarkFigureRoot/c_kernel_scope.pdf}
@@ -220,6 +220,7 @@ the official MATLAB workflow invokes \texttt{pcg} sequentially for each right-ha
 
 The C harness compiles numerical kernels copied from the pinned upstream source and checks every output against Rust.  It uses the existing harness's own path and worker-firm formulas rather than the shared end-to-end binary fixtures.  Across the large path and worker-firm cases, Rust-to-C SpMV ratios range from \BenchmarkKernelSpmvRatioLow{} to \BenchmarkKernelSpmvRatioHigh{}; restriction and prolongation are near parity.  For the bounded recursive-cycle cases, the Rust-to-C ratio ranges from \BenchmarkKernelCycleRatioLow{} to \BenchmarkKernelCycleRatioHigh{}.  These timings isolate implementation overhead in SpMV, restriction/prolongation, and a small recursive stationary cycle.  They omit the official MATLAB hierarchy constructor, sparse-matrix assembly, MATLAB PCG, and end-to-end solver orchestration; therefore they must not be read as ``Rust versus a complete C solver.''
 
+\clearpage
 \section{Validation and acceptance}
 
 The smoke phase required successful MEX compilation, deterministic input hashes, numerical certification, and valid SGE accounting.  Production acceptance then required, for every task:
@@ -234,6 +235,8 @@ The smoke phase required successful MEX compilation, deterministic input hashes,
 Build-path, transport, or wrapper failures were preserved and retried under new run identifiers.  Algorithmic warnings, convergence differences, timeouts, or memory failures would remain scientific results rather than being silently rerun.
 
 The main array satisfied these criteria after the narrowly scoped source-identity repair described above.  The correction is treated as derived bookkeeping, not as a rerun or replacement of experimental measurements.  Its machine-readable receipt and the immutable raw run make that judgment independently auditable.
+
+The batch array independently satisfied the same scheduler, application, identity, and numerical checks for all four tasks and 48 result rows without a provenance repair.  Its two sparse worker-firm cases reproduce the one-vertex terminal hierarchy offset; its two dense cases match exactly.  The official MATLAB hierarchy flag 3 appears in all 12 dense batch rows and remains an explicit warning rather than an exclusion.
 
 \section{Limitations and expansion protocol}
 
