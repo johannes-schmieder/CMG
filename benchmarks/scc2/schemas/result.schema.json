@@ -32,8 +32,8 @@
         "order_position": {"type": "integer", "minimum": 1},
         "started_at_utc": {"type": "string", "minLength": 1},
         "stage": {"type": "string", "minLength": 1},
-        "wall_ns": {"type": "integer", "minimum": 0},
-        "process_cpu_ns": {"type": ["integer", "null"], "minimum": 0}
+        "wall_ns": {"type": "number", "minimum": 0},
+        "process_cpu_ns": {"type": ["number", "null"], "minimum": 0}
       },
       "additionalProperties": true
     }

@@ -47,6 +47,20 @@ class ProtocolTests(unittest.TestCase):
                 identifiers = [config["configuration_id"] for config in expand(row)]
                 self.assertEqual(len(identifiers), len(set(identifiers)))
 
+    def test_result_schema_accepts_normalized_fractional_timings(self) -> None:
+        schema = json.loads((ROOT / "schemas/result.schema.json").read_text())
+        sample_schema = schema["$defs"]["sample"]
+        jsonschema.Draft202012Validator(sample_schema).validate(
+            {
+                "repetition": 1,
+                "order_position": 5,
+                "started_at_utc": "2026-08-25T20:00:00Z",
+                "stage": "preconditioner_apply",
+                "wall_ns": 2_371_740.234375,
+                "process_cpu_ns": 2_400_000.5,
+            }
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
