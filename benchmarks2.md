@@ -9,6 +9,7 @@
 - **Production optimization during this campaign:** prohibited, except for narrowly scoped fixes required to make the diagnostic instrumentation correct. Do not mix performance changes with the diagnostic baseline.
 - **Recovered first-study runs:** main `20260824T152234Z-a28f802-8111305`; accepted `batch16` supplement `20260824T201216Z-a28f802-148558d` (48/48 expected rows).
 - **Diagnostic implementation status (2026-08-24):** SCC protocol, frozen matrices, production-path Rust timing hooks, MATLAB diagnostics, staged-memory drivers, counter/capability wrappers, validators, legacy extraction, deterministic reduction, and report scaffolding implemented. The exact production commit and new run IDs will be recorded immediately after the clean release-gate commit.
+- **Preserved failed smoke:** `20260825T034001Z-16a087e9329a-b2v1-smoke`, SGE job `7305473`, both tasks `failed=0` but `exit_status=1`. The MATLAB wrapper exposed the upstream root but not its compiled `mex/` subdirectory, so `mx_splitforest_` was unresolved. No results from this run are accepted; the wrapper-only fix and rerun use a new commit and run ID.
 
 Update this file as a live plan. Check off completed items, record run IDs and commit SHAs, and push after every logical unit of work.
 

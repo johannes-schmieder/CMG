@@ -4,7 +4,9 @@ required = {'CMG_INPUT_DIR', 'CMG_THREADS', 'CMG_REPETITIONS', 'CMG_WARMUPS', ..
 for index = 1:numel(required)
     assert(~isempty(getenv(required{index})), 'Missing required environment variable %s', required{index});
 end
-addpath(getenv('CMG_UPSTREAM_DIR'));
+upstream_dir = getenv('CMG_UPSTREAM_DIR');
+addpath(upstream_dir);
+addpath(fullfile(upstream_dir, 'mex'));
 scc2_diagnostics(getenv('CMG_INPUT_DIR'), str2double(getenv('CMG_THREADS')), ...
     str2double(getenv('CMG_REPETITIONS')), str2double(getenv('CMG_WARMUPS')), ...
     str2double(getenv('CMG_RHS_COUNT')), str2double(getenv('CMG_TOLERANCE')), ...

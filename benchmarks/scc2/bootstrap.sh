@@ -76,6 +76,8 @@ done
 test -n "$selected_matlab"
 printf '%s\n' "$selected_matlab" > "$project_root/toolchains/matlab-module.txt"
 printf '%s\n' "$selected_matlab" > "$run_root/manifests/matlab-module.txt"
+matlab -batch "addpath('$upstream'); addpath(fullfile('$upstream','mex')); assert(exist('mx_preconditioner_','file') == 3); assert(exist('mx_splitforest_','file') == 3)" \
+    > "$run_root/logs/mex-visibility.log" 2>&1
 find "$upstream" -type f -name '*.mexa64' -print0 | sort -z | xargs -0 sha256sum > "$run_root/manifests/mex-files-sha256.txt"
 sha256sum "$run_root/manifests/mex-files-sha256.txt" | cut -d' ' -f1 > "$run_root/manifests/mex-binary-sha256.txt"
 while read -r _ mex_binary; do
