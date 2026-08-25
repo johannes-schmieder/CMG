@@ -11,6 +11,191 @@ use crate::{CsrLaplacian, ParallelExecutor};
 use rayon::prelude::*;
 #[cfg(feature = "parallel")]
 use std::sync::Arc;
+#[cfg(feature = "profiling")]
+use std::time::Instant;
+
+/// Timing for one hierarchy level considered during parallel-plan construction.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelPlanLevelProfile {
+    level: usize,
+    vertices: usize,
+    edges: usize,
+    eligible: bool,
+    reason: &'static str,
+    construction_nanoseconds: u128,
+    row_counts_nanoseconds: u128,
+    row_offsets_nanoseconds: u128,
+    allocation_nanoseconds: u128,
+    scatter_nanoseconds: u128,
+    validation_nanoseconds: u128,
+    retained_bytes: usize,
+}
+
+#[cfg(feature = "profiling")]
+impl ParallelPlanLevelProfile {
+    /// Return the zero-based hierarchy level.
+    #[must_use]
+    pub const fn level(&self) -> usize {
+        self.level
+    }
+
+    /// Return the level's vertex count.
+    #[must_use]
+    pub const fn vertices(&self) -> usize {
+        self.vertices
+    }
+
+    /// Return the level's canonical edge count.
+    #[must_use]
+    pub const fn edges(&self) -> usize {
+        self.edges
+    }
+
+    /// Return whether the production eligibility rule retained an operator.
+    #[must_use]
+    pub const fn eligible(&self) -> bool {
+        self.eligible
+    }
+
+    /// Return the production routing reason.
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        self.reason
+    }
+
+    /// Return production operator-construction wall time.
+    #[must_use]
+    pub const fn construction_nanoseconds(&self) -> u128 {
+        self.construction_nanoseconds
+    }
+
+    /// Return row-degree counting time.
+    #[must_use]
+    pub const fn row_counts_nanoseconds(&self) -> u128 {
+        self.row_counts_nanoseconds
+    }
+
+    /// Return prefix-sum and compact row-offset construction time.
+    #[must_use]
+    pub const fn row_offsets_nanoseconds(&self) -> u128 {
+        self.row_offsets_nanoseconds
+    }
+
+    /// Return row cursor, column, and weight allocation/initialization time.
+    #[must_use]
+    pub const fn allocation_nanoseconds(&self) -> u128 {
+        self.allocation_nanoseconds
+    }
+
+    /// Return deterministic edge-scatter time.
+    #[must_use]
+    pub const fn scatter_nanoseconds(&self) -> u128 {
+        self.scatter_nanoseconds
+    }
+
+    /// Return production invariant-validation time.
+    #[must_use]
+    pub const fn validation_nanoseconds(&self) -> u128 {
+        self.validation_nanoseconds
+    }
+
+    /// Return retained bytes for this level's operator.
+    #[must_use]
+    pub const fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+}
+
+/// Production parallel-plan profile, recorded without changing the retained plan.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParallelPlanBuildProfile {
+    levels: Vec<ParallelPlanLevelProfile>,
+    total_nanoseconds: u128,
+}
+
+#[cfg(feature = "profiling")]
+impl ParallelPlanBuildProfile {
+    /// Return per-level eligibility and construction records.
+    #[must_use]
+    pub fn levels(&self) -> &[ParallelPlanLevelProfile] {
+        &self.levels
+    }
+
+    /// Return complete production-plan construction wall time.
+    #[must_use]
+    pub const fn total_nanoseconds(&self) -> u128 {
+        self.total_nanoseconds
+    }
+}
+
+/// One phase from the exact production hierarchy control path.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HierarchyPhaseProfile {
+    level: usize,
+    phase: &'static str,
+    nanoseconds: u128,
+}
+
+#[cfg(feature = "profiling")]
+impl HierarchyPhaseProfile {
+    /// Return the zero-based hierarchy level.
+    #[must_use]
+    pub const fn level(&self) -> usize {
+        self.level
+    }
+
+    /// Return the production phase label.
+    #[must_use]
+    pub const fn phase(&self) -> &'static str {
+        self.phase
+    }
+
+    /// Return elapsed wall time for this phase.
+    #[must_use]
+    pub const fn nanoseconds(&self) -> u128 {
+        self.nanoseconds
+    }
+}
+
+/// Production hierarchy and preconditioner-finalization wall times.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreconditionerBuildProfile {
+    hierarchy_nanoseconds: u128,
+    hierarchy_phases: Vec<HierarchyPhaseProfile>,
+    finalization_nanoseconds: u128,
+    total_nanoseconds: u128,
+}
+
+#[cfg(feature = "profiling")]
+impl PreconditionerBuildProfile {
+    /// Return production hierarchy construction wall time.
+    #[must_use]
+    pub const fn hierarchy_nanoseconds(&self) -> u128 {
+        self.hierarchy_nanoseconds
+    }
+
+    /// Return per-level records from the shared production hierarchy path.
+    #[must_use]
+    pub fn hierarchy_phases(&self) -> &[HierarchyPhaseProfile] {
+        &self.hierarchy_phases
+    }
+
+    /// Return component metadata, centering, terminal factor, and repeat-finalization time.
+    #[must_use]
+    pub const fn finalization_nanoseconds(&self) -> u128 {
+        self.finalization_nanoseconds
+    }
+
+    /// Return complete production preconditioner construction wall time.
+    #[must_use]
+    pub const fn total_nanoseconds(&self) -> u128 {
+        self.total_nanoseconds
+    }
+}
 
 /// Precomputed row-oriented operators for deterministic parallel CMG application.
 ///
@@ -61,6 +246,71 @@ impl ParallelCmgPlan {
             level_operators,
             level_lineages,
         })
+    }
+
+    /// Build the exact production plan and retain per-level eligibility timings.
+    #[cfg(feature = "profiling")]
+    pub fn build_profiled(
+        preconditioner: &CmgPreconditioner,
+        executor: &ParallelExecutor,
+    ) -> Result<(Self, ParallelPlanBuildProfile), CmgError> {
+        let total_start = Instant::now();
+        let mut level_operators = Vec::with_capacity(preconditioner.hierarchy.levels().len());
+        let mut profiles = Vec::with_capacity(preconditioner.hierarchy.levels().len());
+        for (level_index, level) in preconditioner.hierarchy.levels().iter().enumerate() {
+            let graph = level.graph();
+            let density_floor = graph
+                .vertex_count()
+                .saturating_add(graph.vertex_count() / 4);
+            let reason = if level.terminal_reason().is_some() {
+                "terminal"
+            } else if graph.edges().len() < density_floor {
+                "below-density-floor"
+            } else if !executor.should_parallel(graph.edges().len()) {
+                "below-executor-threshold"
+            } else {
+                "eligible"
+            };
+            let eligible = reason == "eligible";
+            let start = Instant::now();
+            let (operator, csr_profile) = if eligible {
+                let (operator, profile) = CsrLaplacian::from_laplacian_profiled(graph)?;
+                (Some(operator), profile)
+            } else {
+                (None, Default::default())
+            };
+            let construction_nanoseconds = start.elapsed().as_nanos();
+            profiles.push(ParallelPlanLevelProfile {
+                level: level_index,
+                vertices: graph.vertex_count(),
+                edges: graph.edge_count(),
+                eligible,
+                reason,
+                construction_nanoseconds,
+                row_counts_nanoseconds: csr_profile.row_counts_nanoseconds,
+                row_offsets_nanoseconds: csr_profile.row_offsets_nanoseconds,
+                allocation_nanoseconds: csr_profile.allocation_nanoseconds,
+                scatter_nanoseconds: csr_profile.scatter_nanoseconds,
+                validation_nanoseconds: csr_profile.validation_nanoseconds,
+                retained_bytes: operator.as_ref().map_or(0, CsrLaplacian::byte_len),
+            });
+            level_operators.push(operator);
+        }
+        let level_lineages = preconditioner
+            .hierarchy
+            .levels()
+            .iter()
+            .map(|level| Arc::clone(level.graph().lineage()))
+            .collect();
+        let plan = Self {
+            level_operators,
+            level_lineages,
+        };
+        let profile = ParallelPlanBuildProfile {
+            levels: profiles,
+            total_nanoseconds: total_start.elapsed().as_nanos(),
+        };
+        Ok((plan, profile))
     }
 
     /// Return the number of hierarchy levels carrying a row operator.
@@ -214,6 +464,37 @@ impl CmgPreconditioner {
         executor: &ParallelExecutor,
     ) -> Result<Self, CmgError> {
         Self::from_hierarchy(CmgHierarchy::build_with_executor(graph, options, executor)?)
+    }
+
+    /// Build through the production hierarchy and finalization paths while timing both stages.
+    #[cfg(all(feature = "parallel", feature = "profiling"))]
+    pub fn build_with_executor_profiled(
+        graph: &Laplacian,
+        options: CmgOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<(Self, PreconditionerBuildProfile), CmgError> {
+        let total_start = Instant::now();
+        let hierarchy_start = Instant::now();
+        let (hierarchy, hierarchy_phases) =
+            CmgHierarchy::build_with_executor_profiled(graph, options, executor)?;
+        let hierarchy_nanoseconds = hierarchy_start.elapsed().as_nanos();
+        let finalization_start = Instant::now();
+        let preconditioner = Self::from_hierarchy(hierarchy)?;
+        let finalization_nanoseconds = finalization_start.elapsed().as_nanos();
+        let profile = PreconditionerBuildProfile {
+            hierarchy_nanoseconds,
+            hierarchy_phases: hierarchy_phases
+                .into_iter()
+                .map(|record| HierarchyPhaseProfile {
+                    level: record.level,
+                    phase: record.phase,
+                    nanoseconds: record.nanoseconds,
+                })
+                .collect(),
+            finalization_nanoseconds,
+            total_nanoseconds: total_start.elapsed().as_nanos(),
+        };
+        Ok((preconditioner, profile))
     }
 
     fn from_hierarchy(mut hierarchy: CmgHierarchy) -> Result<Self, CmgError> {

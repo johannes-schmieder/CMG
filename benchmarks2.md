@@ -7,6 +7,8 @@
 - **First SCC study:** accepted 180-row single-RHS matrix plus six standalone C-kernel records; the four `batch16` tasks were still pending in the committed snapshot.
 - **Primary output of this campaign:** an auditable diagnostics packet that lets GPT Pro identify the actual bottlenecks and propose a second, evidence-based optimization pass.
 - **Production optimization during this campaign:** prohibited, except for narrowly scoped fixes required to make the diagnostic instrumentation correct. Do not mix performance changes with the diagnostic baseline.
+- **Recovered first-study runs:** main `20260824T152234Z-a28f802-8111305`; accepted `batch16` supplement `20260824T201216Z-a28f802-148558d` (48/48 expected rows).
+- **Diagnostic implementation status (2026-08-24):** SCC protocol, frozen matrices, production-path Rust timing hooks, MATLAB diagnostics, staged-memory drivers, counter/capability wrappers, validators, legacy extraction, deterministic reduction, and report scaffolding implemented. The exact production commit and new run IDs will be recorded immediately after the clean release-gate commit.
 
 Update this file as a live plan. Check off completed items, record run IDs and commit SHAs, and push after every logical unit of work.
 
@@ -185,25 +187,25 @@ Commit compact capability, topology, validation, accounting, and provenance evid
 
 ### 0.1 Finish the pending `batch16` study
 
-- [ ] Check the four existing SCC batch tasks and collect `qacct`, logs, result JSON, and `/usr/bin/time -v` receipts.
-- [ ] If they completed correctly, validate the full expected 48-row matrix: four graph/size tasks × six application CPU counts × two implementations.
-- [ ] If a task failed for a transport, wrapper, or environment reason, preserve it and rerun only under a new immutable run ID.
-- [ ] If a task failed numerically, timed out, or exceeded memory, preserve that as a scientific result; do not silently replace it.
+- [x] Check the four existing SCC batch tasks and collect `qacct`, logs, result JSON, and `/usr/bin/time -v` receipts.
+- [x] If they completed correctly, validate the full expected 48-row matrix: four graph/size tasks × six application CPU counts × two implementations.
+- [x] If a task failed for a transport, wrapper, or environment reason, preserve it and rerun only under a new immutable run ID. No such rerun was required.
+- [x] If a task failed numerically, timed out, or exceeded memory, preserve that as a scientific result; do not silently replace it. No such failure occurred in the accepted run.
 - [ ] Add accepted batch rows to a revised first report and also ingest them into the second-study data products.
-- [ ] Until this is complete, keep every repeated-RHS conclusion marked unknown.
+- [x] Until this is complete, keep every repeated-RHS conclusion marked unknown. The accepted 48-row supplement now resolves the pending status; its interpretation will be updated with the new batch matrix.
 
 ### 0.2 Extract more information from the first raw main run
 
 The first committed CSV contains medians but not all diagnostic information already present in the raw archive. Without rerunning anything, extract:
 
-- [ ] every setup, plan, apply, PCG, and total raw timing sample;
-- [ ] user CPU time, system CPU time, elapsed process wall time, major/minor faults, voluntary/involuntary context switches, and RSS from the raw time receipts;
-- [ ] exact run order and timestamps;
-- [ ] exact MATLAB hierarchy flag at every CPU count;
-- [ ] complete per-level hierarchy vertices, nonzeros, and repeat counts;
-- [ ] Rust plan operators, plan bytes, workspace bytes, and all retained byte diagnostics;
-- [ ] host assignment by task;
-- [ ] exact source, environment, input, and binary identities available in manifests and logs.
+- [x] every setup, plan, apply, PCG, and total raw timing sample;
+- [x] user CPU time, system CPU time, elapsed process wall time, major/minor faults, voluntary/involuntary context switches, and RSS from the raw time receipts;
+- [x] exact run order and timestamps;
+- [x] exact MATLAB hierarchy flag at every CPU count;
+- [x] complete per-level hierarchy vertices, nonzeros, and repeat counts;
+- [x] Rust plan operators, plan bytes, workspace bytes, and all retained byte diagnostics;
+- [x] host assignment by task;
+- [x] exact source, environment, input, and binary identities available in manifests and logs.
 
 Write these to `benchmarks/report2/data/legacy-main-samples.csv` and `legacy-main-evidence.json`. Do not alter the original first-study files.
 
@@ -211,18 +213,18 @@ Write these to `benchmarks/report2/data/legacy-main-samples.csv` and `legacy-mai
 
 ### 1.1 Source and binary identity
 
-- [ ] Standardize the build-time variable used by the Rust and standalone C drivers.
-- [ ] Add an `identity` subcommand that prints source commit, source archive digest, protocol version, compiler, feature set, target, and binary SHA-256.
-- [ ] Make the smoke validator compare the compiled identity against the run manifest before any timed job is accepted.
-- [ ] Record the exact MEX compiler command, MEX binary hashes, linked libraries, MATLAB release/update, and upstream commit.
-- [ ] Add CI tests that fail if a benchmark binary built with an expected identity prints `unknown`.
+- [x] Standardize the build-time variable used by the Rust and standalone C drivers.
+- [x] Add an `identity` subcommand that prints source commit, source archive digest, protocol version, compiler, feature set, target, and binary SHA-256.
+- [x] Make the smoke validator compare the compiled identity against the run manifest before any timed job is accepted.
+- [x] Record the exact MEX compiler command, MEX binary hashes, linked libraries, MATLAB release/update, and upstream commit.
+- [x] Add CI tests that fail if a benchmark binary built with an expected identity prints `unknown`.
 
 ### 1.2 Shared fixture reader
 
-- [ ] Make all primary diagnostic binaries consume the existing canonical binary input directory.
+- [x] Make all primary diagnostic binaries consume the existing canonical binary input directory.
 - [ ] Add `--input-dir`, `--output`, `--repetitions`, `--warmups`, `--threads`, `--strategy`, `--tolerance`, and placement metadata arguments.
-- [ ] Continue to support the old synthetic convenience arguments only for local development; do not use them in accepted SCC diagnostics.
-- [ ] Verify hashes and dimensions before timing.
+- [x] Continue to support the old synthetic convenience arguments only for local development; do not use them in accepted SCC diagnostics.
+- [x] Verify hashes and dimensions before timing.
 
 ### 1.3 Hierarchy and preconditioner phases
 
@@ -340,8 +342,8 @@ The primary study remains native tolerance `1e-8`. Add a tolerance frontier at `
 
 ### 1.9 MATLAB warning investigation
 
-- [ ] Locate the exact upstream code path that sets the nonzero dense hierarchy flag.
-- [ ] Document the flag value and meaning in `benchmarks/report2/evidence/matlab-hierarchy-flag.md` with exact source path and line references.
+- [x] Locate the exact upstream code path that sets the nonzero dense hierarchy flag.
+- [x] Document the flag value and meaning in `benchmarks/report2/evidence/matlab-hierarchy-flag.md` with exact source path and line references.
 - [ ] Record it for every dense size and thread count.
 - [ ] Run a separate untimed validation-enabled MATLAB construction if the upstream interface supports it.
 - [ ] Keep the original native timing configuration unchanged.
@@ -835,21 +837,21 @@ The diagnostic campaign is complete only when all of the following are true:
 
 ### Protocol and instrumentation
 
-- [ ] Read the first benchmark report, `GPTPRO_HANDOVER.md`, `docs/PERFORMANCE.md`, and all existing profiling binaries.
-- [ ] Create the `scc2` protocol and schema files.
-- [ ] Fix compiled source identity and add binary hashes.
-- [ ] Add shared-fixture production-path hierarchy profiling.
-- [ ] Add plan subphase profiling.
-- [ ] Extend PCG phase profiling to shared fixtures and all families.
-- [ ] Add process CPU time, memory stages, NUMA metadata, and counter wrappers.
-- [ ] Extend MATLAB diagnostics and exact warning capture.
-- [ ] Add validators and unit tests.
+- [x] Read the first benchmark report, `GPTPRO_HANDOVER.md`, `docs/PERFORMANCE.md`, and all existing profiling binaries.
+- [x] Create the `scc2` protocol and schema files.
+- [x] Fix compiled source identity and add binary hashes.
+- [x] Add shared-fixture production-path hierarchy profiling.
+- [x] Add plan subphase profiling.
+- [x] Extend PCG phase profiling to shared fixtures and all families.
+- [x] Add process CPU time, memory stages, NUMA metadata, and counter wrappers.
+- [x] Extend MATLAB diagnostics and exact warning capture.
+- [x] Add validators and unit tests.
 - [ ] Push the clean diagnostic implementation to `main` and wait for CI.
 
 ### Runs
 
-- [ ] Recover and validate the old `batch16` run.
-- [ ] Extract the old main-run raw samples.
+- [x] Recover and validate the old `batch16` run.
+- [x] Extract the old main-run raw samples.
 - [ ] Run capability/topology smoke.
 - [ ] Run the mandatory one-million-vertex replication.
 - [ ] Run Rust route and phase diagnostics.

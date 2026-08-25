@@ -6,6 +6,35 @@ use crate::forest::build_forest_aggregation_labels;
 #[cfg(feature = "parallel")]
 use crate::forest::build_forest_aggregation_labels_with_executor;
 use crate::{Aggregation, CmgError, CmgOptions, Laplacian};
+use std::time::Instant;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HierarchyPhaseRecord {
+    pub(crate) level: usize,
+    pub(crate) phase: &'static str,
+    pub(crate) nanoseconds: u128,
+}
+
+#[inline]
+fn measure_hierarchy_phase<const PROFILE: bool, Output>(
+    records: &mut Vec<HierarchyPhaseRecord>,
+    level: usize,
+    phase: &'static str,
+    operation: impl FnOnce() -> Output,
+) -> Output {
+    if PROFILE {
+        let start = Instant::now();
+        let output = operation();
+        records.push(HierarchyPhaseRecord {
+            level,
+            phase,
+            nanoseconds: start.elapsed().as_nanos(),
+        });
+        output
+    } else {
+        operation()
+    }
+}
 
 /// The reason hierarchy construction terminated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,7 +159,7 @@ pub struct CmgHierarchy {
 impl CmgHierarchy {
     /// Build a hierarchy from a weighted graph Laplacian.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        Self::build_with_kernels(
+        Self::build_with_kernels::<false, _, _>(
             graph,
             options,
             build_forest_aggregation_labels,
@@ -149,7 +178,7 @@ impl CmgHierarchy {
         options: CmgOptions,
         executor: &ParallelExecutor,
     ) -> Result<Self, CmgError> {
-        Self::build_with_kernels(
+        Self::build_with_kernels::<false, _, _>(
             graph,
             options,
             |current, threshold| {
@@ -159,101 +188,186 @@ impl CmgHierarchy {
         )
     }
 
-    fn build_with_kernels<Group, Contract>(
+    #[cfg(all(feature = "parallel", feature = "profiling"))]
+    pub(crate) fn build_with_executor_profiled(
         graph: &Laplacian,
         options: CmgOptions,
-        mut group: Group,
-        mut contract: Contract,
+        executor: &ParallelExecutor,
+    ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError> {
+        Self::build_with_kernels_profiled(
+            graph,
+            options,
+            |current, threshold| {
+                build_forest_aggregation_labels_with_executor(current, threshold, executor)
+            },
+            |aggregation, current| aggregation.contract_with_executor(current, executor),
+        )
+    }
+
+    fn build_with_kernels<const PROFILE: bool, Group, Contract>(
+        graph: &Laplacian,
+        options: CmgOptions,
+        group: Group,
+        contract: Contract,
     ) -> Result<Self, CmgError>
     where
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        let options = options.validate()?;
+        Self::build_with_kernels_impl::<PROFILE, _, _>(graph, options, group, contract)
+            .map(|(hierarchy, _)| hierarchy)
+    }
+
+    #[cfg(feature = "profiling")]
+    fn build_with_kernels_profiled<Group, Contract>(
+        graph: &Laplacian,
+        options: CmgOptions,
+        group: Group,
+        contract: Contract,
+    ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError>
+    where
+        Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
+        Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
+    {
+        Self::build_with_kernels_impl::<true, _, _>(graph, options, group, contract)
+    }
+
+    fn build_with_kernels_impl<const PROFILE: bool, Group, Contract>(
+        graph: &Laplacian,
+        options: CmgOptions,
+        mut group: Group,
+        mut contract: Contract,
+    ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError>
+    where
+        Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
+        Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
+    {
+        let mut phase_records = Vec::new();
+        let options = measure_hierarchy_phase::<PROFILE, _>(
+            &mut phase_records,
+            0,
+            "option_validation",
+            || options.validate(),
+        )?;
         let initial_nonzeros = graph.matrix_nnz();
         let mut cumulative_nonzeros = 0_usize;
-        let mut current = graph.clone();
+        let mut current = measure_hierarchy_phase::<PROFILE, _>(
+            &mut phase_records,
+            0,
+            "graph_clone_reference_setup",
+            || graph.clone(),
+        );
         let mut levels = Vec::new();
         let terminal_reason;
 
         loop {
+            let level_index = levels.len();
             let n = current.vertex_count();
-            if n <= 1 || n < options.direct_threshold {
+            let direct = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "direct_terminal_check",
+                || n <= 1 || n < options.direct_threshold,
+            );
+            if direct {
                 terminal_reason = TerminalReason::Direct;
-                levels.push(make_level(current, None, 0, Some(terminal_reason)));
+                let level = measure_hierarchy_phase::<PROFILE, _>(
+                    &mut phase_records,
+                    level_index,
+                    "inverse_diagonal_and_level_finalization",
+                    || make_level(current, None, 0, Some(terminal_reason)),
+                );
+                levels.push(level);
                 break;
             }
 
-            let (labels, aggregate_count) =
-                group(&current, options.low_effective_degree_threshold)?;
-            let aggregation = Aggregation::from_forest_labels(labels, aggregate_count);
+            let (labels, aggregate_count) = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "forest_select_split_low_degree_and_label",
+                || group(&current, options.low_effective_degree_threshold),
+            )?;
+            let aggregation = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "aggregation_construction",
+                || Aggregation::from_forest_labels(labels, aggregate_count),
+            );
             let coarse_count = aggregation.coarse_dimension();
-
-            if coarse_count == 1 {
-                terminal_reason = TerminalReason::FullContraction;
-                levels.push(make_level(
-                    current,
-                    Some(aggregation),
-                    0,
-                    Some(terminal_reason),
-                ));
+            let terminal = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "hierarchy_bookkeeping_and_fill_checks",
+                || {
+                    if coarse_count == 1 {
+                        return Some(TerminalReason::FullContraction);
+                    }
+                    cumulative_nonzeros = cumulative_nonzeros.saturating_add(current.matrix_nnz());
+                    if coarse_count >= n.saturating_sub(1) {
+                        return Some(TerminalReason::StagnatedVertexReduction);
+                    }
+                    let fill_limit = options.max_hierarchy_nnz_factor * initial_nonzeros as f64;
+                    if cumulative_nonzeros as f64 > fill_limit {
+                        return Some(TerminalReason::StagnatedFill);
+                    }
+                    if levels.len() + 1 >= options.max_levels {
+                        return Some(TerminalReason::MaximumLevels);
+                    }
+                    None
+                },
+            );
+            if let Some(reason) = terminal {
+                terminal_reason = reason;
+                let level = measure_hierarchy_phase::<PROFILE, _>(
+                    &mut phase_records,
+                    level_index,
+                    "inverse_diagonal_and_level_finalization",
+                    || make_level(current, Some(aggregation), 0, Some(terminal_reason)),
+                );
+                levels.push(level);
                 break;
             }
 
-            cumulative_nonzeros = cumulative_nonzeros.saturating_add(current.matrix_nnz());
-            if coarse_count >= n.saturating_sub(1) {
-                terminal_reason = TerminalReason::StagnatedVertexReduction;
-                levels.push(make_level(
-                    current,
-                    Some(aggregation),
-                    0,
-                    Some(terminal_reason),
-                ));
-                break;
-            }
-
-            let fill_limit = options.max_hierarchy_nnz_factor * initial_nonzeros as f64;
-            if cumulative_nonzeros as f64 > fill_limit {
-                terminal_reason = TerminalReason::StagnatedFill;
-                levels.push(make_level(
-                    current,
-                    Some(aggregation),
-                    0,
-                    Some(terminal_reason),
-                ));
-                break;
-            }
-
-            if levels.len() + 1 >= options.max_levels {
-                terminal_reason = TerminalReason::MaximumLevels;
-                levels.push(make_level(
-                    current,
-                    Some(aggregation),
-                    0,
-                    Some(terminal_reason),
-                ));
-                break;
-            }
-
-            let coarse = contract(&aggregation, &current)?;
-            let repeat = repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz());
-            levels.push(make_level(current, Some(aggregation), repeat, None));
+            let coarse = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "coarse_edge_map_sort_merge_and_graph_finalization",
+                || contract(&aggregation, &current),
+            )?;
+            let repeat = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "repeat_count_initialization",
+                || repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz()),
+            );
+            let level = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "inverse_diagonal_and_level_finalization",
+                || make_level(current, Some(aggregation), repeat, None),
+            );
+            levels.push(level);
             current = coarse;
         }
 
-        let report = HierarchyBuildReport {
-            terminal_reason,
-            vertex_counts: levels
-                .iter()
-                .map(|level| level.graph.vertex_count())
-                .collect(),
-            matrix_nonzeros: levels
-                .iter()
-                .map(|level| level.graph.matrix_nnz())
-                .collect(),
-            cumulative_coarsened_nonzeros: cumulative_nonzeros,
-        };
-        Ok(Self { levels, report })
+        let report = measure_hierarchy_phase::<PROFILE, _>(
+            &mut phase_records,
+            levels.len().saturating_sub(1),
+            "hierarchy_report_bookkeeping",
+            || HierarchyBuildReport {
+                terminal_reason,
+                vertex_counts: levels
+                    .iter()
+                    .map(|level| level.graph.vertex_count())
+                    .collect(),
+                matrix_nonzeros: levels
+                    .iter()
+                    .map(|level| level.graph.matrix_nnz())
+                    .collect(),
+                cumulative_coarsened_nonzeros: cumulative_nonzeros,
+            },
+        );
+        Ok((Self { levels, report }, phase_records))
     }
 
     /// Return all levels from fine to coarse.

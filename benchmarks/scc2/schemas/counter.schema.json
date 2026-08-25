@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc2/schemas/counter.schema.json",
+  "title": "CMG SCC2 hardware counter record",
+  "type": "object",
+  "required": ["event_group", "event", "stage", "support_status", "value", "time_enabled", "time_running", "command"],
+  "properties": {
+    "support_status": {"enum": ["supported", "unsupported", "permission-denied", "multiplexed", "failed"]},
+    "value": {"type": ["number", "null"]},
+    "time_enabled": {"type": ["number", "null"]},
+    "time_running": {"type": ["number", "null"]},
+    "command": {"type": "string"}
+  },
+  "additionalProperties": true
+}

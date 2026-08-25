@@ -6,6 +6,31 @@ use crate::{CmgError, Laplacian};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CsrBuildProfile {
+    pub(crate) row_counts_nanoseconds: u128,
+    pub(crate) row_offsets_nanoseconds: u128,
+    pub(crate) allocation_nanoseconds: u128,
+    pub(crate) scatter_nanoseconds: u128,
+    pub(crate) validation_nanoseconds: u128,
+}
+
+#[inline]
+fn measure_build_phase<const PROFILE: bool, Output>(
+    nanoseconds: &mut u128,
+    operation: impl FnOnce() -> Output,
+) -> Output {
+    if PROFILE {
+        let start = Instant::now();
+        let output = operation();
+        *nanoseconds = nanoseconds.saturating_add(start.elapsed().as_nanos());
+        output
+    } else {
+        operation()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum RowOffsets {
@@ -95,6 +120,20 @@ impl PartialEq for CsrLaplacian {
 impl CsrLaplacian {
     /// Freeze a canonical edge-list Laplacian into deterministic row storage.
     pub fn from_laplacian(graph: &Laplacian) -> Result<Self, CmgError> {
+        Self::from_laplacian_impl::<false>(graph).map(|(operator, _)| operator)
+    }
+
+    #[cfg(feature = "profiling")]
+    pub(crate) fn from_laplacian_profiled(
+        graph: &Laplacian,
+    ) -> Result<(Self, CsrBuildProfile), CmgError> {
+        Self::from_laplacian_impl::<true>(graph)
+    }
+
+    fn from_laplacian_impl<const PROFILE: bool>(
+        graph: &Laplacian,
+    ) -> Result<(Self, CsrBuildProfile), CmgError> {
+        let mut profile = CsrBuildProfile::default();
         let vertex_count = graph.vertex_count();
         let directed_entries =
             graph
@@ -104,92 +143,131 @@ impl CsrLaplacian {
                     context: "CSR directed-entry count overflowed usize",
                 })?;
 
-        let mut row_counts = vec![0_usize; vertex_count];
-        for edge in graph.edges() {
-            row_counts[edge.u()] += 1;
-            row_counts[edge.v()] += 1;
-        }
-        let row_offsets = if directed_entries <= u32::MAX as usize {
-            let mut offsets = Vec::with_capacity(vertex_count + 1);
-            offsets.push(0_u32);
-            let mut running = 0_usize;
-            for count in row_counts {
-                running = running
-                    .checked_add(count)
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "CSR row offsets overflowed usize",
-                    })?;
-                offsets.push(
-                    u32::try_from(running).map_err(|_| CmgError::InvalidHierarchy {
-                        context: "CSR compact row offset exceeded u32::MAX",
-                    })?,
-                );
-            }
-            RowOffsets::Compact(offsets)
-        } else {
-            let mut offsets = Vec::with_capacity(vertex_count + 1);
-            offsets.push(0_usize);
-            for count in row_counts {
-                let next = offsets
-                    .last()
-                    .copied()
-                    .unwrap_or(0_usize)
-                    .checked_add(count)
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "CSR row offsets overflowed usize",
-                    })?;
-                offsets.push(next);
-            }
-            RowOffsets::Native(offsets)
-        };
-        if row_offsets.last() != directed_entries {
-            return Err(CmgError::InvalidHierarchy {
-                context: "CSR row counts do not match directed-entry count",
+        let row_counts =
+            measure_build_phase::<PROFILE, _>(&mut profile.row_counts_nanoseconds, || {
+                let mut counts = vec![0_usize; vertex_count];
+                for edge in graph.edges() {
+                    counts[edge.u()] += 1;
+                    counts[edge.v()] += 1;
+                }
+                counts
             });
-        }
-
-        let mut next = (0..vertex_count)
-            .map(|row| row_offsets.bounds(row).0)
-            .collect::<Vec<_>>();
-        let mut weights = vec![0.0; directed_entries];
-        let columns = if vertex_count <= u32::MAX as usize {
-            let mut columns = vec![0_u32; directed_entries];
-            for edge in graph.edges() {
-                let left = next[edge.u()];
-                columns[left] = edge.v() as u32;
-                weights[left] = edge.weight();
-                next[edge.u()] += 1;
-
-                let right = next[edge.v()];
-                columns[right] = edge.u() as u32;
-                weights[right] = edge.weight();
-                next[edge.v()] += 1;
+        let row_offsets = measure_build_phase::<PROFILE, _>(
+            &mut profile.row_offsets_nanoseconds,
+            || -> Result<RowOffsets, CmgError> {
+                if directed_entries <= u32::MAX as usize {
+                    let mut offsets = Vec::with_capacity(vertex_count + 1);
+                    offsets.push(0_u32);
+                    let mut running = 0_usize;
+                    for count in row_counts {
+                        running = running
+                            .checked_add(count)
+                            .ok_or(CmgError::InvalidHierarchy {
+                                context: "CSR row offsets overflowed usize",
+                            })?;
+                        offsets.push(u32::try_from(running).map_err(|_| {
+                            CmgError::InvalidHierarchy {
+                                context: "CSR compact row offset exceeded u32::MAX",
+                            }
+                        })?);
+                    }
+                    Ok(RowOffsets::Compact(offsets))
+                } else {
+                    let mut offsets = Vec::with_capacity(vertex_count + 1);
+                    offsets.push(0_usize);
+                    for count in row_counts {
+                        let next = offsets
+                            .last()
+                            .copied()
+                            .unwrap_or(0_usize)
+                            .checked_add(count)
+                            .ok_or(CmgError::InvalidHierarchy {
+                                context: "CSR row offsets overflowed usize",
+                            })?;
+                        offsets.push(next);
+                    }
+                    Ok(RowOffsets::Native(offsets))
+                }
+            },
+        )?;
+        measure_build_phase::<PROFILE, _>(&mut profile.validation_nanoseconds, || {
+            if row_offsets.last() != directed_entries {
+                Err(CmgError::InvalidHierarchy {
+                    context: "CSR row counts do not match directed-entry count",
+                })
+            } else {
+                Ok(())
             }
+        })?;
+
+        let (mut next, mut weights) =
+            measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
+                (
+                    (0..vertex_count)
+                        .map(|row| row_offsets.bounds(row).0)
+                        .collect::<Vec<_>>(),
+                    vec![0.0; directed_entries],
+                )
+            });
+        let columns = if vertex_count <= u32::MAX as usize {
+            let mut columns =
+                measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
+                    vec![0_u32; directed_entries]
+                });
+            measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
+                for edge in graph.edges() {
+                    let left = next[edge.u()];
+                    columns[left] = edge.v() as u32;
+                    weights[left] = edge.weight();
+                    next[edge.u()] += 1;
+
+                    let right = next[edge.v()];
+                    columns[right] = edge.u() as u32;
+                    weights[right] = edge.weight();
+                    next[edge.v()] += 1;
+                }
+            });
             ColumnIndices::Compact(columns)
         } else {
-            let mut columns = vec![0_usize; directed_entries];
-            for edge in graph.edges() {
-                let left = next[edge.u()];
-                columns[left] = edge.v();
-                weights[left] = edge.weight();
-                next[edge.u()] += 1;
+            let mut columns =
+                measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
+                    vec![0_usize; directed_entries]
+                });
+            measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
+                for edge in graph.edges() {
+                    let left = next[edge.u()];
+                    columns[left] = edge.v();
+                    weights[left] = edge.weight();
+                    next[edge.u()] += 1;
 
-                let right = next[edge.v()];
-                columns[right] = edge.u();
-                weights[right] = edge.weight();
-                next[edge.v()] += 1;
-            }
+                    let right = next[edge.v()];
+                    columns[right] = edge.u();
+                    weights[right] = edge.weight();
+                    next[edge.v()] += 1;
+                }
+            });
             ColumnIndices::Native(columns)
         };
 
-        debug_assert!(rows_are_sorted(&row_offsets, &columns));
-        Ok(Self {
-            vertex_count,
-            row_offsets,
-            columns,
-            weights,
-            source_lineage: Arc::clone(graph.lineage()),
-        })
+        measure_build_phase::<PROFILE, _>(&mut profile.validation_nanoseconds, || {
+            if PROFILE && !rows_are_sorted(&row_offsets, &columns) {
+                return Err(CmgError::InvalidHierarchy {
+                    context: "profiled CSR rows are not sorted",
+                });
+            }
+            debug_assert!(rows_are_sorted(&row_offsets, &columns));
+            Ok(())
+        })?;
+        Ok((
+            Self {
+                vertex_count,
+                row_offsets,
+                columns,
+                weights,
+                source_lineage: Arc::clone(graph.lineage()),
+            },
+            profile,
+        ))
     }
 
     /// Return the number of rows and vertices.

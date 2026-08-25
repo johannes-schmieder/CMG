@@ -15,9 +15,11 @@ assert(~isempty(dir(['mx_splitforest_.' mexext])), 'mx_splitforest_ was not prod
 configuration = mex.getCompilerConfigurations('C', 'Selected');
 receipt = struct();
 receipt.success = true;
+receipt.upstream_commit = '19752fc102f8cae8e34f66457bfaccb1aaa60375';
 receipt.matlab_release = version('-release');
 receipt.matlab_version = version;
 receipt.mex_extension = mexext;
+receipt.build_steps = {'makeSolverMex', "mex('-largeArrayDims','mx_splitforest_.c')"};
 if ~isempty(configuration)
     receipt.compiler_name = configuration.Name;
     receipt.compiler_version = configuration.Version;

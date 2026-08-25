@@ -26,6 +26,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Freeze exact source archive identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git archive --format=tar --output=/tmp/cmg-source.tar "$CMG_BENCH_COMMIT"
+          echo "CMG_BENCH_ARCHIVE_SHA256=$(sha256sum /tmp/cmg-source.tar | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
       - name: Toolchains
         shell: bash
         run: |
@@ -45,7 +52,18 @@ jobs:
             cargo clippy --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets -- -D warnings &&
             cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets &&
             cargo test --manifest-path benchmarks/c-kernel/Cargo.toml --all-targets --release &&
-            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release
+            cargo build --manifest-path benchmarks/c-kernel/Cargo.toml --release &&
+            benchmarks/c-kernel/target/release/cmg-c-kernel-bench identity \
+              .ci/performance/c-kernel/identity.json &&
+            python3 - <<'PY'
+          import json
+          import os
+          value = json.load(open('.ci/performance/c-kernel/identity.json'))
+          assert value['source_commit'] == os.environ['CMG_BENCH_COMMIT']
+          assert value['source_archive_sha256'] == os.environ['CMG_BENCH_ARCHIVE_SHA256']
+          assert value['protocol_version'] == 'cmg-scc2-v1'
+          assert 'unknown' not in value.values()
+          PY
           } > .ci/performance/c-kernel/validation.log 2>&1
           STATUS=$?
           echo "status=$STATUS" >> "$GITHUB_OUTPUT"

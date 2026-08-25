@@ -19,13 +19,19 @@ jobs:
   quality:
     name: quality / ubuntu
     runs-on: ubuntu-latest
+    env:
+      CMG_BENCH_COMMIT: ${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Archive source snapshot
         shell: bash
-        run: tar --exclude='.git' -czf /tmp/cmg-current-source.tar.gz .
+        run: |
+          set -euo pipefail
+          tar --exclude='.git' -czf /tmp/cmg-current-source.tar.gz .
+          git archive --format=tar --output=/tmp/cmg-identity-source.tar "$CMG_BENCH_COMMIT"
+          echo "CMG_BENCH_ARCHIVE_SHA256=$(sha256sum /tmp/cmg-identity-source.tar | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
@@ -54,6 +60,21 @@ jobs:
 
       - name: Benchmark release build
         run: cargo build --manifest-path benchmarks/Cargo.toml --all-targets --release
+
+      - name: Reject unknown compiled benchmark identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          benchmarks/target/release/scc2-diagnostics identity /tmp/scc2-identity.json
+          python3 - <<'PY'
+          import json
+          import os
+          value = json.load(open('/tmp/scc2-identity.json'))
+          assert value['source_commit'] == os.environ['CMG_BENCH_COMMIT']
+          assert value['source_archive_sha256'] == os.environ['CMG_BENCH_ARCHIVE_SHA256']
+          assert value['protocol_version'] == 'cmg-scc2-v1'
+          assert 'unknown' not in value.values()
+          PY
 
       - name: Documentation
         env:

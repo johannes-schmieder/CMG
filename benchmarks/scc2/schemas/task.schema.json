@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc2/schemas/task.schema.json",
+  "title": "CMG SCC2 task",
+  "type": "object",
+  "required": ["protocol_version", "task_id", "experiment", "family", "vertices", "implementations", "rhs_count", "warmups", "repetitions", "tolerance", "max_iterations"],
+  "properties": {
+    "protocol_version": {"const": "cmg-scc2-v1"},
+    "task_id": {"type": "integer", "minimum": 1},
+    "experiment": {"enum": ["smoke", "baseline", "routing", "reuse", "numa", "memory", "accuracy", "batch", "matched-edge"]},
+    "family": {"enum": ["path", "grid", "worker-firm", "dense-worker-firm", "weak-community"]},
+    "vertices": {"type": "integer", "minimum": 2},
+    "implementations": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["rust", "matlab"]}},
+    "rhs_count": {"type": "integer", "minimum": 1, "maximum": 64},
+    "warmups": {"type": "integer", "minimum": 0},
+    "repetitions": {"type": "integer", "minimum": 1},
+    "tolerance": {"type": "number", "exclusiveMinimum": 0},
+    "max_iterations": {"type": "integer", "minimum": 1}
+  },
+  "additionalProperties": true
+}

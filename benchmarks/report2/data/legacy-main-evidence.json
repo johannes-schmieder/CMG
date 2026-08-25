@@ -1,0 +1,387 @@
+{
+  "runs": [
+    {
+      "files": 695,
+      "hosts": {
+        "1": "scc-eb2",
+        "10": "scc-ec4",
+        "11": "scc-ec4",
+        "12": "scc-ec4",
+        "13": "scc-ec4",
+        "14": "scc-ec4",
+        "15": "scc-ec4",
+        "2": "scc-eb2",
+        "3": "scc-eb2",
+        "4": "scc-ec4",
+        "5": "scc-ec4",
+        "6": "scc-ec4",
+        "7": "scc-ec4",
+        "8": "scc-ec4",
+        "9": "scc-ec4"
+      },
+      "manifest_hashes": {
+        "build-environment.txt": "bb6d64db515ea19a13d6d7a46d0d2d9e042d909ced92d212005571f3bd525e62",
+        "cargo-lock-sha256.txt": "0a049949e446990a2e5946f596267c99fc5df9a41cbdcf99c116aa942d094307",
+        "cargo.txt": "b8a489fe773bbb4280e98f7d15c341cb63b441e4ffa1c925865c1da8110f3884",
+        "dirty-state-sha256.txt": "ec1e4cd6fafebaa0dece396fffc8a25bd0f352ec539e7c8b46022008cc7a557b",
+        "dirty.patch": "480ee1e832b2f36651f61bf4a4282c26d5f167600a2bd2ea10dd4db68d324d85",
+        "environment-id.txt": "91898243b0d1664f2b3a673f0406e2fe2ab9453b29f4c47ef9116bf49f023503",
+        "git-status.txt": "5b0701f315282635f4d8b815e09be1fdaaa00f382e97d6a5dbb0ffbd182fb262",
+        "mex-build.json": "74a22990b453704c97ebf9538602cc0af32936cbfd738d5d1ed436e7b4b95de6",
+        "rustc.txt": "3975d062e234a9f3921955bf6ae5b90f5819df94fa825d057f76b34a35ed0f4d",
+        "rustup-init-sha256.txt": "e926f20006d70c3430349fc4e01e7be4c91dd0ccf5e4a5b72c89bc13ed7bd055",
+        "smoke-parent.txt": "21abf4a3912fcdc8a548f14ef750dce7a0b35bb5f3fef5661a45be97cbef3442",
+        "source-commit.txt": "b5007ce033209ce0ef111de6101eaaef8a8fe072dd1ceb3ffca0aa82a55b8248",
+        "source-files-sha256.txt": "811130532f76dae3e5173c031f98ba8f308d51ff707af8ce2534a1666e651022",
+        "submission-main.txt": "84b7c36b0b40affbe5f73a6b3cca570a3e4bf07e34df19354e15b309f8f10c65",
+        "upstream-archive-sha256.txt": "3ce0d91d150dc8d7e608a7ac30aa86c6dc348ae66157469f1d54e103e01fd306",
+        "watch-registration.txt": "117e7cd1db473d66d1b24c62db610e2660ba62f9028d4e36dbd2f5f2c5bb5844"
+      },
+      "results": 180,
+      "run_id": "20260824T152234Z-a28f802-8111305",
+      "run_validation": {
+        "accounting": [
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-eb2.scc.bu.edu",
+            "maxvmem": "8.195G",
+            "task_id": 1,
+            "wallclock": "847"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-eb2.scc.bu.edu",
+            "maxvmem": "8.461G",
+            "task_id": 2,
+            "wallclock": "662"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-eb2.scc.bu.edu",
+            "maxvmem": "9.174G",
+            "task_id": 3,
+            "wallclock": "1529"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.218G",
+            "task_id": 4,
+            "wallclock": "1160"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.452G",
+            "task_id": 5,
+            "wallclock": "727"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "9.151G",
+            "task_id": 6,
+            "wallclock": "878"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.175G",
+            "task_id": 7,
+            "wallclock": "482"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.588G",
+            "task_id": 8,
+            "wallclock": "411"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "9.396G",
+            "task_id": 9,
+            "wallclock": "823"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.758G",
+            "task_id": 10,
+            "wallclock": "602"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "9.946G",
+            "task_id": 11,
+            "wallclock": "921"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "13.671G",
+            "task_id": 12,
+            "wallclock": "1554"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.238G",
+            "task_id": 13,
+            "wallclock": "555"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.507G",
+            "task_id": 14,
+            "wallclock": "904"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "9.154G",
+            "task_id": 15,
+            "wallclock": "995"
+          }
+        ],
+        "job_id": "7288793",
+        "success": true,
+        "tasks": 15,
+        "threads": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32
+        ]
+      },
+      "run_validation_sha256": "a06daf05117dc61c9e85d5cdf628e95366c49641bc9521e38bd5449822285d4f",
+      "tree": "benchmark-runs/20260824T152234Z-a28f802-8111305"
+    },
+    {
+      "files": 209,
+      "hosts": {
+        "1": "scc-ec4",
+        "2": "scc-ec4",
+        "3": "scc-ec4",
+        "4": "scc-ec4"
+      },
+      "manifest_hashes": {
+        "build-environment.txt": "66d6f25f89695e0db1f16001685006ffb4bcdfaaae2f764dd1c5d177d8418892",
+        "cargo-lock-sha256.txt": "0a049949e446990a2e5946f596267c99fc5df9a41cbdcf99c116aa942d094307",
+        "cargo.txt": "b8a489fe773bbb4280e98f7d15c341cb63b441e4ffa1c925865c1da8110f3884",
+        "dirty-state-sha256.txt": "275d8d61ca8aaf990eaf5b8f2ef2a1924476e07ead8596c733dd7f8a703899bf",
+        "dirty.patch": "05aed1928ea10d769e9b0a6be1d52452b867868d93bd6ce0419ea8ddcaa47958",
+        "environment-id.txt": "2b5a2af56ae01bad674c170b751571c728b95ce54de45895d99673b24facc93f",
+        "git-status.txt": "fdda1acdeb1b530cec917cf12925c11a631f836100e64c1a9dd0b28618eb6025",
+        "mex-build.json": "74a22990b453704c97ebf9538602cc0af32936cbfd738d5d1ed436e7b4b95de6",
+        "retry-parent.txt": "88b0d20b6bad31b4213d2e79877e2b1fa269c534d4075531c9208bbaaeafdf7d",
+        "rustc.txt": "3975d062e234a9f3921955bf6ae5b90f5819df94fa825d057f76b34a35ed0f4d",
+        "rustup-init-sha256.txt": "e926f20006d70c3430349fc4e01e7be4c91dd0ccf5e4a5b72c89bc13ed7bd055",
+        "source-commit.txt": "c1395ba88c95ce610265e7ae25ff550b464ac9bd643f10230f5d8539b6f1ef1f",
+        "source-files-sha256.txt": "d271613b9b7eff24b51105140afe34d1245ad78420460db21288f429a568a252",
+        "submission-batch.txt": "86a0d96ed52a0c6cf050fc5c1e89cffb54493bc44c22a3ad1a10292429b7d781",
+        "submission-bootstrap.txt": "40b175fe1a753b5a79cbc2ac7a620a27da3815291feb29f6d4b12e5d9c49b954",
+        "upstream-archive-sha256.txt": "3ce0d91d150dc8d7e608a7ac30aa86c6dc348ae66157469f1d54e103e01fd306",
+        "watch-registration-bootstrap.txt": "cbc1b7edc1bb9117b960b27f4ea3d45a5a4b333f133d78430a30806b62a4e51c"
+      },
+      "results": 48,
+      "run_id": "20260824T201216Z-a28f802-148558d",
+      "run_validation": {
+        "accounting": [
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "8.300G",
+            "task_id": 1,
+            "wallclock": "1053"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "9.056G",
+            "task_id": 2,
+            "wallclock": "1289"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "9.578G",
+            "task_id": 3,
+            "wallclock": "1610"
+          },
+          {
+            "exit_status": 0,
+            "failed": 0,
+            "hostname": "scc-ec4.scc.bu.edu",
+            "maxvmem": "12.763G",
+            "task_id": 4,
+            "wallclock": "3939"
+          }
+        ],
+        "hierarchy_differences": [
+          {
+            "matlab": [
+              300000,
+              97824,
+              17942,
+              3681,
+              1566,
+              730,
+              317
+            ],
+            "rust": [
+              300000,
+              97824,
+              17942,
+              3681,
+              1566,
+              730,
+              318
+            ],
+            "task_id": 1
+          },
+          {
+            "matlab": [
+              1000000,
+              326085,
+              63926,
+              19675,
+              7750,
+              3157,
+              1463,
+              805,
+              491
+            ],
+            "rust": [
+              1000000,
+              326085,
+              63926,
+              19675,
+              7750,
+              3157,
+              1463,
+              805,
+              492
+            ],
+            "task_id": 2
+          }
+        ],
+        "job_id": "7295337",
+        "success": true,
+        "tasks": 4,
+        "threads": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32
+        ],
+        "warnings": [
+          {
+            "implementation": "matlab",
+            "task_id": 3,
+            "threads": 1,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 3,
+            "threads": 2,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 3,
+            "threads": 4,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 3,
+            "threads": 8,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 3,
+            "threads": 16,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 3,
+            "threads": 32,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 4,
+            "threads": 1,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 4,
+            "threads": 2,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 4,
+            "threads": 4,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 4,
+            "threads": 8,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 4,
+            "threads": 16,
+            "warning": "Official CMG hierarchy flag 3"
+          },
+          {
+            "implementation": "matlab",
+            "task_id": 4,
+            "threads": 32,
+            "warning": "Official CMG hierarchy flag 3"
+          }
+        ]
+      },
+      "run_validation_sha256": "816873d29dabb46abfccce75c758ba32c84d6599e37dda2bb41ebc3985b08664",
+      "tree": "benchmark-runs/20260824T201216Z-a28f802-148558d"
+    }
+  ],
+  "unavailable": [
+    "The first driver recorded one configuration timestamp, not per-repetition timestamps.",
+    "The first driver did not record per-stage process CPU time.",
+    "The first time-receipt parser did not retain peak PSS or per-stage RSS."
+  ]
+}

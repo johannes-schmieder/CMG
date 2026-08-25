@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc2/schemas/memory.schema.json",
+  "title": "CMG SCC2 separate-process memory-stage result",
+  "type": "object",
+  "required": [
+    "protocol_version", "record_type", "run_id", "task_id", "source_commit",
+    "source_archive_sha256", "binary_sha256", "environment_id", "implementation",
+    "family", "vertices", "canonical_edges", "matrix_nonzeros", "threads",
+    "rhs_count", "stage", "owned_bytes", "checkpoints", "peak_rss_kb", "success"
+  ],
+  "properties": {
+    "protocol_version": {"const": "cmg-scc2-v1"},
+    "record_type": {"const": "memory-stage"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_archive_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "environment_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "implementation": {"enum": ["rust", "matlab"]},
+    "stage": {"enum": ["baseline", "input", "graph", "hierarchy", "plan", "workspace-one", "workspace-pool", "solve", "batch"]},
+    "checkpoints": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["stage", "elapsed_ns", "peak_rss_kb", "owned_bytes"],
+        "properties": {
+          "elapsed_ns": {"type": "integer", "minimum": 0},
+          "peak_rss_kb": {"type": "integer", "minimum": 0},
+          "owned_bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "peak_rss_kb": {"type": "integer", "minimum": 0},
+    "success": {"const": true}
+  },
+  "additionalProperties": true
+}

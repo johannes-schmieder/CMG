@@ -60,6 +60,11 @@ pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profil
 pub use preconditioner::CmgPreconditioner;
 #[cfg(feature = "parallel")]
 pub use preconditioner::ParallelCmgPlan;
+#[cfg(feature = "profiling")]
+pub use preconditioner::{
+    HierarchyPhaseProfile, ParallelPlanBuildProfile, ParallelPlanLevelProfile,
+    PreconditionerBuildProfile,
+};
 pub use sddm::{SddmAugmentation, SddmMatrix};
 pub use sddm_solver::{SddmResult, SddmSolver, SddmWorkspace, solve_sddm};
 pub use workspace::CmgWorkspace;

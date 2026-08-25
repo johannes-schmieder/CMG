@@ -31,3 +31,15 @@ path = "src/bin/contraction-subphase-profile.rs"
 [[bin]]
 name = "scc-benchmark"
 path = "src/bin/scc-benchmark.rs"
+
+[[bin]]
+name = "scc2-diagnostics"
+path = "src/bin/scc2-diagnostics.rs"
+
+[[bin]]
+name = "plan-phase-profile"
+path = "src/bin/plan-phase-profile.rs"
+
+[[bin]]
+name = "scc2-memory"
+path = "src/bin/scc2-memory.rs"

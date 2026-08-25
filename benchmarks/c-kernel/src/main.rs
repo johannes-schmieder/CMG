@@ -8,12 +8,18 @@ use std::fs;
 use std::hint::black_box;
 use std::io;
 use std::os::raw::{c_double, c_uint};
+use std::process::Command;
 use std::time::Instant;
 
+const PROTOCOL_VERSION: &str = "cmg-scc2-v1";
 const UPSTREAM_COMMIT: &str = "19752fc102f8cae8e34f66457bfaccb1aaa60375";
 const TARGET_EDGE_VISITS: usize = 40_000_000;
 const ERROR_TOLERANCE: f64 = 2.0e-12;
 const SOURCE_COMMIT: &str = match option_env!("CMG_BENCH_COMMIT") {
+    Some(value) => value,
+    None => "unknown",
+};
+const SOURCE_ARCHIVE_SHA256: &str = match option_env!("CMG_BENCH_ARCHIVE_SHA256") {
     Some(value) => value,
     None => "unknown",
 };
@@ -133,6 +139,16 @@ impl UpperSymmetric {
 }
 
 fn main() -> Result<(), AnyError> {
+    let mut raw_arguments = env::args().skip(1);
+    if raw_arguments.next().as_deref() == Some("identity") {
+        let output = raw_arguments
+            .next()
+            .ok_or_else(|| io::Error::other("usage: cmg-c-kernel-bench identity OUTPUT"))?;
+        if raw_arguments.next().is_some() {
+            return Err(io::Error::other("identity accepts exactly one output path").into());
+        }
+        return write_identity(&output);
+    }
     let config = parse_config()?;
     if config.vertices < 2 {
         return Err(io::Error::other("vertices must be at least two").into());
@@ -186,12 +202,16 @@ fn main() -> Result<(), AnyError> {
     let c_edges_per_second = edge_visits * 1.0e9 / c_median_ns as f64;
     let projection = projection::benchmark(&config.case, graph.vertex_count(), config.repetitions)?;
     let cycle = cycle::benchmark(&config.case, graph.vertex_count(), config.repetitions)?;
+    let binary_sha256 = executable_sha256()?;
 
     let json = format!(
         concat!(
             "{{\n",
             "  \"schema\": 3,\n",
+            "  \"protocol_version\": \"{}\",\n",
             "  \"source_commit\": \"{}\",\n",
+            "  \"source_archive_sha256\": \"{}\",\n",
+            "  \"binary_sha256\": \"{}\",\n",
             "  \"upstream_commit\": \"{}\",\n",
             "  \"case\": \"{}\",\n",
             "  \"vertices\": {},\n",
@@ -211,7 +231,10 @@ fn main() -> Result<(), AnyError> {
             "  \"cycle\": {}\n",
             "}}\n"
         ),
+        PROTOCOL_VERSION,
         SOURCE_COMMIT,
+        SOURCE_ARCHIVE_SHA256,
+        binary_sha256,
         UPSTREAM_COMMIT,
         config.case,
         graph.vertex_count(),
@@ -236,6 +259,53 @@ fn main() -> Result<(), AnyError> {
     } else {
         print!("{json}");
     }
+    Ok(())
+}
+
+fn executable_sha256() -> Result<String, AnyError> {
+    let executable = env::current_exe()?;
+    let output = Command::new("sha256sum").arg(executable).output()?;
+    if !output.status.success() {
+        return Err(io::Error::other("sha256sum failed for benchmark executable").into());
+    }
+    String::from_utf8(output.stdout)?
+        .split_whitespace()
+        .next()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| io::Error::other("sha256sum returned no digest").into())
+}
+
+fn write_identity(output: &str) -> Result<(), AnyError> {
+    let binary_sha256 = executable_sha256()?;
+    let rustc_output = Command::new("rustc").arg("--version").output()?;
+    if !rustc_output.status.success() {
+        return Err(io::Error::other("rustc --version failed").into());
+    }
+    let rustc = String::from_utf8(rustc_output.stdout)?.trim().to_owned();
+    let payload = format!(
+        concat!(
+            "{{\n",
+            "  \"protocol_version\": \"{}\",\n",
+            "  \"source_commit\": \"{}\",\n",
+            "  \"source_archive_sha256\": \"{}\",\n",
+            "  \"binary_sha256\": \"{}\",\n",
+            "  \"upstream_commit\": \"{}\",\n",
+            "  \"compiler\": \"{}\",\n",
+            "  \"features\": \"standalone-pinned-c-kernels\",\n",
+            "  \"target\": \"{}-{}\"\n",
+            "}}\n"
+        ),
+        PROTOCOL_VERSION,
+        SOURCE_COMMIT,
+        SOURCE_ARCHIVE_SHA256,
+        binary_sha256,
+        UPSTREAM_COMMIT,
+        rustc,
+        env::consts::ARCH,
+        env::consts::OS,
+    );
+    fs::write(output, payload)?;
+    println!("CMG_SCC2_C_IDENTITY_SUCCESS binary_sha256={binary_sha256}");
     Ok(())
 }
 
