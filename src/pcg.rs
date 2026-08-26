@@ -907,12 +907,93 @@ pub(crate) fn euclidean_norm_with_executor(values: &[f64], executor: &ParallelEx
     if scale == 0.0 {
         0.0
     } else {
-        scale
-            * compensated_sum(values.iter().map(|value| {
+        scale * scaled_square_sum_with_executor(values, scale, executor).sqrt()
+    }
+}
+
+#[cfg(feature = "parallel")]
+fn scaled_square_sum_with_executor(values: &[f64], scale: f64, executor: &ParallelExecutor) -> f64 {
+    let options = executor.options();
+    let parallel_floor = options
+        .min_parallel_len
+        .max(options.reduction_chunk_size.saturating_mul(8));
+    if values.len() < parallel_floor || executor.thread_count() <= 1 {
+        return compensated_sum(values.iter().map(|value| {
+            let scaled = *value / scale;
+            scaled * scaled
+        }));
+    }
+    executor.install(|| fixed_chunk_scaled_square_sum(values, scale, options.reduction_chunk_size))
+}
+
+#[cfg(feature = "parallel")]
+fn fixed_chunk_scaled_square_sum(values: &[f64], scale: f64, chunk_size: usize) -> f64 {
+    let chunk_count = values.len().div_ceil(chunk_size);
+    if chunk_count == 0 {
+        return 0.0;
+    }
+
+    fn reduce_range(
+        values: &[f64],
+        scale: f64,
+        chunk_size: usize,
+        first_chunk: usize,
+        last_chunk: usize,
+    ) -> f64 {
+        if last_chunk - first_chunk == 1 {
+            let start = first_chunk * chunk_size;
+            let end = values.len().min(start + chunk_size);
+            return compensated_sum(values[start..end].iter().map(|value| {
                 let scaled = *value / scale;
                 scaled * scaled
-            }))
-            .sqrt()
+            }));
+        }
+        let middle = first_chunk + (last_chunk - first_chunk) / 2;
+        let (left_sum, right_sum) = rayon::join(
+            || reduce_range(values, scale, chunk_size, first_chunk, middle),
+            || reduce_range(values, scale, chunk_size, middle, last_chunk),
+        );
+        compensated_sum([left_sum, right_sum])
+    }
+
+    reduce_range(values, scale, chunk_size, 0, chunk_count)
+}
+
+#[cfg(all(test, feature = "parallel"))]
+mod deterministic_parallel_norm_sum_tests {
+    use super::{compensated_sum, scaled_square_sum_with_executor};
+    use crate::{ParallelExecutor, ParallelOptions};
+
+    #[test]
+    fn fixed_chunk_scaled_square_sum_is_thread_count_invariant() {
+        let values: Vec<f64> = (0..513)
+            .map(|index| ((index * 29 + 11) % 137) as f64 / 17.0 - 4.0)
+            .collect();
+        let scale = values
+            .iter()
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max);
+        let serial = compensated_sum(values.iter().map(|value| {
+            let scaled = *value / scale;
+            scaled * scaled
+        }));
+        let mut reference = None;
+        for threads in [2, 3, 4] {
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                min_parallel_len: 1,
+                reduction_chunk_size: 16,
+                ..ParallelOptions::default()
+            })
+            .unwrap();
+            let value = scaled_square_sum_with_executor(&values, scale, &executor);
+            match reference {
+                Some(bits) => assert_eq!(bits, value.to_bits()),
+                None => reference = Some(value.to_bits()),
+            }
+        }
+        let fixed = f64::from_bits(reference.unwrap());
+        assert!((fixed - serial).abs() <= 3.0e-13 * (1.0 + serial.abs()));
     }
 }
 
