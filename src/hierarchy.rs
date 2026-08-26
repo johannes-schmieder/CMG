@@ -3,8 +3,6 @@
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
 use crate::forest::build_forest_aggregation_labels;
-#[cfg(feature = "parallel")]
-use crate::forest::build_forest_aggregation_labels_with_executor;
 use crate::{Aggregation, CmgError, CmgOptions, Laplacian};
 use std::time::Instant;
 
@@ -181,9 +179,7 @@ impl CmgHierarchy {
         Self::build_with_kernels::<false, _, _>(
             graph,
             options,
-            |current, threshold| {
-                build_forest_aggregation_labels_with_executor(current, threshold, executor)
-            },
+            build_forest_aggregation_labels,
             |aggregation, current| aggregation.contract_with_executor(current, executor),
         )
     }
@@ -197,9 +193,7 @@ impl CmgHierarchy {
         Self::build_with_kernels_profiled(
             graph,
             options,
-            |current, threshold| {
-                build_forest_aggregation_labels_with_executor(current, threshold, executor)
-            },
+            build_forest_aggregation_labels,
             |aggregation, current| aggregation.contract_with_executor(current, executor),
         )
     }

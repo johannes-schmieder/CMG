@@ -6,7 +6,7 @@ use crate::{
     TerminalReason, ValidationOptions,
 };
 #[cfg(feature = "parallel")]
-use crate::{CsrLaplacian, ParallelExecutor};
+use crate::{CsrLaplacian, HierarchyLevel, ParallelExecutor};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 #[cfg(feature = "parallel")]
@@ -212,6 +212,28 @@ pub struct ParallelCmgPlan {
 
 #[cfg(feature = "parallel")]
 impl ParallelCmgPlan {
+    pub(crate) fn eligible_operator_count(
+        preconditioner: &CmgPreconditioner,
+        executor: &ParallelExecutor,
+    ) -> usize {
+        preconditioner
+            .hierarchy
+            .levels()
+            .iter()
+            .filter(|level| Self::level_is_eligible(level, executor))
+            .count()
+    }
+
+    fn level_is_eligible(level: &HierarchyLevel, executor: &ParallelExecutor) -> bool {
+        let graph = level.graph();
+        let density_floor = graph
+            .vertex_count()
+            .saturating_add(graph.vertex_count() / 4);
+        level.terminal_reason().is_none()
+            && graph.edges().len() >= density_floor
+            && executor.should_parallel(graph.edges().len())
+    }
+
     /// Build deterministic row operators for one immutable preconditioner.
     pub fn build(
         preconditioner: &CmgPreconditioner,
@@ -223,13 +245,7 @@ impl ParallelCmgPlan {
             .iter()
             .map(|level| {
                 let graph = level.graph();
-                let density_floor = graph
-                    .vertex_count()
-                    .saturating_add(graph.vertex_count() / 4);
-                if level.terminal_reason().is_none()
-                    && graph.edges().len() >= density_floor
-                    && executor.should_parallel(graph.edges().len())
-                {
+                if Self::level_is_eligible(level, executor) {
                     CsrLaplacian::from_laplacian(graph).map(Some)
                 } else {
                     Ok(None)
