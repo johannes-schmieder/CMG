@@ -76,13 +76,13 @@ impl ParallelPlanLevelProfile {
         self.row_counts_nanoseconds
     }
 
-    /// Return prefix-sum and compact row-offset construction time.
+    /// Return prefix-sum, compact row-offset, and scatter-cursor preparation time.
     #[must_use]
     pub const fn row_offsets_nanoseconds(&self) -> u128 {
         self.row_offsets_nanoseconds
     }
 
-    /// Return row cursor, column, and weight allocation/initialization time.
+    /// Return column and weight allocation/initialization time.
     #[must_use]
     pub const fn allocation_nanoseconds(&self) -> u128 {
         self.allocation_nanoseconds

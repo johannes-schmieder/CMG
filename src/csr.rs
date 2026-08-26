@@ -152,44 +152,10 @@ impl CsrLaplacian {
                 }
                 counts
             });
-        let row_offsets = measure_build_phase::<PROFILE, _>(
-            &mut profile.row_offsets_nanoseconds,
-            || -> Result<RowOffsets, CmgError> {
-                if directed_entries <= u32::MAX as usize {
-                    let mut offsets = Vec::with_capacity(vertex_count + 1);
-                    offsets.push(0_u32);
-                    let mut running = 0_usize;
-                    for count in row_counts {
-                        running = running
-                            .checked_add(count)
-                            .ok_or(CmgError::InvalidHierarchy {
-                                context: "CSR row offsets overflowed usize",
-                            })?;
-                        offsets.push(u32::try_from(running).map_err(|_| {
-                            CmgError::InvalidHierarchy {
-                                context: "CSR compact row offset exceeded u32::MAX",
-                            }
-                        })?);
-                    }
-                    Ok(RowOffsets::Compact(offsets))
-                } else {
-                    let mut offsets = Vec::with_capacity(vertex_count + 1);
-                    offsets.push(0_usize);
-                    for count in row_counts {
-                        let next = offsets
-                            .last()
-                            .copied()
-                            .unwrap_or(0_usize)
-                            .checked_add(count)
-                            .ok_or(CmgError::InvalidHierarchy {
-                                context: "CSR row offsets overflowed usize",
-                            })?;
-                        offsets.push(next);
-                    }
-                    Ok(RowOffsets::Native(offsets))
-                }
-            },
-        )?;
+        let (row_offsets, mut next) =
+            measure_build_phase::<PROFILE, _>(&mut profile.row_offsets_nanoseconds, || {
+                row_offsets_and_cursors(row_counts, directed_entries)
+            })?;
         measure_build_phase::<PROFILE, _>(&mut profile.validation_nanoseconds, || {
             if row_offsets.last() != directed_entries {
                 Err(CmgError::InvalidHierarchy {
@@ -200,14 +166,9 @@ impl CsrLaplacian {
             }
         })?;
 
-        let (mut next, mut weights) =
+        let mut weights =
             measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                (
-                    (0..vertex_count)
-                        .map(|row| row_offsets.bounds(row).0)
-                        .collect::<Vec<_>>(),
-                    vec![0.0; directed_entries],
-                )
+                vec![0.0; directed_entries]
             });
         let columns = if vertex_count <= u32::MAX as usize {
             let mut columns =
@@ -476,6 +437,50 @@ impl CsrLaplacian {
         let mut output = vec![0.0; self.vertex_count];
         self.matvec_into(input, &mut output)?;
         Ok(output)
+    }
+}
+
+fn row_offsets_and_cursors(
+    mut counts: Vec<usize>,
+    directed_entries: usize,
+) -> Result<(RowOffsets, Vec<usize>), CmgError> {
+    // Once the prefix sum has consumed each degree, the degree buffer has the
+    // exact shape needed by the scatter cursors. Rewriting it in place avoids
+    // allocating and initializing a second per-row `Vec<usize>`.
+    if directed_entries <= u32::MAX as usize {
+        let mut offsets = Vec::with_capacity(counts.len() + 1);
+        offsets.push(0_u32);
+        let mut running = 0_usize;
+        for count in &mut counts {
+            let width = *count;
+            *count = running;
+            running = running
+                .checked_add(width)
+                .ok_or(CmgError::InvalidHierarchy {
+                    context: "CSR row offsets overflowed usize",
+                })?;
+            offsets.push(
+                u32::try_from(running).map_err(|_| CmgError::InvalidHierarchy {
+                    context: "CSR compact row offset exceeded u32::MAX",
+                })?,
+            );
+        }
+        Ok((RowOffsets::Compact(offsets), counts))
+    } else {
+        let mut offsets = Vec::with_capacity(counts.len() + 1);
+        offsets.push(0_usize);
+        let mut running = 0_usize;
+        for count in &mut counts {
+            let width = *count;
+            *count = running;
+            running = running
+                .checked_add(width)
+                .ok_or(CmgError::InvalidHierarchy {
+                    context: "CSR row offsets overflowed usize",
+                })?;
+            offsets.push(running);
+        }
+        Ok((RowOffsets::Native(offsets), counts))
     }
 }
 
