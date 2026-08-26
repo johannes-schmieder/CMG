@@ -3,6 +3,7 @@ name: Rust CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
     paths-ignore:
       - '.ci/**'
   pull_request:
@@ -45,6 +46,9 @@ jobs:
         run: |
           rustc --version
           cargo --version
+
+      - name: Release metadata
+        run: python3 scripts/check_release_metadata.py
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -111,7 +115,7 @@ jobs:
 
   report:
     name: report checkpoint
-    if: ${{ always() && github.event_name == 'push' }}
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     needs: [quality, test]
     runs-on: ubuntu-latest
     steps:

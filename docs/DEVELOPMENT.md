@@ -66,7 +66,9 @@ See `docs/PERFORMANCE.md` for interpretation.
 
 ## Documentation maintenance
 
-Keep the root directory small. User-facing orientation belongs in `README.md`; maintained technical notes belong in `docs/`. Avoid chronological status logs in the current tree: commit history already records chronology.
+Keep the root directory small. User-facing orientation belongs in `README.md`; maintained technical notes belong in `docs/`. `CHANGELOG.md` is the one maintained user-facing chronological release record; avoid separate status or release logs because commit history and GitHub Releases already record that chronology.
+
+Follow `RELEASING.md` for version changes, tags, GitHub Releases, and future SSC publication. Run `python3 scripts/check_release_metadata.py` whenever release metadata changes.
 
 When a user-visible implementation constant or routing threshold changes, update its code comment/tests and the maintained documentation in the same checkpoint.
 
