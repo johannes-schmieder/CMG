@@ -257,6 +257,9 @@ mod tests {
         let left = [1.0, -2.0, 4.0];
         let right = [8.0, 5.0, 11.0];
         assert!(max_scaled_difference(&left, &right) > 0.0);
-        assert_eq!(max_identifiable_scaled_difference(&graph, &left, &right), 0.0);
+        assert_eq!(
+            max_identifiable_scaled_difference(&graph, &left, &right),
+            0.0
+        );
     }
 }
