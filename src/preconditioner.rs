@@ -464,6 +464,26 @@ pub struct CmgPreconditioner {
 }
 
 impl CmgPreconditioner {
+    /// Return principal retained heap bytes for the complete immutable
+    /// preconditioner, including hierarchy, component metadata, terminal
+    /// factorization, and recursive repeat counts.
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        self.hierarchy
+            .retained_bytes()
+            .saturating_add(self.component_metadata_bytes())
+            .saturating_add(
+                self.direct_terminal
+                    .as_ref()
+                    .map_or(0, GroundedLdl::byte_len),
+            )
+            .saturating_add(
+                self.repeat_counts
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<usize>()),
+            )
+    }
+
     /// Build the complete hierarchy and any direct terminal factorization.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
         Self::from_hierarchy(CmgHierarchy::build(graph, options)?)

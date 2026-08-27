@@ -98,6 +98,21 @@ impl PartialEq for Laplacian {
 }
 
 impl Laplacian {
+    /// Return principal retained heap bytes for canonical edges and the
+    /// diagonal. Shared `Arc` control blocks and allocator bookkeeping are not
+    /// included.
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        self.edges
+            .capacity()
+            .saturating_mul(core::mem::size_of::<Edge>())
+            .saturating_add(
+                self.diagonal
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<f64>()),
+            )
+    }
+
     /// Build a Laplacian from undirected positive-weight edges.
     ///
     /// Endpoint order is canonicalized, duplicate edges are sorted by weight

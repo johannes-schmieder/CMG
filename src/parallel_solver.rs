@@ -193,6 +193,17 @@ pub struct ParallelPcgSolver {
 }
 
 impl ParallelPcgSolver {
+    pub(crate) fn initialized_plan_bytes(&self) -> usize {
+        self.plan.get().map_or(0, ParallelCmgPlan::byte_len)
+    }
+
+    /// Return exact principal retained heap bytes for this solver and a
+    /// compatible reusable workspace pool.
+    #[must_use]
+    pub fn memory_report(&self, workspace: &ParallelPcgWorkspace) -> crate::CmgMemoryReport {
+        crate::CmgMemoryReport::new(self, workspace)
+    }
+
     /// Build a parallel hierarchy, routed plan, and executor with the default policy.
     pub fn build(
         graph: &Laplacian,

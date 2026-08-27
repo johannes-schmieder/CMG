@@ -122,6 +122,17 @@ pub struct HierarchyBuildReport {
 }
 
 impl HierarchyBuildReport {
+    fn retained_bytes(&self) -> usize {
+        self.vertex_counts
+            .capacity()
+            .saturating_mul(core::mem::size_of::<usize>())
+            .saturating_add(
+                self.matrix_nonzeros
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<usize>()),
+            )
+    }
+
     /// Return the terminal reason.
     #[must_use]
     pub const fn terminal_reason(&self) -> TerminalReason {
@@ -155,6 +166,30 @@ pub struct CmgHierarchy {
 }
 
 impl CmgHierarchy {
+    /// Return principal retained heap bytes for every graph, diagonal smoother,
+    /// aggregation, and hierarchy report. Allocator bookkeeping is excluded.
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        self.levels
+            .iter()
+            .fold(self.report.retained_bytes(), |bytes, level| {
+                bytes
+                    .saturating_add(level.graph.retained_bytes())
+                    .saturating_add(
+                        level
+                            .inverse_diagonal
+                            .capacity()
+                            .saturating_mul(core::mem::size_of::<f64>()),
+                    )
+                    .saturating_add(
+                        level
+                            .aggregation
+                            .as_ref()
+                            .map_or(0, crate::Aggregation::retained_bytes),
+                    )
+            })
+    }
+
     /// Build a hierarchy from a weighted graph Laplacian.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
         Self::build_with_kernels::<false, _, _>(

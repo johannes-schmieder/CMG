@@ -181,6 +181,10 @@ let batch = solver.solve_batch_with_workspace(
     &mut workspace,
 )?;
 println!("execution = {:?}", batch.report().execution());
+println!(
+    "retained bytes = {}",
+    solver.memory_report(&workspace).total_retained_bytes()
+);
 ```
 
 Reuse the solver and workspace while the graph and edge weights remain
@@ -189,6 +193,12 @@ usually has less synchronization overhead than parallelizing a single solve.
 The default single-RHS routing threshold is 350,000 canonical retained edges;
 it is a measured heuristic, not an algorithmic constant, and can be changed
 through `ParallelPcgPolicy`.
+
+Call `CmgMemoryEstimate::conservative` before construction when a host process
+has a hard allocation budget. The estimate uses checked arithmetic and includes
+raw submitted edges, the complete bounded hierarchy, an optional parallel plan,
+and the requested reusable workspace pool. `memory_report` provides exact
+principal retained bytes after construction without changing solver behavior.
 
 ## Validated benchmarks
 

@@ -23,6 +23,7 @@ Keep durable files only when they serve production code, correctness/regression 
 | `execution.rs` | optional package-owned parallel executor |
 | `csr.rs` | deterministic row-oriented operators for parallel kernels |
 | `parallel_solver.rs` | automatic memory-aware parallel routing |
+| `memory.rs` | checked pre-build estimates and retained-memory reports |
 | `pcg_profile.rs` | profiling-only PCG instrumentation |
 
 The public API is re-exported from `src/lib.rs`; implementation details should remain private unless a stable user-facing need exists.

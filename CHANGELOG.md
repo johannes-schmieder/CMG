@@ -11,6 +11,8 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   weighted graph Laplacians and SDDM systems.
 - Optional package-owned parallel execution and reusable repeated-right-hand-side
   solvers.
+- Checked conservative pre-build memory estimates and exact retained-memory
+  reports for prepared parallel solvers and workspace pools.
 - Cross-platform correctness tests, reproducible benchmark harnesses, and pinned
   upstream provenance.
 
