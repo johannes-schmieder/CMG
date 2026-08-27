@@ -92,6 +92,19 @@ fn max_scaled_difference(left: &[f64], right: &[f64]) -> f64 {
         .fold(0.0, f64::max)
 }
 
+fn max_identifiable_scaled_difference(graph: &Laplacian, left: &[f64], right: &[f64]) -> f64 {
+    graph
+        .edges()
+        .iter()
+        .map(|edge| {
+            let left_difference = left[edge.u()] - left[edge.v()];
+            let right_difference = right[edge.u()] - right[edge.v()];
+            (left_difference - right_difference).abs()
+                / (1.0 + left_difference.abs().max(right_difference.abs()))
+        })
+        .fold(0.0, f64::max)
+}
+
 fn time_serial(
     solver: &ParallelPcgSolver,
     rhs: &[f64],
@@ -203,6 +216,11 @@ fn main() {
     let planned_median_ns = median(planned_ns);
     let speedup = serial_median_ns as f64 / planned_median_ns as f64;
     let difference = max_scaled_difference(serial_result.solution(), planned_result.solution());
+    let identifiable_difference = max_identifiable_scaled_difference(
+        solver.graph(),
+        serial_result.solution(),
+        planned_result.solution(),
+    );
     let execution = format!(
         "{:?}",
         solver
@@ -212,7 +230,7 @@ fn main() {
     );
 
     println!(
-        "{{\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"input_edges\":{},\"edges\":{},\"levels\":{},\"repetitions\":{repetitions},\"threads\":{threads},\"operators\":{},\"plan_bytes\":{},\"workspace_bytes\":{},\"auto_execution\":\"{execution}\",\"serial_median_ns\":{serial_median_ns},\"planned_median_ns\":{planned_median_ns},\"speedup\":{speedup:.17e},\"serial_iterations\":{},\"planned_iterations\":{},\"serial_backward_error\":{:.17e},\"planned_backward_error\":{:.17e},\"serial_residual_norm\":{:.17e},\"planned_residual_norm\":{:.17e},\"max_scaled_difference\":{difference:.17e}}}",
+        "{{\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"input_edges\":{},\"edges\":{},\"levels\":{},\"repetitions\":{repetitions},\"threads\":{threads},\"operators\":{},\"plan_bytes\":{},\"workspace_bytes\":{},\"auto_execution\":\"{execution}\",\"serial_median_ns\":{serial_median_ns},\"planned_median_ns\":{planned_median_ns},\"speedup\":{speedup:.17e},\"serial_iterations\":{},\"planned_iterations\":{},\"serial_backward_error\":{:.17e},\"planned_backward_error\":{:.17e},\"serial_residual_norm\":{:.17e},\"planned_residual_norm\":{:.17e},\"max_scaled_difference\":{difference:.17e},\"max_identifiable_scaled_difference\":{identifiable_difference:.17e}}}",
         bench_graph.vertices,
         bench_graph.input_edges,
         bench_graph.canonical_edges,
@@ -227,4 +245,18 @@ fn main() {
         serial_result.residual_norm(),
         planned_result.residual_norm(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifiable_difference_ignores_laplacian_null_space_shift() {
+        let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 2.0)]).unwrap();
+        let left = [1.0, -2.0, 4.0];
+        let right = [8.0, 5.0, 11.0];
+        assert!(max_scaled_difference(&left, &right) > 0.0);
+        assert_eq!(max_identifiable_scaled_difference(&graph, &left, &right), 0.0);
+    }
 }

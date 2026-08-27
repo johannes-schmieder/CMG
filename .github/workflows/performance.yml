@@ -127,7 +127,7 @@ jobs:
               ('dense-worker-firm-1.6m', ['dense-worker-firm', 100000, 3, 4]),
           ]
           result = {
-              'schema_version': 4,
+              'schema_version': 5,
               'experiment': 'full-certified-pcg-routing',
               'tested_sha': os.environ['TESTED_SHA'],
               'run_id': os.environ['RUN_ID'],
@@ -172,7 +172,7 @@ jobs:
               speedups.append(case['speedup'])
 
               numerical_ok = (
-                  case['max_scaled_difference'] <= 5e-11
+                  case['max_identifiable_scaled_difference'] <= 5e-11
                   and abs(case['serial_iterations'] - case['planned_iterations']) <= 1
                   and math.isfinite(case['serial_backward_error'])
                   and math.isfinite(case['planned_backward_error'])
@@ -189,6 +189,10 @@ jobs:
           result['maximum_speedup'] = max(speedups)
           result['maximum_scaled_difference'] = max(
               case['max_scaled_difference'] for case in result['cases'].values()
+          )
+          result['maximum_identifiable_scaled_difference'] = max(
+              case['max_identifiable_scaled_difference']
+              for case in result['cases'].values()
           )
           result['numerical_failures'] = numerical_failures
           result['route_mismatches'] = route_mismatches
