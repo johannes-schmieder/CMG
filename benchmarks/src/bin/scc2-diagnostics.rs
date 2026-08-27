@@ -218,7 +218,9 @@ fn run(
     let (vertices, edges) = read_graph(&input.join("graph.bin"))?;
     let right_hand_sides = read_vectors(&input.join("rhs.bin"))?;
     let truths = read_vectors(&input.join("truth.bin"))?;
-    let family = read_family(&input.join("metadata.json"))?;
+    let metadata_path = input.join("metadata.json");
+    let family = read_family(&metadata_path)?;
+    let connected = read_metadata_usize(&metadata_path, "connected_components")? == 1;
     let input_load_ns = load_start.elapsed().as_nanos();
     if rhs_count > right_hand_sides.len() || rhs_count > truths.len() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "fixture has too few RHSs").into());
@@ -370,6 +372,7 @@ fn run(
                 pcg_options,
                 workspaces,
                 &solve_executor,
+                connected,
             )
         })?;
         require_results(&results, tolerance)?;
@@ -391,8 +394,22 @@ fn run(
     let plan = retained_plan.as_deref().or(reused_plan.as_deref());
     let plan_operator_count = plan.map_or(0, ParallelCmgPlan::operator_count);
     let plan_bytes = plan.map_or(0, ParallelCmgPlan::byte_len);
-    let actual_strategy = actual_strategy(strategy, rhs_count, solve_threads, &graph, plan);
-    let route_reason = route_reason(strategy, rhs_count, solve_threads, &graph, plan);
+    let actual_strategy = actual_strategy(
+        strategy,
+        rhs_count,
+        &graph,
+        plan,
+        &solve_executor,
+        connected,
+    );
+    let route_reason = route_reason(
+        strategy,
+        rhs_count,
+        &graph,
+        plan,
+        &solve_executor,
+        connected,
+    );
 
     let mut apply_loops = 0_usize;
     if rhs_count == 1 {
@@ -779,8 +796,9 @@ fn solve_strategy(
     options: PcgOptions,
     workspaces: &mut [PcgWorkspace],
     executor: &ParallelExecutor,
+    connected: bool,
 ) -> Result<Vec<PcgResult>, AnyError> {
-    let actual = actual_strategy(strategy, rhs.len(), executor.thread_count(), graph, plan);
+    let actual = actual_strategy(strategy, rhs.len(), graph, plan, executor, connected);
     match actual {
         "serial" => rhs
             .iter()
@@ -818,17 +836,20 @@ fn solve_strategy(
 fn actual_strategy<'a>(
     strategy: &'a str,
     rhs_count: usize,
-    threads: usize,
     graph: &Laplacian,
     plan: Option<&ParallelCmgPlan>,
+    executor: &ParallelExecutor,
+    connected: bool,
 ) -> &'a str {
     if strategy != "auto" {
         return strategy;
     }
-    if rhs_count > 1 && threads > 1 {
+    if rhs_count > 1 && executor.thread_count() > 1 {
         "across-rhs"
-    } else if threads > 1
-        && plan.is_some_and(|value| value.operator_count() > 0)
+    } else if executor.thread_count() > 1
+        && plan.is_some_and(|value| {
+            value.operator_count() > 0 || eligible_parallel_vector_work(graph, executor, connected)
+        })
         && graph.edge_count() >= 350_000
     {
         "planned"
@@ -840,24 +861,41 @@ fn actual_strategy<'a>(
 fn route_reason<'a>(
     strategy: &'a str,
     rhs_count: usize,
-    threads: usize,
     graph: &Laplacian,
     plan: Option<&ParallelCmgPlan>,
+    executor: &ParallelExecutor,
+    connected: bool,
 ) -> &'a str {
     if strategy != "auto" {
         return "forced-by-benchmark";
     }
-    if rhs_count > 1 && threads > 1 {
+    if rhs_count > 1 && executor.thread_count() > 1 {
         "multiple-rhs-and-multiple-workers"
-    } else if threads <= 1 {
+    } else if executor.thread_count() <= 1 {
         "single-worker"
-    } else if plan.is_none_or(|value| value.operator_count() == 0) {
-        "no-eligible-plan-operator"
     } else if graph.edge_count() < 350_000 {
         "below-minimum-planned-edges"
+    } else if plan.is_none() {
+        "parallel-plan-unavailable"
+    } else if plan.is_some_and(|value| value.operator_count() > 0) {
+        "eligible-planned-operator-single-rhs"
+    } else if eligible_parallel_vector_work(graph, executor, connected) {
+        "eligible-planned-vector-single-rhs"
     } else {
-        "eligible-planned-single-rhs"
+        "no-eligible-planned-work"
     }
+}
+
+fn eligible_parallel_vector_work(
+    graph: &Laplacian,
+    executor: &ParallelExecutor,
+    connected: bool,
+) -> bool {
+    let options = executor.options();
+    let vector_floor = options
+        .min_parallel_len
+        .max(options.reduction_chunk_size.saturating_mul(8));
+    connected && graph.vertex_count() >= vector_floor
 }
 
 fn require_results(results: &[PcgResult], tolerance: f64) -> Result<(), AnyError> {
@@ -1151,6 +1189,26 @@ fn read_family(path: &Path) -> Result<String, AnyError> {
         .find('"')
         .ok_or_else(|| io::Error::other("invalid family"))?;
     Ok(rest[..second].to_owned())
+}
+
+fn read_metadata_usize(path: &Path, field: &str) -> Result<usize, AnyError> {
+    let content = fs::read_to_string(path)?;
+    let marker = format!("\"{field}\"");
+    let start = content
+        .find(&marker)
+        .ok_or_else(|| io::Error::other(format!("missing {field}")))?;
+    let tail = &content[(start + marker.len())..];
+    let colon = tail
+        .find(':')
+        .ok_or_else(|| io::Error::other(format!("invalid {field}")))?;
+    let digits = tail[(colon + 1)..].trim_start();
+    let end = digits
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(digits.len());
+    if end == 0 {
+        return Err(io::Error::other(format!("invalid {field}")).into());
+    }
+    Ok(digits[..end].parse()?)
 }
 
 fn required(arguments: &mut impl Iterator<Item = String>, name: &str) -> Result<String, AnyError> {

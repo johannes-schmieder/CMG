@@ -20,7 +20,9 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 - Planned within-solve PCG uses fixed-order parallel component centering for
   large connected systems, preserving deterministic results across eligible
-  multithreaded worker-pool sizes while one worker retains the serial path.
+  multithreaded worker-pool sizes while one worker retains the serial path;
+  prepared automatic routing can select these qualified vector kernels even
+  when no hierarchy operator qualifies for row-parallel storage.
 - Dense parallel-plan construction fills deterministic row-owned CSR blocks in
   parallel, and prepared solvers compute workspace requirements without a
   throwaway allocation.

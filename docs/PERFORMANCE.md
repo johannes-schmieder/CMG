@@ -57,9 +57,15 @@ Individual cases vary; the JSON record contains the complete measurements.
 
 `ParallelPcgSolver` chooses among serial PCG, selectively planned within-solve PCG, and independent solves distributed across right-hand sides.
 
-The default single-RHS planned threshold is **350,000 canonical retained edges**, provided more than one worker thread and at least one routed operator are available. This is a measured performance heuristic, not a mathematical CMG constant, and can be overridden through `ParallelPcgPolicy`.
+The default single-RHS planned threshold is **350,000 canonical retained edges**, provided more than one worker thread and either a routed operator or sufficiently large deterministic parallel vector work is available. The vector-only route is limited to connected graphs large enough for fixed-chunk centering and reductions. This is a measured performance heuristic, not a mathematical CMG constant, and can be overridden through `ParallelPcgPolicy`.
 
 The latest hosted routing matrix is `.ci/performance/full-pcg-routing-latest.json`; the largest dense worker-firm case in that record reports roughly 2.2x planned-versus-serial full-PCG speedup with unchanged iteration count and solution certificate. `.ci/performance/parallel-latest.json` records repeated-RHS thread scaling.
+
+### SCC optimization qualification
+
+The post-diagnostic optimization bundle (`761a0f0`, run `20260827T064306Z-761a0f022f20-b2v1-routing-opt2`) was qualified against its immediate baseline (`5f45ded`, run `20260826T222423Z-5f45ded81164-b2v1-routing-opt1`) on the same Gold-6242 host. The comparison uses all five deterministic one-million-vertex families, forced planned execution at 8, 16, and 32 threads, two warmups, and five measured repetitions. The optimized/baseline geometric ratios were **0.701x for reused-preconditioner PCG** and **0.747x for setup plus one solve**. Serial controls were 0.980x and 0.975x, respectively, which isolates most of the improvement to the intended parallel path. Dense worker-firm plan construction was 0.688x baseline.
+
+Iterations, hierarchy structure, routed-operator counts, plan bytes, and workspace bytes were unchanged; the maximum candidate backward error was `9.24e-9`. Sixteen threads remained the fastest planned setting for all five families. Moving from 16 to 32 threads increased solve time by 3% for dense worker-firm and by 16% to 76% for the other families, showing that extra high-core overhead outweighs the additional parallel work. On the operator-free path family, the planned vector kernels reduced setup-plus-solve time by 11% to 21% versus serial at 8 to 32 threads, motivating the connected vector-only automatic route described above.
 
 ## Memory budgeting
 
