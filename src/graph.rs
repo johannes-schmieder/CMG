@@ -303,6 +303,7 @@ impl Laplacian {
         Arc::ptr_eq(&self.lineage, &other.lineage)
     }
 
+    #[cfg(feature = "parallel")]
     pub(crate) const fn lineage(&self) -> &Arc<()> {
         &self.lineage
     }

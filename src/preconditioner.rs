@@ -246,7 +246,7 @@ impl ParallelCmgPlan {
             .map(|level| {
                 let graph = level.graph();
                 if Self::level_is_eligible(level, executor) {
-                    CsrLaplacian::from_laplacian(graph).map(Some)
+                    CsrLaplacian::from_laplacian_with_executor(graph, executor).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -290,7 +290,8 @@ impl ParallelCmgPlan {
             let eligible = reason == "eligible";
             let start = Instant::now();
             let (operator, csr_profile) = if eligible {
-                let (operator, profile) = CsrLaplacian::from_laplacian_profiled(graph)?;
+                let (operator, profile) =
+                    CsrLaplacian::from_laplacian_with_executor_profiled(graph, executor)?;
                 (Some(operator), profile)
             } else {
                 (None, Default::default())
@@ -464,6 +465,25 @@ pub struct CmgPreconditioner {
 }
 
 impl CmgPreconditioner {
+    #[cfg(feature = "parallel")]
+    pub(crate) fn workspace_bytes(&self) -> usize {
+        CmgWorkspace::required_bytes(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+        )
+    }
+
+    pub(crate) fn validate_workspace(&self, workspace: &CmgWorkspace) -> Result<(), CmgError> {
+        workspace.validate(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+        )
+    }
+
     /// Return principal retained heap bytes for the complete immutable
     /// preconditioner, including hierarchy, component metadata, terminal
     /// factorization, and recursive repeat counts.
@@ -711,6 +731,15 @@ impl CmgPreconditioner {
         self.apply_level(0, rhs, output, workspace, 1)
     }
 
+    pub(crate) fn apply_compatible_into_prevalidated(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+    ) -> Result<(), CmgError> {
+        self.apply_level(0, rhs, output, workspace, 1)
+    }
+
     #[cfg(feature = "parallel")]
     fn apply_compatible_into_with_plan(
         &self,
@@ -722,21 +751,6 @@ impl CmgPreconditioner {
         executor: &ParallelExecutor,
     ) -> Result<(), CmgError> {
         plan.validate(self)?;
-        self.apply_compatible_into_with_prevalidated_plan(
-            rhs, output, workspace, validation, plan, executor,
-        )
-    }
-
-    #[cfg(feature = "parallel")]
-    fn apply_compatible_into_with_prevalidated_plan(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-        plan: &ParallelCmgPlan,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
         let dimension = self.hierarchy.levels()[0].graph().vertex_count();
         if rhs.len() != dimension {
             return Err(CmgError::dimension(
@@ -752,13 +766,24 @@ impl CmgPreconditioner {
                 output.len(),
             ));
         }
-        workspace.validate(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-        )?;
+        self.validate_workspace(workspace)?;
         validation.validate()?;
+        self.apply_compatible_into_with_prevalidated_plan(
+            rhs, output, workspace, validation, plan, executor,
+        )
+    }
+
+    #[cfg(feature = "parallel")]
+    fn apply_compatible_into_with_prevalidated_plan(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
+        plan: &ParallelCmgPlan,
+        executor: &ParallelExecutor,
+    ) -> Result<(), CmgError> {
+        debug_assert!(validation.validate().is_ok());
         self.apply_level_with_plan(0, rhs, output, workspace, 1, plan, executor)
     }
 
@@ -870,7 +895,6 @@ impl CmgPreconditioner {
 
         let mut local = workspace.take_level(level_index);
         let result = (|| {
-            fill_planned(output, 0.0, executor, parallel_level);
             for iteration in 0..iterations {
                 if iteration == 0 {
                     assign_scaled_planned(
@@ -909,13 +933,13 @@ impl CmgPreconditioner {
                 aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
                 let centering = &self.coarse_centering[level_index];
                 let mut centering_workspace = workspace.take_centering(level_index);
-                let centering_result = centering.center_in_place_with_workspace(
+                let centering_result = centering.center_in_place_with_workspace_and_executor(
                     &mut local.coarse_rhs,
                     &mut centering_workspace,
+                    executor,
                 );
                 workspace.put_centering(level_index, centering_workspace);
                 centering_result?;
-                fill_planned(&mut local.coarse_correction, 0.0, executor, parallel_level);
                 self.apply_level_with_plan(
                     level_index + 1,
                     &local.coarse_rhs,
@@ -1016,7 +1040,6 @@ impl CmgPreconditioner {
 
         let mut local = workspace.take_level(level_index);
         let result = (|| {
-            output.fill(0.0);
             for iteration in 0..iterations {
                 if iteration == 0 {
                     for ((value, inverse_diagonal), rhs_value) in
@@ -1053,7 +1076,6 @@ impl CmgPreconditioner {
                 );
                 workspace.put_centering(level_index, centering_workspace);
                 centering_result?;
-                local.coarse_correction.fill(0.0);
                 self.apply_level(
                     level_index + 1,
                     &local.coarse_rhs,
@@ -1077,15 +1099,6 @@ impl CmgPreconditioner {
         })();
         workspace.put_level(level_index, local);
         result
-    }
-}
-
-#[cfg(feature = "parallel")]
-fn fill_planned(values: &mut [f64], value: f64, executor: &ParallelExecutor, parallel: bool) {
-    if parallel {
-        fill_parallel(values, value, executor);
-    } else {
-        values.fill(value);
     }
 }
 
@@ -1139,15 +1152,6 @@ fn residual_from_matvec_planned(
         for (value, &right) in matvec.iter_mut().zip(rhs) {
             *value = right - *value;
         }
-    }
-}
-
-#[cfg(feature = "parallel")]
-fn fill_parallel(values: &mut [f64], value: f64, executor: &ParallelExecutor) {
-    if executor.should_parallel(values.len()) {
-        executor.install(|| values.par_iter_mut().for_each(|item| *item = value));
-    } else {
-        values.fill(value);
     }
 }
 

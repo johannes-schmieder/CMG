@@ -239,7 +239,7 @@ impl ParallelPcgSolver {
         let policy = policy.validate()?;
         let eligible_plan_operators =
             ParallelCmgPlan::eligible_operator_count(&preconditioner, &executor);
-        let workspace_bytes = PcgWorkspace::new(&preconditioner).byte_len();
+        let workspace_bytes = PcgWorkspace::required_bytes(&preconditioner);
         Ok(Self {
             preconditioner,
             plan: OnceLock::new(),

@@ -4,7 +4,7 @@ This is the maintained performance reference for the crate. Detailed one-shot op
 
 ## Retained implementation
 
-The production implementation includes compact canonical edge storage, shared Laplacian hierarchy ownership, compact aggregation/CSR indices where qualified, compressed terminal factors, reduced CMG/PCG workspaces, cached endpoint keys, optimized forest splitting and contraction, a package-owned Rayon executor, selectively routed within-solve parallelism, memory-bounded concurrency across right-hand sides, deterministic reductions, and final original-system residual certification.
+The production implementation includes compact canonical edge storage, shared Laplacian hierarchy ownership, compact aggregation/CSR indices where qualified, compressed terminal factors, reduced CMG/PCG workspaces, cached endpoint keys, optimized forest splitting and contraction, row-owned parallel construction of dense planned operators, fixed-order parallel centering and norm reductions, a package-owned Rayon executor, selectively routed within-solve parallelism, memory-bounded concurrency across right-hand sides, and final original-system residual certification.
 
 ## SCC Rust versus official MATLAB/C study
 

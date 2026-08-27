@@ -289,9 +289,6 @@ pub fn profile_pcg_with_plan(
         )?;
         workspace.solution.fill(0.0);
         workspace.residual.copy_from_slice(&workspace.projected_rhs);
-        workspace.preconditioned.fill(0.0);
-        workspace.direction.fill(0.0);
-        workspace.matrix_direction.fill(0.0);
         Ok::<f64, CmgError>(projection)
     })?;
 
@@ -336,8 +333,11 @@ pub fn profile_pcg_with_plan(
         )
     })?;
     measure(&mut profile.centering, || {
-        components
-            .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)
+        components.center_in_place_with_workspace_and_executor(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+            executor,
+        )
     })?;
     let mut rho = measure(&mut profile.dot_products, || {
         dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
@@ -381,8 +381,11 @@ pub fn profile_pcg_with_plan(
             }
         });
         measure(&mut profile.centering, || {
-            components
-                .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)
+            components.center_in_place_with_workspace_and_executor(
+                &mut workspace.solution,
+                &mut workspace.component,
+                executor,
+            )
         })?;
 
         let solution_norm = measure(&mut profile.norms, || {
@@ -456,8 +459,11 @@ pub fn profile_pcg_with_plan(
         }
 
         measure(&mut profile.centering, || {
-            components
-                .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)
+            components.center_in_place_with_workspace_and_executor(
+                &mut workspace.residual,
+                &mut workspace.component,
+                executor,
+            )
         })?;
         measure(&mut profile.preconditioner, || {
             plan.apply_compatible_into_prevalidated(
@@ -470,9 +476,10 @@ pub fn profile_pcg_with_plan(
             )
         })?;
         measure(&mut profile.centering, || {
-            components.center_in_place_with_workspace(
+            components.center_in_place_with_workspace_and_executor(
                 &mut workspace.preconditioned,
                 &mut workspace.component,
+                executor,
             )
         })?;
         let new_rho = measure(&mut profile.dot_products, || {

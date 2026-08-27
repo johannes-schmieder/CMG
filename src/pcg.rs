@@ -22,6 +22,18 @@ pub struct PcgWorkspace {
 }
 
 impl PcgWorkspace {
+    #[cfg(feature = "parallel")]
+    pub(crate) fn required_bytes(preconditioner: &CmgPreconditioner) -> usize {
+        let dimension = preconditioner.hierarchy().levels()[0]
+            .graph()
+            .vertex_count();
+        dimension
+            .saturating_mul(core::mem::size_of::<f64>())
+            .saturating_mul(6)
+            .saturating_add(preconditioner.finest_components().workspace_bytes())
+            .saturating_add(preconditioner.workspace_bytes())
+    }
+
     /// Allocate a solver workspace for a fixed preconditioner.
     #[must_use]
     pub fn new(preconditioner: &CmgPreconditioner) -> Self {
@@ -56,7 +68,10 @@ impl PcgWorkspace {
             .saturating_add(self.cmg.byte_len())
     }
 
-    fn validate(&self, dimension: usize) -> Result<(), CmgError> {
+    fn validate(&self, preconditioner: &CmgPreconditioner) -> Result<(), CmgError> {
+        let dimension = preconditioner.hierarchy().levels()[0]
+            .graph()
+            .vertex_count();
         for (context, actual) in [
             ("PcgWorkspace projected rhs", self.projected_rhs.len()),
             ("PcgWorkspace solution", self.solution.len()),
@@ -69,7 +84,10 @@ impl PcgWorkspace {
                 return Err(CmgError::dimension(context, dimension, actual));
             }
         }
-        Ok(())
+        preconditioner
+            .finest_components()
+            .validate_workspace(&self.component)?;
+        preconditioner.validate_workspace(&self.cmg)
     }
 }
 
@@ -183,7 +201,7 @@ pub fn solve_pcg_with_workspace(
     if rhs.len() != dimension {
         return Err(CmgError::dimension("solve_pcg rhs", dimension, rhs.len()));
     }
-    workspace.validate(dimension)?;
+    workspace.validate(preconditioner)?;
 
     let components = preconditioner.finest_components();
     workspace.projected_rhs.copy_from_slice(rhs);
@@ -194,9 +212,6 @@ pub fn solve_pcg_with_workspace(
     )?;
     workspace.solution.fill(0.0);
     workspace.residual.copy_from_slice(&workspace.projected_rhs);
-    workspace.preconditioned.fill(0.0);
-    workspace.direction.fill(0.0);
-    workspace.matrix_direction.fill(0.0);
 
     let initial_residual_norm = euclidean_norm(rhs);
     let projected_initial_norm = euclidean_norm(&workspace.projected_rhs);
@@ -222,11 +237,10 @@ pub fn solve_pcg_with_workspace(
         });
     }
 
-    preconditioner.apply_compatible_into_with_validation(
+    preconditioner.apply_compatible_into_prevalidated(
         &workspace.residual,
         &mut workspace.preconditioned,
         &mut workspace.cmg,
-        options.validation,
     )?;
     components
         .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)?;
@@ -320,11 +334,10 @@ pub fn solve_pcg_with_workspace(
         // reusing the compatible stationary core.
         components
             .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)?;
-        preconditioner.apply_compatible_into_with_validation(
+        preconditioner.apply_compatible_into_prevalidated(
             &workspace.residual,
             &mut workspace.preconditioned,
             &mut workspace.cmg,
-            options.validation,
         )?;
         components.center_in_place_with_workspace(
             &mut workspace.preconditioned,
@@ -412,7 +425,7 @@ pub fn solve_pcg_with_plan_and_workspace(
     if rhs.len() != dimension {
         return Err(CmgError::dimension("solve_pcg rhs", dimension, rhs.len()));
     }
-    workspace.validate(dimension)?;
+    workspace.validate(preconditioner)?;
     plan.validate(preconditioner)?;
 
     let components = preconditioner.finest_components();
@@ -424,9 +437,6 @@ pub fn solve_pcg_with_plan_and_workspace(
     )?;
     workspace.solution.fill(0.0);
     workspace.residual.copy_from_slice(&workspace.projected_rhs);
-    workspace.preconditioned.fill(0.0);
-    workspace.direction.fill(0.0);
-    workspace.matrix_direction.fill(0.0);
 
     let initial_residual_norm = euclidean_norm_with_executor(rhs, executor);
     let projected_initial_norm = euclidean_norm_with_executor(&workspace.projected_rhs, executor);
@@ -460,8 +470,11 @@ pub fn solve_pcg_with_plan_and_workspace(
         options.validation,
         executor,
     )?;
-    components
-        .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)?;
+    components.center_in_place_with_workspace_and_executor(
+        &mut workspace.preconditioned,
+        &mut workspace.component,
+        executor,
+    )?;
     let mut rho = dot_with_executor(&workspace.residual, &workspace.preconditioned, executor);
     validate_positive_pcg(0, "r^T M r", rho)?;
     workspace
@@ -494,8 +507,11 @@ pub fn solve_pcg_with_plan_and_workspace(
             *solution += alpha * *direction;
             *residual -= alpha * *matrix_direction;
         }
-        components
-            .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
+        components.center_in_place_with_workspace_and_executor(
+            &mut workspace.solution,
+            &mut workspace.component,
+            executor,
+        )?;
 
         let solution_norm = euclidean_norm_with_executor(&workspace.solution, executor);
         last_tolerance = allowed_residual(
@@ -558,8 +574,11 @@ pub fn solve_pcg_with_plan_and_workspace(
         // The public solver projected the submitted RHS once. Remove only the
         // component-nullspace roundoff accumulated by Krylov updates before
         // reusing the compatible stationary core.
-        components
-            .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)?;
+        components.center_in_place_with_workspace_and_executor(
+            &mut workspace.residual,
+            &mut workspace.component,
+            executor,
+        )?;
         plan.apply_compatible_into_prevalidated(
             preconditioner,
             &workspace.residual,
@@ -568,9 +587,10 @@ pub fn solve_pcg_with_plan_and_workspace(
             options.validation,
             executor,
         )?;
-        components.center_in_place_with_workspace(
+        components.center_in_place_with_workspace_and_executor(
             &mut workspace.preconditioned,
             &mut workspace.component,
+            executor,
         )?;
         let new_rho = dot_with_executor(&workspace.residual, &workspace.preconditioned, executor);
         validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
@@ -1040,5 +1060,63 @@ fn validate_finite_pcg(
             quantity,
             value,
         })
+    }
+}
+
+#[cfg(test)]
+mod workspace_reuse_tests {
+    use super::{PcgWorkspace, solve_pcg_with_workspace};
+    use crate::{CmgOptions, CmgPreconditioner, Laplacian, PcgOptions};
+
+    fn fixture() -> (Laplacian, CmgPreconditioner, Vec<f64>) {
+        let graph =
+            Laplacian::from_edges(128, (0..127).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
+        let preconditioner = CmgPreconditioner::build(
+            &graph,
+            CmgOptions {
+                direct_threshold: 2,
+                ..CmgOptions::default()
+            },
+        )
+        .unwrap();
+        let known: Vec<f64> = (0..128).map(|index| (index as f64 / 7.0).cos()).collect();
+        let rhs = graph.matvec(&known).unwrap();
+        (graph, preconditioner, rhs)
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn required_bytes_matches_allocated_workspace() {
+        let (_, preconditioner, _) = fixture();
+        assert_eq!(
+            PcgWorkspace::required_bytes(&preconditioner),
+            PcgWorkspace::new(&preconditioner).byte_len()
+        );
+    }
+
+    #[test]
+    fn solve_overwrites_stale_hot_vectors() {
+        let (graph, preconditioner, rhs) = fixture();
+        let mut workspace = PcgWorkspace::new(&preconditioner);
+        let expected = solve_pcg_with_workspace(
+            &graph,
+            &preconditioner,
+            &rhs,
+            PcgOptions::default(),
+            &mut workspace,
+        )
+        .unwrap();
+        workspace.preconditioned.fill(f64::NAN);
+        workspace.direction.fill(f64::NAN);
+        workspace.matrix_direction.fill(f64::NAN);
+        let actual = solve_pcg_with_workspace(
+            &graph,
+            &preconditioner,
+            &rhs,
+            PcgOptions::default(),
+            &mut workspace,
+        )
+        .unwrap();
+        assert_eq!(expected, actual);
     }
 }

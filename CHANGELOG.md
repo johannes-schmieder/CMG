@@ -16,6 +16,18 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 - Cross-platform correctness tests, reproducible benchmark harnesses, and pinned
   upstream provenance.
 
+### Changed
+
+- Planned within-solve PCG uses fixed-order parallel component centering for
+  large connected systems, preserving deterministic results across eligible
+  multithreaded worker-pool sizes while one worker retains the serial path.
+- Dense parallel-plan construction fills deterministic row-owned CSR blocks in
+  parallel, and prepared solvers compute workspace requirements without a
+  throwaway allocation.
+- Reused CMG/PCG workspaces skip redundant vector clears and repeated internal
+  validation after the public solve boundary has validated the complete
+  workspace once.
+
 There has not yet been a final tagged release. The `0.1.0` value in
 `Cargo.toml` is the version currently being prepared, not evidence of a
 published release.

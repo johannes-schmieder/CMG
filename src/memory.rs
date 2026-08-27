@@ -1,6 +1,8 @@
 //! Conservative pre-build estimates and exact retained-memory reports.
 
-use crate::{CmgError, CmgOptions, ParallelOptions, ParallelPcgSolver, ParallelPcgWorkspace};
+use crate::{CmgError, CmgOptions, ParallelOptions};
+#[cfg(feature = "parallel")]
+use crate::{ParallelPcgSolver, ParallelPcgWorkspace};
 
 /// Dimensions needed for a conservative CMG memory estimate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +93,18 @@ impl CmgMemoryEstimate {
             checked_mul(hierarchy_nnz, 16, "parallel plan sparse storage")?,
             checked_mul(level_vertices, 8, "parallel plan row storage")?,
         ])?;
+        // Dense parallel row construction temporarily retains one canonical
+        // edge-index vector and bounded row-count/offset vectors for one
+        // operator at a time. Use hierarchy-wide bounds for a conservative
+        // pre-build estimate.
+        let plan_build_scratch_bytes = checked_sum(&[
+            checked_mul(
+                hierarchy_nnz,
+                usize_bytes,
+                "parallel plan edge-index scratch",
+            )?,
+            checked_mul(level_vertices, usize_bytes * 4, "parallel plan row scratch")?,
+        ])?;
         let workspace_bytes_each = checked_sum(&[
             checked_mul(problem.vertices, 64, "PCG finest vectors")?,
             checked_mul(level_vertices, 80, "recursive CMG workspace")?,
@@ -126,6 +140,7 @@ impl CmgMemoryEstimate {
             raw_input_bytes,
             retained_solver_bytes,
             plan_bytes,
+            plan_build_scratch_bytes,
             workspace_pool_bytes,
         ])?;
         Ok(Self {
@@ -179,6 +194,7 @@ pub struct CmgMemoryReport {
 }
 
 impl CmgMemoryReport {
+    #[cfg(feature = "parallel")]
     pub(crate) fn new(solver: &ParallelPcgSolver, workspace: &ParallelPcgWorkspace) -> Self {
         let preconditioner_bytes = solver.preconditioner().retained_bytes();
         let parallel_plan_bytes = solver.initialized_plan_bytes();
