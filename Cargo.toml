@@ -3,12 +3,25 @@ name = "cmg"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+autobins = false
 license = "GPL-3.0-only"
 description = "Deterministic Rust implementation of stationary Combinatorial Multigrid with certified PCG"
 repository = "https://github.com/johannes-schmieder/CMG"
 readme = "README.md"
 keywords = ["laplacian", "multigrid", "preconditioner", "pcg", "sparse"]
 categories = ["algorithms", "mathematics", "science"]
+include = [
+    "src/**",
+    "examples/**",
+    "tests/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "RELEASING.md",
+    "docs/**",
+]
 
 [features]
 default = []
@@ -17,8 +30,3 @@ profiling = ["parallel"]
 
 [dependencies]
 rayon = { version = "1.12", optional = true }
-
-[[bin]]
-name = "cmg-parallel-bench"
-path = "src/bin/cmg-parallel-bench.rs"
-required-features = ["parallel"]

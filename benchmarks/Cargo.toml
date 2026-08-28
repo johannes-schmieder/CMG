@@ -43,3 +43,11 @@ path = "src/bin/plan-phase-profile.rs"
 [[bin]]
 name = "scc2-memory"
 path = "src/bin/scc2-memory.rs"
+
+[[bin]]
+name = "cmg-bench"
+path = "src/bin/cmg-bench.rs"
+
+[[bin]]
+name = "cmg-parallel-bench"
+path = "src/bin/cmg-parallel-bench.rs"
