@@ -151,3 +151,18 @@ bash benchmarks/report/compile_report.sh
 The source tree retains the compact summary, report inputs, figures, and final
 PDF. Raw repetitions, logs, `/usr/bin/time -v` receipts, SGE accounting, failed
 runs, and immutable manifests remain in `/projectnb/welfgr/cmg-benchmarks/runs/`.
+
+## SCC2 current-production Rust/MATLAB qualification
+
+The diagnostic harness in `scc2/` can run a matched refresh without repeating
+the complete first-study size matrix. Its `baseline` task kind compares the
+current Rust automatic route with the official MATLAB/C workflow on all five
+one-million-vertex families at 1, 8, 16, and 32 CPUs, using seven measurements
+after two warmups.
+
+The accepted current run is
+`20260828T021628Z-6fe9be77084a-b2v1-rust-matlab-current`, SGE array
+`7341600.1-5`. All 40 configurations passed run-level validation. Its compact
+result is `.ci/performance/scc-rust-matlab-current.json`; full raw evidence
+remains in the immutable SCC archive. See `scc2/README.md` for the exact
+deployment, accounting, and validation commands.

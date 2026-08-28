@@ -32,6 +32,29 @@ python3 benchmarks/scc2/validate_run.py \
 Raw run directories are never overwritten. A failed wrapper, scheduler, or
 scientific run receives a new run ID.
 
+## Current accepted Rust/MATLAB refresh
+
+Run `20260828T021628Z-6fe9be77084a-b2v1-rust-matlab-current` uses source
+`6fe9be77084a60cca330760361dd4c7addc77ccf`, upstream CMG commit
+`19752fc102f8cae8e34f66457bfaccb1aaa60375`, Rust 1.98.0, and MATLAB 2026a.
+SGE array `7341600.1-5` completed all five one-million-vertex families and all
+40 Rust/MATLAB/thread configurations with clean accounting and scientific
+validation. The maintained compact result is
+`.ci/performance/scc-rust-matlab-current.json`.
+
+To repeat this specific current-production comparison under a new immutable
+run ID, deploy and bootstrap a clean source snapshot as above, then submit and
+validate the `baseline` task manifest:
+
+```bash
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc2/submit.sh baseline RUN_ID"
+bash benchmarks/scc2/collect_accounting.sh RUN_ID JOB_ID 5
+module load python3/3.12.4
+python3 benchmarks/scc2/validate_run.py \
+  /projectnb/welfgr/cmg-benchmarks/runs/RUN_ID \
+  /projectnb/welfgr/cmg-benchmarks/runs/RUN_ID/manifests/tasks/baseline.jsonl JOB_ID
+```
+
 ## Current-head pinned-C qualification
 
 The bounded Rust/C kernel study can be refreshed without rerunning MATLAB or

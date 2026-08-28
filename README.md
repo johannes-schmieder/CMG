@@ -202,32 +202,48 @@ principal retained bytes after construction without changing solver behavior.
 
 ## Validated benchmarks
 
-A controlled study on Intel Xeon Gold 6242 nodes compared this crate with the
-official MATLAB solver and its C MEX kernels on five deterministic connected
-graph families, three sizes from 100,000 to 1,000,000 vertices, and matched
-application CPU counts.
-
-Across the 15 cases at 32 application CPUs, the geometric-mean results were:
+A current-code qualification on Intel Xeon Gold 6242 nodes compared this crate
+with the official MATLAB solver and its C MEX kernels on identical
+one-million-vertex inputs from five deterministic connected graph families.
+Both implementations ran on the same host for each family. At 16 application
+CPUs, the geometric-mean results were:
 
 | Measurement | Rust relative to MATLAB | Plain-language interpretation |
 |---|---:|---|
-| CMG setup | `0.265x` | Rust setup was about 3.8 times faster |
-| Reused-preconditioner PCG | `0.783x` | Rust PCG was about 1.3 times faster |
-| Setup plus one solve | `0.666x` | Rust took about two-thirds of MATLAB's time |
-| Process peak RSS | `0.150x` | Rust used about one-sixth of MATLAB's memory |
+| CMG hierarchy setup | `0.182x` | Rust setup was about 5.5 times faster |
+| Stationary CMG application | `0.379x` | Rust application was about 2.6 times faster |
+| Reused-preconditioner PCG | `0.388x` | Rust PCG was about 2.6 times faster |
+| Setup, parallel plan, and one solve | `0.391x` | Rust was about 2.6 times faster end to end |
+| Process peak RSS | `0.227x` | Rust used about 23% of MATLAB's process memory |
 
-All primary cases converged under each package's native stopping rule, with
-independently recomputed accuracy diagnostics retained. Complete single-RHS
-scaling was modest and sometimes nonmonotone: allocating 32 CPUs should not be
-interpreted as a proportional speedup. In the separate 16-RHS supplement,
+All 40 implementation/thread configurations passed scheduler, identity,
+timing, and numerical validation. Rust was faster end to end for every family
+at 16 CPUs, from `0.656x` MATLAB time on the weighted path to `0.248x` on the
+dense worker–firm graph. Sixteen CPUs gave the best geometric mean; grid and
+weak-community were individually fastest at 8 CPUs, while the other three
+families were fastest at 16. Every family regressed at 32 CPUs: the
+geometric-mean Rust total rose from 1.334 seconds at 16 CPUs to 1.803 seconds,
+where Rust still took `0.505x` MATLAB time. Single-RHS scaling therefore remains
+nonmonotone at high core counts.
+
+The packages retain their native stopping rules. Rust's maximum certified
+backward error was `9.24e-9`; MATLAB's maximum native relative residual was
+`9.73e-9`. Rust used fewer PCG iterations in these cases, so the timings compare
+validated package workflows rather than identical iteration counts or residual
+definitions.
+
+The broader first study covers all 15 graph/size cases from 100,000 to
+1,000,000 vertices and a separate 16-RHS supplement. In that supplement,
 Rust's across-RHS executor achieved 7.76-fold geometric-mean scaling from 1 to
 32 CPUs and `0.122x` MATLAB's normalized per-RHS time at 32 CPUs.
 
 These are measurements from one controlled environment, not universal hardware
 guarantees. See the [performance guide](docs/PERFORMANCE.md), the
 [technical benchmark report](output/pdf/benchmarks.pdf), and the
-[machine-readable summary](.ci/performance/scc-latest.json) for methodology,
-accuracy conventions, detailed results, and limitations.
+[current machine-readable qualification](.ci/performance/scc-rust-matlab-current.json)
+for the latest numbers. The report and the
+[first-study machine record](.ci/performance/scc-latest.json) preserve the
+broader graph-size and repeated-RHS evidence.
 
 ## Project status and scope
 
