@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   quality:
@@ -112,63 +112,3 @@ jobs:
 
       - name: Release build (all features)
         run: cargo build --all-features --release --verbose
-
-  report:
-    name: report checkpoint
-    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    needs: [quality, test]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Prepare tested status
-        shell: bash
-        env:
-          TESTED_SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          TEST_RESULT: ${{ needs.test.result }}
-        run: |
-          cat > /tmp/cmg-latest.json <<JSON
-          {
-            "tested_sha": "${TESTED_SHA}",
-            "run_id": "${RUN_ID}",
-            "run_attempt": "${RUN_ATTEMPT}",
-            "quality": "${QUALITY_RESULT}",
-            "cross_platform_tests": "${TEST_RESULT}",
-            "platforms": ["ubuntu-latest", "macos-latest", "windows-latest"],
-            "rustc": "$(rustc --version)",
-            "cargo": "$(cargo --version)"
-          }
-          JSON
-
-      - name: Commit status from latest main
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          for attempt in 1 2 3 4; do
-            git fetch origin main
-            git reset --hard origin/main
-            mkdir -p .ci
-            cp /tmp/cmg-latest.json .ci/latest.json
-            git add .ci/latest.json
-            if git diff --cached --quiet; then
-              exit 0
-            fi
-            git commit -m 'ci: record checkpoint status [skip ci]'
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "status push raced on attempt ${attempt}; retrying from latest main"
-          done
-
-          echo 'failed to publish checkpoint status after four attempts' >&2
-          exit 1

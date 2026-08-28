@@ -50,7 +50,9 @@ cargo build --release --all-features
 cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
 ```
 
-`rust.yml` runs the cross-platform qualification matrix on Ubuntu, macOS, and Windows. The latest published status is `.ci/latest.json`.
+`rust.yml` runs the cross-platform qualification matrix on Ubuntu, macOS, and
+Windows. GitHub checks are the authoritative current status; workflow outputs
+are uploaded as artifacts and never committed back to `main`.
 
 ## Performance work
 
@@ -62,6 +64,10 @@ Durable benchmark workflows:
 - `parallel-performance.yml` — hosted-runner parallel scaling;
 - `c-kernel.yml` — pinned C/Rust differential comparison;
 - `manual-32-thread-qualification.yml` — controlled large-machine scaling.
+
+Automated benchmark workflows publish step summaries and immutable Actions
+artifacts. Promoting a result into `.ci/performance/` is an explicit reviewed
+documentation change, not an automated writeback commit.
 
 See `docs/PERFORMANCE.md` for interpretation.
 

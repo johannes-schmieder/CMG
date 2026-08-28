@@ -29,7 +29,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   benchmark:
@@ -78,7 +78,9 @@ jobs:
           cd candidate
           CMG_BENCH_COMMIT="$TESTED_SHA" \
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-candidate" \
-            cargo build --release --bin cmg-bench
+            cargo build --release \
+              --manifest-path benchmarks/Cargo.toml \
+              --bin cmg-bench
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-routing" \
             cargo build --release \
               --manifest-path benchmarks/Cargo.toml \
@@ -306,30 +308,3 @@ jobs:
           path: results/*.json
           if-no-files-found: error
           retention-days: 30
-
-      - name: Persist latest records safely
-        shell: bash
-        run: |
-          set -euo pipefail
-          git -C candidate config user.name 'github-actions[bot]'
-          git -C candidate config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          for ATTEMPT in 1 2 3 4; do
-            git -C candidate fetch origin main
-            git -C candidate reset --hard origin/main
-            mkdir -p candidate/.ci/performance
-            cp results/latest.json candidate/.ci/performance/latest.json
-            cp results/full-pcg-routing.json \
-              candidate/.ci/performance/full-pcg-routing-latest.json
-            git -C candidate add \
-              .ci/performance/latest.json \
-              .ci/performance/full-pcg-routing-latest.json
-            if git -C candidate diff --cached --quiet; then
-              exit 0
-            fi
-            git -C candidate commit -m 'perf: record benchmark comparison [skip ci]'
-            if git -C candidate push origin HEAD:main; then
-              exit 0
-            fi
-            sleep 2
-          done
-          exit 1
