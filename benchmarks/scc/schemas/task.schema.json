@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc2/schemas/task.schema.json",
+  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc/schemas/task.schema.json",
   "title": "CMG SCC2 task",
   "type": "object",
   "required": ["protocol_version", "task_id", "experiment", "family", "vertices", "implementations", "rhs_count", "warmups", "repetitions", "tolerance", "max_iterations"],

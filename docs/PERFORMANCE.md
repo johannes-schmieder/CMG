@@ -1,6 +1,9 @@
 # Performance and parallel execution
 
-This is the maintained performance reference for the crate. Detailed one-shot optimization experiments are preserved in Git history and GitHub Actions artifacts; the current tree keeps only durable benchmark harnesses and a small set of latest machine-readable records.
+This is the maintained performance reference for the crate. Detailed one-shot
+optimization experiments are preserved in Git history and GitHub Actions
+artifacts; the current tree keeps durable harnesses, accepted study records,
+and a few clearly labeled historical checkpoints.
 
 ## Retained implementation
 
@@ -47,26 +50,12 @@ All 180 main and 48 batch implementation/thread points pass the scheduler, ident
 
 The original main archive is immutable. Its Rust and standalone-C JSON rows recorded `source_commit=unknown` because the wrapper and compiled benchmark driver used different environment-variable names. A derived copy repairs only that field in 96 files from the exact source manifest; its receipt records the raw-tree digest and all before/after hashes. No timing, numerical, input, or environment value is changed. The strengthened validator accepts the derived run, and the report discloses this bookkeeping correction.
 
-The complete first-study report, figures, compact record, and reproduction tooling live in `benchmarks/report/`, `.ci/performance/scc-latest.json`, and `benchmarks/README.md`. Raw repetitions, logs, resource receipts, and SGE accounting remain in the isolated run archive.
-
-## Cumulative checkpoint
-
-`.ci/performance/cumulative-latest.json` compares numerical checkpoint `f50cbd52734ad84af39131c12ad5dae181d8c7b5` with the frozen early Rust baseline `b45b252f88925028e3ad9a73a3f75eeab05f6754`. Later retained changes are not included, so this is a reproducible checkpoint rather than an exact current-head benchmark.
-
-Geometric current/baseline ratios were:
-
-| Metric | Ratio | Interpretation |
-|---|---:|---|
-| graph construction | 0.802x | about 20% faster |
-| hierarchy construction | 0.721x | about 28% faster |
-| stationary CMG application | 0.225x | about 4.4x faster |
-| solve per RHS | 0.372x | about 2.7x faster |
-| graph core bytes | 0.735x | about 27% less |
-| hierarchy core bytes | 0.770x | about 23% less |
-| CMG workspace bytes | 0.460x | about 54% less |
-| PCG workspace bytes | 0.614x | about 39% less |
-
-Individual cases vary; the JSON record contains the complete measurements.
+The complete first-study report, figures, and compact record live in
+`benchmarks/report/` and
+`.ci/performance/scc-first-study-2026-08.json`. The exact first-generation
+harness is preserved at Git tag `benchmarks-v1-2026-08-24`; the active SCC
+workflow is `benchmarks/scc/`. Raw repetitions, logs, resource receipts, and
+SGE accounting remain in the isolated run archive.
 
 ## Direct comparison with pinned C kernels
 
@@ -78,7 +67,12 @@ Individual cases vary; the JSON record contains the complete measurements.
 
 The default single-RHS planned threshold is **350,000 canonical retained edges**, provided more than one worker thread and either a routed operator or sufficiently large deterministic parallel vector work is available. The vector-only route is limited to connected graphs large enough for fixed-chunk centering and reductions. This is a measured performance heuristic, not a mathematical CMG constant, and can be overridden through `ParallelPcgPolicy`.
 
-The latest hosted routing matrix is `.ci/performance/full-pcg-routing-latest.json`; the largest dense worker-firm case in that record reports roughly 2.2x planned-versus-serial full-PCG speedup with unchanged iteration count and solution certificate. `.ci/performance/parallel-latest.json` records repeated-RHS thread scaling.
+The retained hosted routing checkpoint is
+`.ci/performance/routing-checkpoint-959f635.json`; its largest dense worker-firm
+case reports roughly 2.2x planned-versus-serial full-PCG speedup with unchanged
+iteration count and solution certificate.
+`.ci/performance/parallel-checkpoint-88bf024.json` records repeated-RHS thread
+scaling. These are historical checkpoints, not current-head claims.
 
 ### SCC optimization qualification
 
@@ -104,17 +98,15 @@ Hierarchy setup is still dominated by coarse contraction, and contraction is dom
 
 ## Durable machine-readable records
 
-The maintained `.ci/performance/` directory contains only:
+`.ci/performance/index.json` identifies the source revision, scope, and status of
+every retained record. The two accepted SCC records are
+`scc-rust-matlab-current.json` and `scc-first-study-2026-08.json`; all other
+files are explicitly named checkpoints tied to older source revisions.
 
-- `latest.json` — frozen-baseline performance workflow result;
-- `full-pcg-routing-latest.json` — serial versus planned certified PCG matrix;
-- `parallel-latest.json` — hosted-runner thread scaling;
-- `c-kernel-latest.json` — pinned C/Rust differential comparison;
-- `cumulative-latest.json` — frozen cumulative optimization checkpoint;
-- `scc-latest.json` — complete first SCC study and repeated-RHS supplement;
-- `scc-rust-matlab-current.json` — matched current Rust versus official MATLAB/C qualification at one million vertices.
-
-Older experiment records are available from Git history. Raw logs and temporary benchmark details belong in Actions artifacts, not the current source tree.
+Automated performance workflows publish current-head outputs as Actions
+artifacts and step summaries. They do not mutate `main`. Promoting a new
+accepted record is a deliberate, reviewed documentation change. Older
+experiments remain available through Git history and immutable SCC archives.
 
 ## Benchmark discipline
 

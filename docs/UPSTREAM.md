@@ -68,6 +68,13 @@ The benchmark-only `benchmarks/c-kernel/` crate compiles isolated pinned C kerne
 
 The Rust API allows relevant constants to be overridden for testing while keeping the upstream values as defaults.
 
+The official MATLAB hierarchy's status flag 3 means construction stopped at a
+guard rather than the ordinary direct-terminal threshold: either contraction
+removed fewer than two vertices (`n_coarse >= n_fine - 1`) or cumulative
+hierarchy nonzeros exceeded five times the finest-level nonzeros. This is a
+hierarchy-construction warning, distinct from MATLAB PCG's convergence flag.
+Benchmarks retain it explicitly and still validate the final solve independently.
+
 ## Deliberate Rust extensions
 
 The Rust package supports several behaviors beyond the original MATLAB-facing interface while preserving the stationary CMG algorithm:

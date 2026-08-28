@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc2/schemas/counter.schema.json",
+  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc/schemas/counter.schema.json",
   "title": "CMG SCC2 hardware counter record",
   "type": "object",
   "required": ["event_group", "event", "stage", "support_status", "value", "time_enabled", "time_running", "command"],

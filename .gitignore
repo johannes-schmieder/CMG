@@ -6,15 +6,9 @@ __pycache__/
 *.profraw
 qualification-output/
 benchmark-runs/
-benchmark-runs2/
 tmp/pdfs/
 benchmarks/report/*.aux
 benchmarks/report/*.fdb_latexmk
 benchmarks/report/*.fls
 benchmarks/report/*.log
 benchmarks/report/*.out
-benchmarks/report2/*.aux
-benchmarks/report2/*.fdb_latexmk
-benchmarks/report2/*.fls
-benchmarks/report2/*.log
-benchmarks/report2/*.out

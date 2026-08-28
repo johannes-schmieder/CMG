@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "records": [
+    {
+      "path": "scc-rust-matlab-current.json",
+      "status": "accepted-current",
+      "scope": "Matched current Rust versus official MATLAB/C at one million vertices",
+      "run_id": "20260828T021628Z-6fe9be77084a-b2v1-rust-matlab-current",
+      "tested_sha": "6fe9be77084a60cca330760361dd4c7addc77ccf"
+    },
+    {
+      "path": "scc-first-study-2026-08.json",
+      "status": "accepted-historical",
+      "scope": "Broad size scaling and repeated-RHS SCC study",
+      "run_ids": [
+        "20260824T152234Z-a28f802-8111305",
+        "20260824T201216Z-a28f802-148558d"
+      ],
+      "tested_sha": "a28f80223220cebfb1c6c456810c6902c444079c"
+    },
+    {
+      "path": "frozen-baseline-checkpoint-959f635.json",
+      "status": "checkpoint",
+      "scope": "Hosted-runner comparison with the frozen early Rust baseline",
+      "actions_run_id": "33148078254",
+      "tested_sha": "959f635c104bfe3c6b0cbf5903422dc6288b7cf1"
+    },
+    {
+      "path": "routing-checkpoint-959f635.json",
+      "status": "checkpoint",
+      "scope": "Hosted-runner serial versus planned certified PCG routing",
+      "actions_run_id": "33148078254",
+      "tested_sha": "959f635c104bfe3c6b0cbf5903422dc6288b7cf1"
+    },
+    {
+      "path": "parallel-checkpoint-88bf024.json",
+      "status": "checkpoint",
+      "scope": "Hosted-runner repeated-RHS thread scaling",
+      "actions_run_id": "33111365537",
+      "tested_sha": "88bf024538d3e7f0c5b58649c6e6f7a46c1adce6"
+    },
+    {
+      "path": "c-kernel-checkpoint-2335e6b.json",
+      "status": "checkpoint",
+      "scope": "Pinned upstream C versus Rust kernel comparison",
+      "tested_sha": "2335e6b49b688a5ec854b5a9b72d8b8ab1a1ae43"
+    },
+    {
+      "path": "cumulative-checkpoint-f50cbd5.json",
+      "status": "checkpoint",
+      "scope": "Cumulative optimization comparison with the frozen early Rust baseline",
+      "tested_sha": "f50cbd52734ad84af39131c12ad5dae181d8c7b5"
+    }
+  ],
+  "policy": "Accepted study records are retained in Git. Routine workflow outputs are Actions artifacts and do not write back to main."
+}

@@ -8,7 +8,7 @@ project_root=/projectnb/welfgr/cmg-benchmarks
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-python3 benchmarks/scc2/protocol.py >/dev/null 2>&1 || true
+python3 benchmarks/scc/protocol.py >/dev/null 2>&1 || true
 python3 - "$run_id" "$source_sha" <<'PY'
 import re
 import sys
@@ -30,7 +30,7 @@ git archive --format=tar --output="$archive" "$source_sha"
 archive_sha=$(shasum -a 256 "$archive" | awk '{print $1}')
 mkdir -p "$temporary/tasks"
 for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge; do
-    python3 benchmarks/scc2/tasks/generate_tasks.py "$kind" "$temporary/tasks/$kind.jsonl"
+    python3 benchmarks/scc/tasks/generate_tasks.py "$kind" "$temporary/tasks/$kind.jsonl"
 done
 find "$temporary/tasks" -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$temporary/task-manifests.sha256"
 

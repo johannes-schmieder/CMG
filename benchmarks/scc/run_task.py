@@ -201,12 +201,12 @@ def main() -> None:
     (work_receipts / "input-sha256.json").write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
 
     topology_path = work_receipts / "topology.json"
-    subprocess.run([sys.executable, str(code_root / "benchmarks/scc2/topology.py"), str(topology_path)], check=True)
+    subprocess.run([sys.executable, str(code_root / "benchmarks/scc/topology.py"), str(topology_path)], check=True)
     topology = json.loads(topology_path.read_text())
     if task["experiment"] == "smoke":
         capabilities_path = work_receipts / "capabilities.json"
         subprocess.run(
-            [sys.executable, str(code_root / "benchmarks/scc2/capabilities.py"), str(capabilities_path)],
+            [sys.executable, str(code_root / "benchmarks/scc/capabilities.py"), str(capabilities_path)],
             check=True,
         )
         shutil.copy2(capabilities_path, task_receipts / "capabilities.json")
@@ -303,7 +303,7 @@ def main() -> None:
                     completed = subprocess.run(
                         [
                             sys.executable,
-                            str(code_root / "benchmarks/scc2/perf_counters.py"),
+                            str(code_root / "benchmarks/scc/perf_counters.py"),
                             event_group,
                             str(counter_json),
                             "--",

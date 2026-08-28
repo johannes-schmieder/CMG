@@ -1,8 +1,10 @@
-# CMG benchmark and profiling harnesses
+# Benchmark and profiling tools
 
-`benchmarks/` is a separate, non-published Cargo crate. Benchmark-only code and profiling features therefore stay outside the numerical library's normal runtime dependency path. Binaries print machine-readable JSON.
+`benchmarks/` is a separate, unpublished Cargo crate. Benchmark-only code and
+profiling features therefore stay out of the library package and its normal
+dependency path. The command-line tools emit machine-readable JSON.
 
-## Core benchmarks
+## Local tools
 
 | Binary | Purpose |
 |---|---|
@@ -11,22 +13,22 @@
 | `hierarchy-alloc` | hierarchy construction with requested-allocation tracking |
 | `terminal-build` | direct-terminal construction |
 | `single-rhs-solve` | certified serial PCG with a reused hierarchy/workspace |
-| `parallel-cmg-apply` | serial versus selectively planned CMG application |
+| `parallel-cmg-apply` | serial versus planned CMG application |
 | `parallel-pcg-solve` | serial versus planned complete PCG solve |
-| `full-pcg-routing` | routing crossover matrix used by durable workflows |
+| `full-pcg-routing` | automatic-routing crossover matrix |
 | `prepared-solver-auto` | automatic versus explicit serial/within/across-RHS strategies |
-
-## Profiling tools
-
-| Binary | Purpose |
-|---|---|
 | `hierarchy-phase-profile` | hierarchy phase attribution |
-| `contraction-subphase-profile` | contraction mapping/sort/merge/finalization attribution |
+| `contraction-subphase-profile` | contraction subphase attribution |
 | `pcg-phase-profile` | certified outer-PCG phase attribution |
+| `plan-phase-profile` | parallel-plan construction attribution |
 
-`benchmarks/c-kernel/` is an isolated crate for the pinned upstream C kernel and stationary-cycle comparison.
+The `cmg-bench` and `cmg-parallel-bench` binaries support the durable GitHub
+Actions comparisons. `scc-benchmark`, `scc2-diagnostics`, and `scc2-memory`
+support archived or current SCC protocols. The `scc2` names and
+`cmg-scc2-v1` data identifier are retained for compatibility with immutable
+run archives; the maintained SCC workflow itself now lives in `scc/`.
 
-## Build
+Build all tools with:
 
 ```bash
 cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
@@ -39,9 +41,6 @@ cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin hierarchy-build -- worker-firm 500000 5
 
 cargo run --release --manifest-path benchmarks/Cargo.toml \
-  --bin hierarchy-alloc -- worker-firm 500000 5
-
-cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin single-rhs-solve -- worker-firm 100000 7
 
 cargo run --release --manifest-path benchmarks/Cargo.toml \
@@ -51,118 +50,44 @@ cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin prepared-solver-auto -- worker-firm 100000 8 7 4
 ```
 
-For process RSS on Linux, wrap the release binary with `/usr/bin/time -v`.
+For process RSS on Linux, wrap a release binary with `/usr/bin/time -v`.
 
-## Comparison protocol
+## Comparison discipline
 
-1. Build baseline and candidate with the same compiler, feature set, and CPU settings.
-2. Use identical deterministic graphs and RHSs.
-3. Warm both binaries and interleave measured order.
-4. Use medians from repeated observations.
-5. Verify hierarchy metadata, iterations, residual certificates, backward errors, and scaled solution differences before interpreting time.
-6. Measure setup, application, solve, requested allocation, retained memory, and process RSS separately when relevant.
-7. Retain only changes with a clear end-to-end benefit and acceptable memory tradeoff.
+1. Build baseline and candidate with the same compiler, features, and CPU settings.
+2. Use identical deterministic graphs and right-hand sides.
+3. Warm both binaries, alternate their order, and compare repeated medians.
+4. Check hierarchy metadata, iterations, residual certificates, backward errors,
+   and scaled solution differences before interpreting time.
+5. Separate setup, application, solve, requested allocation, retained memory,
+   and process RSS when the distinction matters.
+6. Keep an optimization only when the end-to-end benefit justifies its memory
+   and maintenance cost.
 
-The current tree stores only durable latest records under `.ci/performance/`. Detailed historical experiment evidence remains available through Git history and Actions artifacts. See `docs/PERFORMANCE.md`.
+## Large-scale SCC workflow
 
-## SCC large-scale Rust/MATLAB study
+[`scc/`](scc/) is the active, immutable-run workflow for Rust versus the
+official MATLAB solver and its C MEX kernels. It creates deterministic binary
+fixtures, records source and binary identities, runs SGE arrays, validates
+application and scheduler results, and reduces accepted runs into tables and
+figures. See [`scc/README.md`](scc/README.md) for exact commands.
 
-The SCC study compares the Rust package with the official MATLAB solver and its
-default C MEX build at upstream commit
-`19752fc102f8cae8e34f66457bfaccb1aaa60375`. It also runs the standalone
-`c-kernel` harness within its bounded hot-kernel scope. The benchmark-only Rust
-entry point is `scc-benchmark`; it does not change the public library API.
+The accepted current qualification is run
+`20260828T021628Z-6fe9be77084a-b2v1-rust-matlab-current`. Its compact result is
+[`scc-rust-matlab-current.json`](../.ci/performance/scc-rust-matlab-current.json);
+full raw evidence remains in the immutable SCC archive.
 
-The maintained workflow lives in:
+The broader August 2026 size-scaling study is frozen under
+[`report/`](report/) with compact record
+[`scc-first-study-2026-08.json`](../.ci/performance/scc-first-study-2026-08.json).
+Its original harness is available from the Git tag
+`benchmarks-v1-2026-08-24`; it is not maintained alongside the current
+protocol.
 
-| Path | Role |
-|---|---|
-| `src/bin/scc-benchmark.rs` | deterministic graph/vector generation and Rust stage timings |
-| `matlab/scc_benchmark.m` | official CMG+MEX setup, apply, PCG, and batch timings |
-| `scc/bootstrap.sh` | pinned Rust build, tests/lints, and MATLAB MEX fallback build |
-| `scc/submit.sh` | smoke, main, and batch SGE submissions |
-| `scc/run_array.sh` | rotated/interleaved per-task execution in `$TMPDIR` |
-| `scc/validate_task.py` | per-task identity, numerical, timing, RSS, and hash checks |
-| `scc/validate_run.py` | complete-result and `qacct` acceptance checks |
-| `analysis/summarize.py` | compact CSV/JSON, figures, and LaTeX data generation |
-| `report/benchmarks.tex` | technical report source |
+## Other retained evidence
 
-On SCC, deploy an exact snapshot with `rsync` without `--delete`, record the
-source and upstream checksums under the new run's `manifests/`, and run:
-
-```bash
-bash /projectnb/welfgr/cmg-benchmarks/code/benchmarks/scc/bootstrap.sh "$RUN_ID"
-bash /projectnb/welfgr/cmg-benchmarks/code/benchmarks/scc/submit.sh smoke "$RUN_ID"
-```
-
-After the smoke job leaves the queue, collect and validate accounting:
-
-```bash
-bash benchmarks/scc/collect_accounting.sh "$RUN_ID" "$SMOKE_JOB_ID" 3
-python3 benchmarks/scc/validate_run.py \
-  "/projectnb/welfgr/cmg-benchmarks/runs/$RUN_ID" \
-  benchmarks/scc/tasks-smoke.tsv "$SMOKE_JOB_ID" '1:32'
-```
-
-Only after smoke acceptance, create a new immutable production run ID, execute
-`bootstrap.sh`, and submit the 15-task main array and four-task batch array:
-
-```bash
-bash benchmarks/scc/submit.sh main "$MAIN_RUN_ID"
-bash benchmarks/scc/submit.sh batch "$BATCH_RUN_ID"
-```
-
-Each production task requests project `welfgr`, 32 OpenMP slots, Gold-6242 CPU
-type, 8 GiB per core, whole-node linear binding, and a two-hour hard limit.
-Array concurrency is capped at two; no queue is selected explicitly. Application
-CPU limits are 1, 2, 4, 8, 16, and 32. Inputs and temporary solve work remain in
-the scheduler-provided `$TMPDIR`.
-
-Collect accepted run directories locally under an ignored `benchmark-runs/`
-directory and reduce them with:
-
-```bash
-python3 benchmarks/analysis/repair_source_identity.py \
-  benchmark-runs/RAW_MAIN_RUN_ID \
-  benchmark-runs/derived/RAW_MAIN_RUN_ID
-```
-
-The repair command is not part of the normal protocol. It exists to preserve the
-immutable August 2026 main archive while correcting its narrowly scoped compiled
-`source_commit` bookkeeping defect. It refuses to overwrite a derived run,
-requires the exact source identity from the raw manifest, permits changes only to
-that JSON field, and writes a receipt with the raw-tree digest and every
-before/after file hash. Use the raw run directly for future runs whose compiled
-identity is already correct.
-
-```bash
-uv run --with-requirements benchmarks/analysis/requirements.txt \
-  python benchmarks/analysis/summarize.py \
-  --run benchmark-runs/derived/MAIN_RUN_ID \
-  --run benchmark-runs/BATCH_RUN_ID \
-  --figures benchmarks/report/figures \
-  --summary-csv benchmarks/report/data/summary.csv \
-  --results-tex benchmarks/report/data/results.tex \
-  --latest-json .ci/performance/scc-latest.json
-
-bash benchmarks/report/compile_report.sh
-```
-
-The source tree retains the compact summary, report inputs, figures, and final
-PDF. Raw repetitions, logs, `/usr/bin/time -v` receipts, SGE accounting, failed
-runs, and immutable manifests remain in `/projectnb/welfgr/cmg-benchmarks/runs/`.
-
-## SCC2 current-production Rust/MATLAB qualification
-
-The diagnostic harness in `scc2/` can run a matched refresh without repeating
-the complete first-study size matrix. Its `baseline` task kind compares the
-current Rust automatic route with the official MATLAB/C workflow on all five
-one-million-vertex families at 1, 8, 16, and 32 CPUs, using seven measurements
-after two warmups.
-
-The accepted current run is
-`20260828T021628Z-6fe9be77084a-b2v1-rust-matlab-current`, SGE array
-`7341600.1-5`. All 40 configurations passed run-level validation. Its compact
-result is `.ci/performance/scc-rust-matlab-current.json`; full raw evidence
-remains in the immutable SCC archive. See `scc2/README.md` for the exact
-deployment, accounting, and validation commands.
+`c-kernel/` is an isolated crate for bounded comparisons with pinned upstream C
+kernels. It is not an end-to-end C solver. Durable machine records are indexed
+by [`.ci/performance/index.json`](../.ci/performance/index.json). Current
+workflow output is uploaded as GitHub Actions artifacts instead of being
+committed back to `main`.

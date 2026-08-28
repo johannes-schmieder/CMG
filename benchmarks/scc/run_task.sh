@@ -15,6 +15,6 @@ export RUSTUP_HOME="$project_root/toolchains/rustup"
 export CARGO_HOME="$project_root/toolchains/cargo"
 export PATH="$CARGO_HOME/bin:$PATH"
 
-python3 "$code_root/benchmarks/scc2/run_task.py" "$run_id" "$task_file" "$task_id"
-python3 "$code_root/benchmarks/scc2/validate_task.py" \
+python3 "$code_root/benchmarks/scc/run_task.py" "$run_id" "$task_file" "$task_id"
+python3 "$code_root/benchmarks/scc/validate_task.py" \
     "$project_root/runs/$run_id" "$task_file" "$task_id"

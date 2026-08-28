@@ -239,11 +239,12 @@ Rust's across-RHS executor achieved 7.76-fold geometric-mean scaling from 1 to
 
 These are measurements from one controlled environment, not universal hardware
 guarantees. See the [performance guide](docs/PERFORMANCE.md), the
-[technical benchmark report](output/pdf/benchmarks.pdf), and the
-[current machine-readable qualification](.ci/performance/scc-rust-matlab-current.json)
+[technical benchmark report](https://github.com/johannes-schmieder/CMG/blob/main/output/pdf/benchmarks.pdf),
+and the
+[current machine-readable qualification](https://github.com/johannes-schmieder/CMG/blob/main/.ci/performance/scc-rust-matlab-current.json)
 for the latest numbers. The report and the
-[first-study machine record](.ci/performance/scc-latest.json) preserve the
-broader graph-size and repeated-RHS evidence.
+[first-study machine record](https://github.com/johannes-schmieder/CMG/blob/main/.ci/performance/scc-first-study-2026-08.json)
+preserve the broader graph-size and repeated-RHS evidence.
 
 ## Project status and scope
 
@@ -278,8 +279,8 @@ cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
 - [`CHANGELOG.md`](CHANGELOG.md) — user-facing release history.
 - [`RELEASING.md`](RELEASING.md) — version, tag, GitHub Release, and future SSC
   publication process.
-- [`benchmarks/README.md`](benchmarks/README.md) — reproducible benchmark and
-  profiling harnesses.
+- [Benchmark and profiling tools](https://github.com/johannes-schmieder/CMG/blob/main/benchmarks/README.md)
+  — reproducible benchmark and profiling harnesses.
 
 ## Citation
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc2/schemas/memory.schema.json",
+  "$id": "https://github.com/johannes-schmieder/CMG/benchmarks/scc/schemas/memory.schema.json",
   "title": "CMG SCC2 separate-process memory-stage result",
   "type": "object",
   "required": [
