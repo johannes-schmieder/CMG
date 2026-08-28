@@ -31,3 +31,27 @@ python3 benchmarks/scc2/validate_run.py \
 
 Raw run directories are never overwritten. A failed wrapper, scheduler, or
 scientific run receives a new run ID.
+
+## Current-head pinned-C qualification
+
+The bounded Rust/C kernel study can be refreshed without rerunning MATLAB or
+the complete SCC2 matrix. It measures path and worker-firm cases at 100,000,
+300,000, and 1,000,000 vertices on one isolated Gold-6242 node:
+
+```bash
+bash benchmarks/scc2/deploy.sh RUN_ID SOURCE_SHA
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc2/bootstrap_c_kernel.sh RUN_ID"
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc2/submit_c_kernel.sh RUN_ID"
+```
+
+After the scalar job finishes, save `qacct -j JOB_ID` as
+`receipts/accounting/JOB_ID.txt`, then run:
+
+```bash
+python3 benchmarks/scc2/validate_c_kernel_run.py \
+  /projectnb/welfgr/cmg-benchmarks/runs/RUN_ID JOB_ID
+```
+
+The validator requires exact source/archive/binary/upstream identity, all six
+result files, seven repetitions, finite timings, numerical agreement, an
+application success receipt, and clean SGE accounting.
