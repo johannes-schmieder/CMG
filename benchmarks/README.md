@@ -21,6 +21,7 @@ dependency path. The command-line tools emit machine-readable JSON.
 | `contraction-subphase-profile` | contraction subphase attribution |
 | `pcg-phase-profile` | certified outer-PCG phase attribution |
 | `plan-phase-profile` | parallel-plan construction attribution |
+| `fixed-topology-sequence` | changing-weight assembly, caller buffers, retained preconditioners, warm starts, routing, profiles, and allocations |
 
 The `cmg-bench` and `cmg-parallel-bench` binaries support the durable GitHub
 Actions comparisons. `scc-benchmark`, `scc2-diagnostics`, and `scc2-memory`
@@ -48,6 +49,10 @@ cargo run --release --manifest-path benchmarks/Cargo.toml \
 
 cargo run --release --manifest-path benchmarks/Cargo.toml \
   --bin prepared-solver-auto -- worker-firm 100000 8 7 4
+
+cargo run --release --manifest-path benchmarks/Cargo.toml \
+  --bin fixed-topology-sequence -- --case balanced --edges 25000 \
+  --rhs 61 --threads 8 --repetitions 5
 ```
 
 For process RSS on Linux, wrap a release binary with `/usr/bin/time -v`.

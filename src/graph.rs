@@ -1,6 +1,6 @@
 //! Canonical weighted graph-Laplacian representation.
 
-use crate::CmgError;
+use crate::{CmgError, Components};
 #[cfg(feature = "parallel")]
 use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 #[cfg(feature = "parallel")]
@@ -77,7 +77,7 @@ impl Edge {
 }
 
 /// A deterministic edge-list representation of a weighted graph Laplacian.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Laplacian {
     vertex_count: usize,
     edges: Arc<Vec<Edge>>,
@@ -85,6 +85,22 @@ pub struct Laplacian {
     matrix_nnz: usize,
     operator_norm_bound: f64,
     lineage: Arc<()>,
+    prepared_topology_lineage: Option<Arc<()>>,
+    prepared_components: Option<Arc<Components>>,
+}
+
+impl core::fmt::Debug for Laplacian {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Laplacian")
+            .field("vertex_count", &self.vertex_count)
+            .field("edges", &self.edges)
+            .field("diagonal", &self.diagonal)
+            .field("matrix_nnz", &self.matrix_nnz)
+            .field("operator_norm_bound", &self.operator_norm_bound)
+            .field("lineage", &self.lineage)
+            .finish()
+    }
 }
 
 impl PartialEq for Laplacian {
@@ -259,7 +275,37 @@ impl Laplacian {
             matrix_nnz,
             operator_norm_bound,
             lineage: Arc::new(()),
+            prepared_topology_lineage: None,
+            prepared_components: None,
         })
+    }
+
+    pub(crate) fn from_prepared_parts(
+        vertex_count: usize,
+        edges: Vec<Edge>,
+        diagonal: Vec<f64>,
+        prepared_topology_lineage: Arc<()>,
+        prepared_components: Arc<Components>,
+    ) -> Self {
+        debug_assert_eq!(diagonal.len(), vertex_count);
+        let mut diagonal_nnz = 0_usize;
+        let mut maximum_degree = 0.0_f64;
+        for &degree in &diagonal {
+            diagonal_nnz += usize::from(degree != 0.0);
+            maximum_degree = maximum_degree.max(degree);
+        }
+        let matrix_nnz = diagonal_nnz + 2 * edges.len();
+        let operator_norm_bound = 2.0 * maximum_degree;
+        Self {
+            vertex_count,
+            edges: Arc::new(edges),
+            diagonal: Arc::new(diagonal),
+            matrix_nnz,
+            operator_norm_bound,
+            lineage: Arc::new(()),
+            prepared_topology_lineage: Some(prepared_topology_lineage),
+            prepared_components: Some(prepared_components),
+        }
     }
 
     /// Return the number of vertices, including isolated vertices.
@@ -301,6 +347,34 @@ impl Laplacian {
 
     pub(crate) fn shares_lineage(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.lineage, &other.lineage)
+    }
+
+    pub(crate) fn shares_prepared_topology(&self, other: &Self) -> bool {
+        matches!(
+            (&self.prepared_topology_lineage, &other.prepared_topology_lineage),
+            (Some(left), Some(right)) if Arc::ptr_eq(left, right)
+        ) && matches!(
+            (&self.prepared_components, &other.prepared_components),
+            (Some(left), Some(right)) if Arc::ptr_eq(left, right)
+        )
+    }
+
+    pub(crate) fn prepared_components(&self) -> Option<&Arc<Components>> {
+        self.prepared_components.as_ref()
+    }
+
+    pub(crate) fn belongs_to_prepared_topology(
+        &self,
+        lineage: &Arc<()>,
+        components: &Arc<Components>,
+    ) -> bool {
+        self.prepared_topology_lineage
+            .as_ref()
+            .is_some_and(|candidate| Arc::ptr_eq(candidate, lineage))
+            && self
+                .prepared_components
+                .as_ref()
+                .is_some_and(|candidate| Arc::ptr_eq(candidate, components))
     }
 
     #[cfg(feature = "parallel")]

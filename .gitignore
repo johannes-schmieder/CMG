@@ -12,3 +12,5 @@ benchmarks/report/*.fdb_latexmk
 benchmarks/report/*.fls
 benchmarks/report/*.log
 benchmarks/report/*.out
+docs/teaching/build/
+/literature/

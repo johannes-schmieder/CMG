@@ -25,6 +25,7 @@ mod pcg;
 #[cfg(feature = "profiling")]
 mod pcg_profile;
 mod preconditioner;
+mod prepared;
 mod sddm;
 mod sddm_solver;
 mod workspace;
@@ -44,18 +45,35 @@ pub use forest::{build_forest_grouping_with_executor, maximum_weight_forest_with
 pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
 pub use ldl::GroundedLdl;
-pub use memory::{CmgMemoryEstimate, CmgMemoryReport, CmgProblemSize};
+pub use memory::{
+    CmgMemoryEstimate, CmgMemoryReport, CmgProblemSize, RepeatedPcgMemoryEstimate,
+    RepeatedPcgMemoryReport,
+};
 pub use options::{CmgOptions, PcgOptions, ValidationOptions};
 #[cfg(feature = "parallel")]
 pub use parallel_solver::{
     DEFAULT_MIN_PLANNED_EDGES, ParallelPcgBatchReport, ParallelPcgBatchResult,
     ParallelPcgExecution, ParallelPcgPolicy, ParallelPcgSolver, ParallelPcgWorkspace,
 };
-pub use pcg::{PcgResult, PcgWorkspace, solve_pcg, solve_pcg_batch, solve_pcg_with_workspace};
+#[cfg(feature = "profiling")]
+pub use pcg::PcgBatchPhaseProfile;
+#[cfg(feature = "profiling")]
+pub use pcg::profile_pcg_batch_into_with_workspace;
+pub use pcg::{
+    PcgBatchMut, PcgBatchRef, PcgBatchWorkspace, PcgDiagnostics, PcgResult, PcgWorkspace,
+    solve_pcg, solve_pcg_batch, solve_pcg_batch_into_with_workspace,
+    solve_pcg_batch_with_retained_preconditioner_into_with_workspace,
+    solve_pcg_into_with_workspace, solve_pcg_with_retained_preconditioner_into_with_workspace,
+    solve_pcg_with_workspace,
+};
 #[cfg(feature = "parallel")]
 pub use pcg::{
-    solve_pcg_batch_parallel, solve_pcg_batch_with_executor, solve_pcg_with_plan,
-    solve_pcg_with_plan_and_workspace,
+    solve_pcg_batch_into_with_executor, solve_pcg_batch_into_with_plan_and_workspace,
+    solve_pcg_batch_parallel, solve_pcg_batch_with_executor,
+    solve_pcg_batch_with_plan_and_retained_preconditioner_into_with_workspace,
+    solve_pcg_batch_with_retained_preconditioner_into_with_executor, solve_pcg_with_plan,
+    solve_pcg_with_plan_and_retained_preconditioner_into_with_workspace,
+    solve_pcg_with_plan_and_workspace, solve_pcg_with_plan_into_with_workspace,
 };
 #[cfg(feature = "profiling")]
 pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan};
@@ -67,6 +85,7 @@ pub use preconditioner::{
     HierarchyPhaseProfile, ParallelPlanBuildProfile, ParallelPlanLevelProfile,
     PreconditionerBuildProfile,
 };
+pub use prepared::{PreparedLaplacianTopology, PreparedLaplacianWorkspace};
 pub use sddm::{SddmAugmentation, SddmMatrix};
 pub use sddm_solver::{SddmResult, SddmSolver, SddmWorkspace, solve_sddm};
 pub use workspace::CmgWorkspace;

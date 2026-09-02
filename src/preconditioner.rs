@@ -9,7 +9,6 @@ use crate::{
 use crate::{CsrLaplacian, HierarchyLevel, ParallelExecutor};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-#[cfg(feature = "parallel")]
 use std::sync::Arc;
 #[cfg(feature = "profiling")]
 use std::time::Instant;
@@ -458,7 +457,7 @@ impl ParallelCmgPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmgPreconditioner {
     hierarchy: CmgHierarchy,
-    finest_components: Components,
+    finest_components: Arc<Components>,
     coarse_centering: Vec<CenteringPlan>,
     direct_terminal: Option<GroundedLdl>,
     repeat_counts: Vec<usize>,
@@ -560,7 +559,10 @@ impl CmgPreconditioner {
             .ok_or(CmgError::InvalidHierarchy {
                 context: "hierarchy contains no finest level",
             })?;
-        let finest_components = Components::from_laplacian(finest.graph());
+        let finest_components = finest.graph().prepared_components().map_or_else(
+            || Arc::new(Components::from_laplacian(finest.graph())),
+            Arc::clone,
+        );
         let coarse_centering = hierarchy
             .levels()
             .iter()
@@ -628,8 +630,18 @@ impl CmgPreconditioner {
         finest.shares_lineage(graph) || finest == graph
     }
 
+    pub(crate) fn matches_prepared_topology(&self, graph: &Laplacian) -> bool {
+        self.hierarchy.levels()[0]
+            .graph()
+            .shares_prepared_topology(graph)
+    }
+
     pub(crate) fn finest_components(&self) -> &Components {
         &self.finest_components
+    }
+
+    pub(crate) fn finest_component_bytes(&self) -> usize {
+        self.finest_components.byte_len()
     }
 
     /// Return retained heap bytes for fine validation and coarse centering metadata.
@@ -647,6 +659,16 @@ impl CmgPreconditioner {
     #[must_use]
     pub fn workspace(&self) -> CmgWorkspace {
         CmgWorkspace::new(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+        )
+    }
+
+    /// Fallibly allocate reusable storage compatible with this preconditioner.
+    pub fn try_workspace(&self) -> Result<CmgWorkspace, CmgError> {
+        CmgWorkspace::try_new(
             &self.hierarchy,
             self.direct_terminal.as_ref(),
             &self.finest_components,

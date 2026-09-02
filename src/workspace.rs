@@ -119,6 +119,73 @@ impl CmgWorkspace {
         }
     }
 
+    pub(crate) fn try_new(
+        hierarchy: &CmgHierarchy,
+        direct_terminal: Option<&GroundedLdl>,
+        finest_components: &Components,
+        coarse_centering: &[CenteringPlan],
+    ) -> Result<Self, CmgError> {
+        let level_count = hierarchy.levels().len();
+        let mut dimensions = Vec::new();
+        dimensions
+            .try_reserve_exact(level_count)
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "CMG workspace dimensions",
+            })?;
+        dimensions.extend(
+            hierarchy
+                .levels()
+                .iter()
+                .map(|level| level.graph().vertex_count()),
+        );
+        let projected_rhs = try_zeroed(
+            dimensions.first().copied().unwrap_or(0),
+            "CMG workspace projected RHS",
+        )?;
+        let last = dimensions.len().saturating_sub(1);
+        let mut levels = Vec::new();
+        levels
+            .try_reserve_exact(dimensions.len())
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "CMG workspace levels",
+            })?;
+        for (index, &dimension) in dimensions.iter().enumerate() {
+            let coarse_dimension = dimensions.get(index + 1).copied().unwrap_or(0);
+            let factor_dimension = if index == last {
+                direct_terminal
+                    .map(GroundedLdl::active_dimension)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            levels.push(LevelWorkspace {
+                residual: try_zeroed(dimension, "CMG workspace residual")?,
+                coarse_rhs: try_zeroed(coarse_dimension, "CMG workspace coarse RHS")?,
+                coarse_correction: try_zeroed(coarse_dimension, "CMG workspace coarse correction")?,
+                factor_forward: try_zeroed(factor_dimension, "CMG workspace factor forward")?,
+                factor_solution: try_zeroed(factor_dimension, "CMG workspace factor solution")?,
+            });
+        }
+        debug_assert_eq!(coarse_centering.len(), dimensions.len().saturating_sub(1));
+        let component_workspace = finest_components.try_workspace()?;
+        let mut centering_workspaces = Vec::new();
+        centering_workspaces
+            .try_reserve_exact(coarse_centering.len())
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "CMG centering workspaces",
+            })?;
+        for plan in coarse_centering {
+            centering_workspaces.push(plan.try_workspace()?);
+        }
+        Ok(Self {
+            levels,
+            component_workspace,
+            centering_workspaces,
+            dimensions,
+            projected_rhs,
+        })
+    }
+
     /// Return the number of hierarchy levels represented by this workspace.
     #[must_use]
     pub fn level_count(&self) -> usize {
@@ -267,6 +334,15 @@ impl CmgWorkspace {
     pub(crate) fn put_centering(&mut self, level: usize, workspace: CenteringWorkspace) {
         self.centering_workspaces[level] = workspace;
     }
+}
+
+fn try_zeroed(len: usize, context: &'static str) -> Result<Vec<f64>, CmgError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| CmgError::AllocationFailed { context })?;
+    values.resize(len, 0.0);
+    Ok(values)
 }
 
 fn validate_length(context: &'static str, expected: usize, actual: usize) -> Result<(), CmgError> {

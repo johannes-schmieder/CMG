@@ -18,6 +18,7 @@ Keep durable files only when they serve production code, correctness/regression 
 | `ldl.rs` | grounded terminal factorization and solve |
 | `preconditioner.rs` | stationary recursive CMG cycle |
 | `pcg.rs` | certified PCG and repeated-RHS interfaces |
+| `prepared.rs` | fixed-topology validation and changing-weight numeric assembly |
 | `sddm.rs` / `sddm_solver.rs` | SDDM validation, augmentation, solve wrapper |
 | `workspace.rs` | reusable numerical scratch storage |
 | `execution.rs` | optional package-owned parallel executor |
@@ -33,6 +34,14 @@ The public API is re-exported from `src/lib.rs`; implementation details should r
 Performance work must preserve deterministic canonical graph construction, exact Laplacian symmetry, component-wise compatibility checks, pinned stationary CMG hierarchy/repeat semantics, deterministic grounding/normalization, final residual/backward-error verification against the original system, and hierarchy metadata unless the algorithm is deliberately changed and separately reviewed.
 
 Never accept a benchmark improvement by relaxing tolerances, changing the RHS or matrix, skipping certification, or silently changing the stationary algorithm.
+
+Prepared-topology frames carry two distinct identities. Every numeric assembly
+gets a fresh numeric lineage, while clones of one
+`PreparedLaplacianTopology` share an exact topology/component lineage. Legacy
+preconditioner matching remains numeric. The explicit retained-preconditioner
+PCG entry points require the shared prepared lineage and must use the current
+frame for every matrix-vector product, residual replacement, operator bound,
+and terminal certificate.
 
 ## Build and test
 

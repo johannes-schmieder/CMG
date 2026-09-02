@@ -276,6 +276,9 @@ cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
   guidance, bottlenecks, and limitations.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — code map, repository policy,
   and performance-change discipline.
+- [CMG teaching supplement](docs/teaching/README.md) — a visual, step-by-step
+  introduction to graph Laplacians, CG, PCG, the CMG hierarchy, and a public
+  Veneto worker–firm example.
 - [`CHANGELOG.md`](CHANGELOG.md) — user-facing release history.
 - [`RELEASING.md`](RELEASING.md) — version, tag, GitHub Release, and future SSC
   publication process.

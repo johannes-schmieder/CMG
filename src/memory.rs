@@ -1,8 +1,12 @@
 //! Conservative pre-build estimates and exact retained-memory reports.
 
 use crate::{CmgError, CmgOptions, ParallelOptions};
+use crate::{
+    CmgPreconditioner, Laplacian, PcgBatchWorkspace, PcgDiagnostics, PreparedLaplacianTopology,
+    PreparedLaplacianWorkspace,
+};
 #[cfg(feature = "parallel")]
-use crate::{ParallelPcgSolver, ParallelPcgWorkspace};
+use crate::{ParallelCmgPlan, ParallelPcgSolver, ParallelPcgWorkspace};
 
 /// Dimensions needed for a conservative CMG memory estimate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +244,406 @@ impl CmgMemoryReport {
     #[must_use]
     pub const fn total_retained_bytes(self) -> usize {
         self.total_retained_bytes
+    }
+}
+
+/// Conservative memory estimate for repeated prepared-topology PCG solves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepeatedPcgMemoryEstimate {
+    prepared_topology_bytes: usize,
+    shared_component_metadata_bytes: usize,
+    numeric_assembly_scratch_bytes: usize,
+    current_numeric_graph_bytes: usize,
+    retained_preconditioner_bytes: usize,
+    parallel_plan_bytes: usize,
+    workspace_bytes_each: usize,
+    workspace_pool_bytes: usize,
+    total_solver_retained_bytes: usize,
+    caller_logical_bytes: usize,
+    build_peak_bytes: usize,
+}
+
+impl RepeatedPcgMemoryEstimate {
+    /// Estimate prepared topology, current numeric state, a retained hierarchy,
+    /// an optional plan, and caller-owned batch workspaces with checked arithmetic.
+    pub fn conservative(
+        problem: CmgProblemSize,
+        cmg_options: CmgOptions,
+        parallel_options: ParallelOptions,
+        retain_parallel_plan: bool,
+        include_initial_guesses: bool,
+    ) -> Result<Self, CmgError> {
+        let parallel_options = parallel_options.validate()?;
+        let unbounded_options = ParallelOptions {
+            workspace_memory_budget_bytes: None,
+            ..parallel_options
+        };
+        let legacy = CmgMemoryEstimate::conservative(problem, cmg_options, unbounded_options)?;
+        let usize_bytes = core::mem::size_of::<usize>();
+        let shared_component_metadata_bytes = checked_mul(
+            problem.vertices,
+            usize_bytes * 2,
+            "prepared shared components",
+        )?;
+        // The legacy hierarchy bound already includes conservative component
+        // metadata. Count only the topology-owned maps here so the shared
+        // finest components are not included twice in the combined total.
+        let prepared_topology_bytes = checked_sum(&[
+            checked_mul(problem.canonical_edges, 8, "prepared canonical keys")?,
+            checked_mul(
+                checked_add(problem.canonical_edges, 1, "prepared group offsets")?,
+                usize_bytes,
+                "prepared group offsets",
+            )?,
+            checked_mul(problem.input_edges, usize_bytes * 2, "prepared input maps")?,
+        ])?;
+        let numeric_assembly_scratch_bytes =
+            checked_mul(problem.input_edges, 8, "prepared duplicate scratch")?;
+        let current_numeric_graph_bytes = checked_sum(&[
+            checked_mul(problem.canonical_edges, 16, "current canonical edges")?,
+            checked_mul(problem.vertices, 8, "current numeric diagonal")?,
+        ])?;
+        let inferred_plan_bytes = legacy
+            .total_retained_bytes
+            .checked_sub(legacy.retained_solver_bytes)
+            .and_then(|value| value.checked_sub(legacy.workspace_pool_bytes))
+            .ok_or(CmgError::InvalidHierarchy {
+                context: "repeated PCG plan estimate underflows",
+            })?;
+        let parallel_plan_bytes = if retain_parallel_plan {
+            inferred_plan_bytes
+        } else {
+            0
+        };
+        let workspace_bytes_each = checked_add(
+            legacy.workspace_bytes_each,
+            checked_mul(problem.vertices, 16, "batch gather staging")?,
+            "repeated PCG workspace",
+        )?;
+        let requested_concurrency = parallel_options
+            .threads
+            .max(1)
+            .min(problem.right_hand_sides);
+        if let Some(budget_bytes) = parallel_options.workspace_memory_budget_bytes {
+            if budget_bytes < workspace_bytes_each {
+                return Err(CmgError::MemoryBudgetExceeded {
+                    required_bytes: workspace_bytes_each,
+                    budget_bytes,
+                });
+            }
+        }
+        let budget_concurrency = parallel_options
+            .workspace_memory_budget_bytes
+            .map_or(requested_concurrency, |budget| {
+                budget / workspace_bytes_each.max(1)
+            });
+        let concurrency = requested_concurrency.min(budget_concurrency);
+        let workspace_pool_bytes = checked_mul(
+            workspace_bytes_each,
+            concurrency,
+            "repeated PCG workspace pool",
+        )?;
+        let retained_preconditioner_bytes = legacy.retained_solver_bytes;
+        let total_solver_retained_bytes = checked_sum(&[
+            prepared_topology_bytes,
+            numeric_assembly_scratch_bytes,
+            current_numeric_graph_bytes,
+            retained_preconditioner_bytes,
+            parallel_plan_bytes,
+            workspace_pool_bytes,
+        ])?;
+        let logical_vectors = 2_usize + usize::from(include_initial_guesses);
+        let caller_logical_bytes = checked_sum(&[
+            checked_mul(
+                checked_mul(
+                    problem.vertices,
+                    problem.right_hand_sides,
+                    "caller batch values",
+                )?,
+                checked_mul(logical_vectors, 8, "caller vector bytes")?,
+                "caller logical vectors",
+            )?,
+            checked_mul(
+                problem.right_hand_sides,
+                core::mem::size_of::<PcgDiagnostics>(),
+                "caller diagnostics",
+            )?,
+        ])?;
+        let build_peak_bytes = checked_sum(&[
+            total_solver_retained_bytes,
+            checked_mul(problem.input_edges, 16, "prepared topology build records")?,
+        ])?;
+        Ok(Self {
+            prepared_topology_bytes,
+            shared_component_metadata_bytes,
+            numeric_assembly_scratch_bytes,
+            current_numeric_graph_bytes,
+            retained_preconditioner_bytes,
+            parallel_plan_bytes,
+            workspace_bytes_each,
+            workspace_pool_bytes,
+            total_solver_retained_bytes,
+            caller_logical_bytes,
+            build_peak_bytes,
+        })
+    }
+
+    /// Return conservative prepared-topology bytes excluding shared components.
+    #[must_use]
+    pub const fn prepared_topology_bytes(self) -> usize {
+        self.prepared_topology_bytes
+    }
+
+    /// Return shared component bytes included once in the hierarchy estimate.
+    #[must_use]
+    pub const fn shared_component_metadata_bytes(self) -> usize {
+        self.shared_component_metadata_bytes
+    }
+
+    /// Return conservative numeric-assembly scratch bytes.
+    #[must_use]
+    pub const fn numeric_assembly_scratch_bytes(self) -> usize {
+        self.numeric_assembly_scratch_bytes
+    }
+
+    /// Return conservative current numeric graph bytes.
+    #[must_use]
+    pub const fn current_numeric_graph_bytes(self) -> usize {
+        self.current_numeric_graph_bytes
+    }
+
+    /// Return conservative retained stale-preconditioner bytes.
+    #[must_use]
+    pub const fn retained_preconditioner_bytes(self) -> usize {
+        self.retained_preconditioner_bytes
+    }
+
+    /// Return conservative optional parallel-plan bytes.
+    #[must_use]
+    pub const fn parallel_plan_bytes(self) -> usize {
+        self.parallel_plan_bytes
+    }
+
+    /// Return conservative bytes for each reusable batch workspace.
+    #[must_use]
+    pub const fn workspace_bytes_each(self) -> usize {
+        self.workspace_bytes_each
+    }
+
+    /// Return conservative retained workspace-pool bytes.
+    #[must_use]
+    pub const fn workspace_pool_bytes(self) -> usize {
+        self.workspace_pool_bytes
+    }
+
+    /// Return conservative solver-retained bytes, excluding caller data arrays.
+    #[must_use]
+    pub const fn total_solver_retained_bytes(self) -> usize {
+        self.total_solver_retained_bytes
+    }
+
+    /// Return logical bytes in caller RHS, guess, solution, and diagnostic buffers.
+    #[must_use]
+    pub const fn caller_logical_bytes(self) -> usize {
+        self.caller_logical_bytes
+    }
+
+    /// Return conservative peak bytes during preparation and solver construction.
+    #[must_use]
+    pub const fn build_peak_bytes(self) -> usize {
+        self.build_peak_bytes
+    }
+}
+
+/// Exact principal retained bytes for a prepared current frame and retained hierarchy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepeatedPcgMemoryReport {
+    prepared_topology_bytes: usize,
+    numeric_assembly_scratch_bytes: usize,
+    current_numeric_graph_bytes: usize,
+    retained_preconditioner_bytes: usize,
+    shared_component_metadata_bytes: usize,
+    parallel_plan_bytes: usize,
+    workspace_pool_bytes: usize,
+    total_solver_retained_bytes: usize,
+    caller_logical_bytes: usize,
+}
+
+impl RepeatedPcgMemoryReport {
+    /// Report exact serial retained bytes without a parallel plan.
+    pub fn serial(
+        topology: &PreparedLaplacianTopology,
+        assembly_workspace: &PreparedLaplacianWorkspace,
+        current_graph: &Laplacian,
+        retained_preconditioner: &CmgPreconditioner,
+        workspaces: &[PcgBatchWorkspace],
+        right_hand_sides: usize,
+        include_initial_guesses: bool,
+    ) -> Result<Self, CmgError> {
+        Self::build(
+            topology,
+            assembly_workspace,
+            current_graph,
+            retained_preconditioner,
+            workspaces,
+            0,
+            right_hand_sides,
+            include_initial_guesses,
+        )
+    }
+
+    /// Report exact retained bytes including an optional parallel plan.
+    #[cfg(feature = "parallel")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_parallel_plan(
+        topology: &PreparedLaplacianTopology,
+        assembly_workspace: &PreparedLaplacianWorkspace,
+        current_graph: &Laplacian,
+        retained_preconditioner: &CmgPreconditioner,
+        plan: Option<&ParallelCmgPlan>,
+        workspaces: &[PcgBatchWorkspace],
+        right_hand_sides: usize,
+        include_initial_guesses: bool,
+    ) -> Result<Self, CmgError> {
+        if let Some(plan) = plan {
+            plan.validate(retained_preconditioner)?;
+        }
+        Self::build(
+            topology,
+            assembly_workspace,
+            current_graph,
+            retained_preconditioner,
+            workspaces,
+            plan.map_or(0, ParallelCmgPlan::byte_len),
+            right_hand_sides,
+            include_initial_guesses,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        topology: &PreparedLaplacianTopology,
+        assembly_workspace: &PreparedLaplacianWorkspace,
+        current_graph: &Laplacian,
+        retained_preconditioner: &CmgPreconditioner,
+        workspaces: &[PcgBatchWorkspace],
+        parallel_plan_bytes: usize,
+        right_hand_sides: usize,
+        include_initial_guesses: bool,
+    ) -> Result<Self, CmgError> {
+        if !topology.matches_graph(current_graph)
+            || !retained_preconditioner.matches_prepared_topology(current_graph)
+        {
+            return Err(CmgError::InvalidHierarchy {
+                context: "repeated memory report objects have incompatible topology",
+            });
+        }
+        let prepared_topology_bytes = topology.retained_bytes();
+        let numeric_assembly_scratch_bytes = assembly_workspace.byte_len();
+        let current_numeric_graph_bytes = current_graph.retained_bytes();
+        let shared_component_metadata_bytes = retained_preconditioner.finest_component_bytes();
+        let retained_preconditioner_bytes = retained_preconditioner
+            .retained_bytes()
+            .checked_sub(shared_component_metadata_bytes)
+            .ok_or(CmgError::InvalidHierarchy {
+                context: "retained preconditioner component accounting underflows",
+            })?;
+        for workspace in workspaces {
+            workspace.validate(retained_preconditioner)?;
+        }
+        let workspace_pool_bytes = workspaces.iter().try_fold(0_usize, |total, workspace| {
+            checked_add(total, workspace.byte_len(), "repeated workspace report")
+        })?;
+        let total_solver_retained_bytes = checked_sum(&[
+            prepared_topology_bytes,
+            numeric_assembly_scratch_bytes,
+            current_numeric_graph_bytes,
+            retained_preconditioner_bytes,
+            parallel_plan_bytes,
+            workspace_pool_bytes,
+        ])?;
+        let logical_vectors = 2_usize + usize::from(include_initial_guesses);
+        let caller_logical_bytes = checked_sum(&[
+            checked_mul(
+                checked_mul(
+                    current_graph.vertex_count(),
+                    right_hand_sides,
+                    "reported caller batch values",
+                )?,
+                checked_mul(logical_vectors, 8, "reported caller vector bytes")?,
+                "reported caller logical vectors",
+            )?,
+            checked_mul(
+                right_hand_sides,
+                core::mem::size_of::<PcgDiagnostics>(),
+                "reported caller diagnostics",
+            )?,
+        ])?;
+        Ok(Self {
+            prepared_topology_bytes,
+            numeric_assembly_scratch_bytes,
+            current_numeric_graph_bytes,
+            retained_preconditioner_bytes,
+            shared_component_metadata_bytes,
+            parallel_plan_bytes,
+            workspace_pool_bytes,
+            total_solver_retained_bytes,
+            caller_logical_bytes,
+        })
+    }
+
+    /// Return exact prepared-topology bytes, including shared components once.
+    #[must_use]
+    pub const fn prepared_topology_bytes(self) -> usize {
+        self.prepared_topology_bytes
+    }
+
+    /// Return exact numeric-assembly scratch bytes.
+    #[must_use]
+    pub const fn numeric_assembly_scratch_bytes(self) -> usize {
+        self.numeric_assembly_scratch_bytes
+    }
+
+    /// Return exact current numeric graph bytes.
+    #[must_use]
+    pub const fn current_numeric_graph_bytes(self) -> usize {
+        self.current_numeric_graph_bytes
+    }
+
+    /// Return exact retained hierarchy bytes after shared-component de-duplication.
+    #[must_use]
+    pub const fn retained_preconditioner_bytes(self) -> usize {
+        self.retained_preconditioner_bytes
+    }
+
+    /// Return component bytes shared by topology and retained hierarchy.
+    #[must_use]
+    pub const fn shared_component_metadata_bytes(self) -> usize {
+        self.shared_component_metadata_bytes
+    }
+
+    /// Return exact optional plan bytes.
+    #[must_use]
+    pub const fn parallel_plan_bytes(self) -> usize {
+        self.parallel_plan_bytes
+    }
+
+    /// Return exact caller-owned workspace-pool bytes.
+    #[must_use]
+    pub const fn workspace_pool_bytes(self) -> usize {
+        self.workspace_pool_bytes
+    }
+
+    /// Return exact solver-retained bytes, excluding caller data arrays.
+    #[must_use]
+    pub const fn total_solver_retained_bytes(self) -> usize {
+        self.total_solver_retained_bytes
+    }
+
+    /// Return logical caller-buffer bytes separately from solver retention.
+    #[must_use]
+    pub const fn caller_logical_bytes(self) -> usize {
+        self.caller_logical_bytes
     }
 }
 

@@ -9,6 +9,39 @@ and a few clearly labeled historical checkpoints.
 
 The production implementation includes compact canonical edge storage, shared Laplacian hierarchy ownership, compact aggregation/CSR indices where qualified, compressed terminal factors, reduced CMG/PCG workspaces, cached endpoint keys, optimized forest splitting and contraction, row-owned parallel construction of dense planned operators, fixed-order parallel centering and norm reductions, a package-owned Rayon executor, selectively routed within-solve parallelism, memory-bounded concurrency across right-hand sides, and final original-system residual certification.
 
+### Fixed topology with changing weights
+
+`PreparedLaplacianTopology` validates endpoints, duplicate groups, components,
+and the input-to-canonical edge map once. Each numeric frame still validates
+all weights and deterministically rebuilds canonical weights, the diagonal,
+matrix-nonzero metadata, and the operator-norm bound. Duplicate weights retain
+the legacy weight sort and compensated summation order. Numeric graph storage
+is new for every frame; topology and numeric-assembly scratch are reusable.
+
+Caller-buffer PCG entry points return `PcgDiagnostics` without constructing an
+owned solution result. `PcgBatchRef` and `PcgBatchMut` accept checked contiguous
+or two-stride layouts, and `PcgBatchWorkspace` owns any gather/guess scratch.
+Optional guesses are centered component by component and initialize the
+residual with the current operator. Passing no guess follows the legacy
+zero-start path.
+
+The explicit retained-preconditioner functions accept only current and stale
+graphs sharing the same prepared topology/component identity. The stale
+hierarchy and optional plan act only as the preconditioner; the current graph
+defines all operator products and certificates. CMG reports iterations,
+restarts, projection norm, residual, backward error, and failures, but embeds
+no rebuild rule. Consumer policy can therefore use observed weight change,
+preconditioner age, batch width, fresh setup cost, iterations/restarts,
+certificate quality, and prior failures.
+
+The durable `fixed-topology-sequence` benchmark covers the 80-by-64 balanced
+bipartite and 5,000-by-4,000 chain fixtures, changing-weight sequences, caller
+buffers, retained hierarchies, warm starts, one/eight-thread strategies,
+profiling, allocations, and retained memory. Fixture generation, tracing, and
+workspace/plan preparation are outside timed regions. Use separate invocations
+for timing and allocation interpretation; no result file is committed by the
+harness.
+
 ## Current Rust versus official MATLAB/C qualification
 
 Run `20260828T021628Z-6fe9be77084a-b2v1-rust-matlab-current` is the matched current-production comparison. It uses source `6fe9be77084a60cca330760361dd4c7addc77ccf`, Rust 1.98.0, MATLAB 2026a with its default C MEX compiler, and the official CMG source pinned at `19752fc102f8cae8e34f66457bfaccb1aaa60375`. The five deterministic connected graph families each have one million vertices and span roughly one million to eight million canonical edges. Each family ran both implementations and all four application CPU counts on the same Intel Xeon Gold 6242 host. Timings are medians of seven measurements after two warmups.

@@ -148,6 +148,11 @@ pub enum CmgError {
         /// Configured workspace-memory budget.
         budget_bytes: usize,
     },
+    /// A new fallible preparation path could not reserve its required storage.
+    AllocationFailed {
+        /// Allocation or preparation stage that could not reserve storage.
+        context: &'static str,
+    },
     /// An option was non-finite or outside its allowed range.
     InvalidOption {
         /// Option name.
@@ -278,6 +283,9 @@ impl fmt::Display for CmgError {
                 formatter,
                 "workspace memory budget {budget_bytes} bytes is below the required {required_bytes} bytes"
             ),
+            Self::AllocationFailed { context } => {
+                write!(formatter, "allocation failed while preparing {context}")
+            }
             Self::InvalidOption { name, value } => {
                 write!(formatter, "option {name} has invalid value {value}")
             }

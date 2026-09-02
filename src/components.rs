@@ -30,6 +30,30 @@ impl ComponentWorkspace {
         }
     }
 
+    pub(crate) fn try_new(component_count: usize) -> Result<Self, CmgError> {
+        Ok(Self {
+            sums: try_filled(component_count, 0.0, "component workspace sums")?,
+            corrections: try_filled(component_count, 0.0, "component workspace corrections")?,
+            scales: try_filled(component_count, 0.0, "component workspace scales")?,
+            scale_corrections: try_filled(
+                component_count,
+                0.0,
+                "component workspace scale corrections",
+            )?,
+            means: try_filled(component_count, 0.0, "component workspace means")?,
+            projection_corrections: try_filled(
+                component_count,
+                0.0,
+                "component workspace projection corrections",
+            )?,
+            representatives: try_filled(
+                component_count,
+                usize::MAX,
+                "component workspace representatives",
+            )?,
+        })
+    }
+
     pub(crate) fn validate(&self, component_count: usize) -> Result<(), CmgError> {
         for (context, actual) in [
             ("ComponentWorkspace sums", self.sums.len()),
@@ -82,6 +106,14 @@ impl CenteringWorkspace {
             corrections: vec![0.0; component_count],
             means: vec![0.0; component_count],
         }
+    }
+
+    fn try_new(component_count: usize) -> Result<Self, CmgError> {
+        Ok(Self {
+            sums: try_filled(component_count, 0.0, "centering workspace sums")?,
+            corrections: try_filled(component_count, 0.0, "centering workspace corrections")?,
+            means: try_filled(component_count, 0.0, "centering workspace means")?,
+        })
     }
 
     fn validate(&self, component_count: usize) -> Result<(), CmgError> {
@@ -142,6 +174,10 @@ impl CenteringPlan {
 
     pub(crate) fn workspace(&self) -> CenteringWorkspace {
         CenteringWorkspace::new(self.sizes.len())
+    }
+
+    pub(crate) fn try_workspace(&self) -> Result<CenteringWorkspace, CmgError> {
+        CenteringWorkspace::try_new(self.sizes.len())
     }
 
     #[cfg(feature = "parallel")]
@@ -334,6 +370,48 @@ impl Components {
         Self { labels, sizes }
     }
 
+    pub(crate) fn try_from_endpoints<I>(vertex_count: usize, endpoints: I) -> Result<Self, CmgError>
+    where
+        I: IntoIterator<Item = (usize, usize)>,
+    {
+        let mut parent = Vec::new();
+        parent
+            .try_reserve_exact(vertex_count)
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "prepared component parents",
+            })?;
+        parent.extend(0..vertex_count);
+        for (left, right) in endpoints {
+            union_min_root(&mut parent, left, right);
+        }
+        for vertex in 0..vertex_count {
+            let root = find_root(&mut parent, vertex);
+            parent[vertex] = root;
+        }
+
+        let mut root_to_label =
+            try_filled(vertex_count, usize::MAX, "prepared component root labels")?;
+        let mut labels = try_filled(vertex_count, 0, "prepared component labels")?;
+        let mut component_count = 0;
+        for vertex in 0..vertex_count {
+            let root = parent[vertex];
+            let label = if root_to_label[root] == usize::MAX {
+                let next = component_count;
+                component_count += 1;
+                root_to_label[root] = next;
+                next
+            } else {
+                root_to_label[root]
+            };
+            labels[vertex] = label;
+        }
+        let mut sizes = try_filled(component_count, 0, "prepared component sizes")?;
+        for &label in &labels {
+            sizes[label] += 1;
+        }
+        Ok(Self { labels, sizes })
+    }
+
     /// Return the number of connected components.
     #[must_use]
     pub fn count(&self) -> usize {
@@ -354,6 +432,10 @@ impl Components {
 
     pub(crate) fn workspace(&self) -> ComponentWorkspace {
         ComponentWorkspace::new(self.count())
+    }
+
+    pub(crate) fn try_workspace(&self) -> Result<ComponentWorkspace, CmgError> {
+        ComponentWorkspace::try_new(self.count())
     }
 
     #[cfg(feature = "parallel")]
@@ -676,6 +758,15 @@ impl Components {
         }
         Ok(())
     }
+}
+
+fn try_filled<T: Clone>(len: usize, value: T, context: &'static str) -> Result<Vec<T>, CmgError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| CmgError::AllocationFailed { context })?;
+    values.resize(len, value);
+    Ok(values)
 }
 
 #[cfg(feature = "parallel")]

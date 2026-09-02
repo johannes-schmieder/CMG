@@ -1,251 +1,213 @@
 \documentclass[10pt]{article}
-\usepackage[margin=0.82in]{geometry}
+\usepackage[margin=0.80in]{geometry}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
 \usepackage{microtype}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage{longtable}
 \usepackage{array}
 \usepackage{xcolor}
 \usepackage{hyperref}
 \usepackage{fancyhdr}
 \usepackage{caption}
-\usepackage{subcaption}
 \usepackage{enumitem}
 \usepackage{siunitx}
 \usepackage{seqsplit}
+\usepackage{tabularx}
 
 \providecommand{\BenchmarkFigureRoot}{figures}
 \providecommand{\BenchmarkDataRoot}{data}
-\input{\BenchmarkDataRoot/results.tex}
+\input{\BenchmarkDataRoot/current_results.tex}
 
-\hypersetup{colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!55!black,citecolor=blue!45!black}
+\definecolor{RustBlue}{HTML}{0072B2}
+\definecolor{MatlabOrange}{HTML}{D55E00}
+\hypersetup{
+  pdftitle={Current Production CMG Benchmark Qualification},
+  pdfauthor={CMG maintainers},
+  colorlinks=true,
+  linkcolor=RustBlue!75!black,
+  urlcolor=RustBlue!75!black
+}
 \setlist{nosep,leftmargin=*}
 \captionsetup{font=small,labelfont=bf}
 \pagestyle{fancy}
 \fancyhf{}
-\lhead{CMG large-scale benchmark study}
+\lhead{CMG current Rust/MATLAB qualification}
 \rhead{\thepage}
 \setlength{\headheight}{13.6pt}
+\setlength{\tabcolsep}{5pt}
+\sisetup{detect-all}
 
-\title{Large-Scale CMG Benchmarks\\\large Rust versus the official MATLAB/C MEX package}
+\title{Current Production CMG Benchmark Qualification\\
+\large Rust versus the official MATLAB/C MEX package}
 \author{CMG maintainers}
-\date{August 2026}
+\date{Updated 29 August 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This report compares the current Rust Combinatorial Multigrid (CMG) package with the official MATLAB solver and its C MEX kernels at upstream commit
-\texttt{19752fc102f8cae8e34f66457bfaccb1aaa60375}.  It separately reports CMG hierarchy construction, stationary preconditioner application, single-right-hand-side preconditioned conjugate gradient (PCG), setup-plus-solve time, input assembly, memory, CPU scaling, and a compact sixteen-right-hand-side supplement.  At 32 application CPUs, Rust required a geometric-mean \BenchmarkSetupRatio{} times the MATLAB setup time and \BenchmarkTotalRatio{} times the setup-plus-solve time across the 15 main graph/size cases; its process peak RSS was \BenchmarkMemoryRatio{} times MATLAB's.  Single-RHS scaling from 1 to 32 CPUs was modest, but Rust's across-RHS workflow achieved a \BenchmarkRustBatchSpeedup{}-fold batch speedup and \BenchmarkBatchRatio{} times MATLAB's per-RHS time.  The standalone pinned-C measurements are intentionally limited to hot kernels and a small recursive-cycle comparison; they are not described as an end-to-end C solver.
+This report describes the current production comparison between the Rust package and the official MATLAB solver with its default C MEX build.  Five deterministic connected graphs, each with one million vertices and between about one and eight million canonical edges, were evaluated at 1, 8, 16, and 32 application CPUs.  Each reported point is the median of \ReportRepetitions{} measurements after \ReportWarmups{} warmups.  At 16 CPUs, geometric-mean Rust/MATLAB ratios are \ReportSixteenSetupRatio{} for hierarchy setup, \ReportSixteenApplyRatio{} for stationary preconditioner application, \ReportSixteenPcgRatio{} for reused-preconditioner PCG, \ReportSixteenTotalRatio{} for setup plus one solve, and \ReportSixteenRssRatio{} for process peak resident memory.  Rust is faster in setup-plus-solve for every family at every tested CPU count.  Sixteen CPUs minimize Rust's aggregate single-right-hand-side latency on the tested hardware; 32 CPUs remain supported but regress for every family.
 \end{abstract}
 
-\section{Scope and interpretation}
+\section{Decision summary}
 
-The primary question is how the two maintained user-facing implementations behave as graph size, sparsity, topology, and application CPU count change.  The comparison follows the official MATLAB workflow: first call \texttt{cmg\_precondition}, then pass its function handle to MATLAB \texttt{pcg}.  Rust uses its benchmark-only driver and package-owned parallel executor; no public Rust library API was added or changed.
+\noindent\fcolorbox{RustBlue!45}{RustBlue!4}{%
+\parbox{0.955\linewidth}{%
+\textbf{Measured default on Intel Xeon Gold 6242: 16 application CPUs for one large right-hand side.}
+At that setting, Rust takes \ReportSixteenRustTotal{} seconds in geometric mean versus \ReportSixteenMatlabTotal{} seconds for MATLAB, a Rust/MATLAB ratio of \ReportSixteenTotalRatio{}.  Rust's one-to-16-CPU speedup is \ReportRustSpeedupSixteen{}x, versus \ReportMatlabSpeedupSixteen{}x for MATLAB.  Moving from 16 to 32 CPUs multiplies Rust total time by \ReportRustThirtyTwoPenalty{} and MATLAB total time by \ReportMatlabThirtyTwoPenalty{}.  Grid and weak-community inputs are individually fastest in Rust at 8 CPUs; the other three families are fastest at 16.}}
 
-All primary timing figures show medians of three measured repetitions following one warm-up.  They are a compact qualification study, not a claim of formal uncertainty bounds.  Queue waiting time is excluded.  Unsupported, timed-out, memory-failed, or nonconverged cases would remain in the raw archive and be marked in plots; validated production points shown here passed both scheduler and application checks.
+The principal comparison is the complete native package workflow, not an isolated kernel.  Rust's setup-plus-solve total includes hierarchy construction, parallel-plan construction when routed, and PCG.  MATLAB's total includes its official \texttt{cmg\_precondition} workflow followed by \texttt{pcg}.  The matrix is already resident, so binary input and graph or sparse-matrix assembly are excluded.  Lower Rust/MATLAB ratios favor Rust throughout this report.
 
-\section{Graph families and deterministic inputs}
+\section{Benchmark configuration and protocol}
 
-For each graph task, the Rust generator writes one canonical little-endian binary edge list plus a bundle of deterministic solution vectors and right-hand sides.  MATLAB and Rust read identical bytes.  Task receipts record SHA-256 hashes for the graph, right-hand sides, truth vectors, and metadata.  A second independent generation was byte-compared during the smoke phase.
+The benchmark is accepted run \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportRunId}}, SGE array \ReportJobId.  It evaluates Rust source \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportSourceCommit}} against the official CMG source pinned at \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportUpstreamCommit}}.  The figures are generated from the run's 40 reduced configuration rows and checked numerically against the maintained compact record before the PDF is compiled.
 
-\begin{longtable}{>{\raggedright\arraybackslash}p{0.22\linewidth}>{\raggedright\arraybackslash}p{0.64\linewidth}}
+\clearpage
+\begin{table}[!htbp]
+\centering
+\caption{Controlled study design.}
+\label{tab:design}
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{0.27\linewidth}>{\raggedright\arraybackslash}X}
 \toprule
-Family & Construction and intended characteristic \\
+Item & Current qualification \\
 \midrule
-\endhead
-Weighted path & A connected chain with deterministic positive weights; average degree approaches two. \\
-Two-dimensional grid & A nearly square row-major grid with deterministic positive weights; average degree approaches four. \\
-Worker-firm, degree 3 & A balanced bipartite graph in which each worker has three deterministic firm links. \\
-Worker-firm, degree 16 & The same bipartite construction with sixteen worker links, yielding roughly eight million canonical edges at one million vertices. \\
-Weak community & Sixteen grid-like blocks connected by one chain bridge between successive blocks. \\
+Implementations & Current Rust production package; official MATLAB package with its default C MEX build \\
+Toolchains & Rust \ReportRustVersion{}; MATLAB \ReportMatlabVersion{} \\
+Hardware & \ReportCpuModel{}; whole-node 32-slot SGE allocation; application limits of 1, 8, 16, and 32 CPUs \\
+Graphs & Weighted path; 2D grid; worker-firm degree 3; worker-firm degree 16; weak community; all one million vertices \\
+Timing & \ReportWarmups{} warmups followed by \ReportRepetitions{} measured repetitions; medians reported; per-configuration bootstrap intervals shown for total time \\
+Accuracy & Native stopping logic in each package; tolerance \ReportTolerance{}; at most 1,000 iterations; independent residual and backward-error checks retained \\
+Identity & Shared deterministic graph, right-hand side, truth vector, and metadata bytes; hashes recorded per task \\
 \bottomrule
-\end{longtable}
-
-The main grid uses 100,000, 300,000, and 1,000,000 vertices for every family.  Primary plots use vertices on the horizontal axis; a companion figure uses canonical edge count so density differences are visible directly.
-
-\section{Stage definitions and accuracy conventions}
-
-\begin{description}[style=nextline]
-\item[\texttt{preconditioner\_setup}] CMG hierarchy and terminal factor construction only.
-\item[\texttt{parallel\_plan\_setup}] Rust-only construction of the reusable parallel execution plan, reported separately.
-\item[\texttt{preconditioner\_apply}] One stationary CMG application using an existing hierarchy and workspace.  Fast applications are looped for at least one second and normalized per call.
-\item[\texttt{pcg\_solve}] One PCG solve using a reused preconditioner.  The batch supplement reports a sixteen-RHS timing block and normalized per-RHS throughput.
-\item[\texttt{solver\_total}] Fresh preconditioner setup, Rust parallel-plan setup when applicable, and a PCG solve, with the matrix already resident.
-\item[Input and assembly] Binary input load and graph/sparse-matrix assembly are supplementary and excluded from \texttt{solver\_total}.
-\end{description}
-
-Both implementations use tolerance $10^{-8}$ and at most 1,000 iterations while preserving their native stopping logic.  Every result also records iterations, an independently recomputed relative residual, backward error, and a gauge-invariant scaled difference from the deterministic reference solution.  Across accepted points, the maximum independently computed relative residual is \BenchmarkMaxRelativeResidual{} and the maximum backward error is \BenchmarkMaxBackwardError{}.
-
-\section{Runtime environment and provenance}
-
-\begin{tabular}{>{\raggedright\arraybackslash}p{0.28\linewidth}p{0.65\linewidth}}
-\toprule
-Item & Recorded value \\
-\midrule
-SCC project & \texttt{welfgr}; isolated root \texttt{/projectnb/welfgr/cmg-benchmarks} \\
-Allocated CPU type & Intel Xeon Gold 6242; 32-slot whole-node binding \\
-Observed hosts & \BenchmarkHosts \\
-Observed CPU string & \BenchmarkCpuModel \\
-Rust compiler & Rust 1.98.0, project-local minimal toolchain plus rustfmt/clippy \\
-Rust build & \texttt{cargo build --release --locked --all-features}; no native CPU flags \\
-MATLAB & \BenchmarkMatlabReleases; default MEX compiler and \texttt{mex -largeArrayDims} \\
-TeX & TeX Live 2023 \\
-Post-processing & Python \BenchmarkPostprocessPython{} with Matplotlib \BenchmarkPostprocessMatplotlib{} \\
-Source identity & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\BenchmarkSourceCommits}} \\
-Environment identity & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\BenchmarkEnvironmentIds}} \\
-Run identity & \BenchmarkRunIds \\
-\bottomrule
-\end{tabular}
-
-Each production array task requested \texttt{-P welfgr}, \texttt{-pe omp 32}, \texttt{cpu\_type=Gold-6242}, \texttt{mem\_per\_core=8G}, a two-hour limit, and whole-node binding.  Concurrency was capped at two simultaneous homogeneous allocations.  Application thread limits were 1, 2, 4, 8, 16, and 32; order was rotated by task and Rust/MATLAB order alternated.  MATLAB's applied \texttt{maxNumCompThreads} limit is recorded in every row.  The largest observed process peak RSS was \BenchmarkMaxRssGiB{} GiB.  SGE \texttt{qacct} records, \texttt{/usr/bin/time -v} process receipts, logs, raw repetitions, source manifests, and input hashes remain in the isolated run archive.
-
-The immutable main-run archive was retained even though its Rust and standalone-C rows contained \texttt{source\_commit=unknown}: the build wrapper exported the source identity under a different environment-variable name than those two compiled drivers expected.  MATLAB rows, source manifests, deployed-file hashes, and build logs already carried the exact identity.  A reproducible derived copy changes only that field in \BenchmarkProvenanceRepairFiles{} JSON files from run \BenchmarkProvenanceRepairRuns{}.  Its receipt records the raw-tree digest plus every before/after file hash, and the strengthened validator rejects any timing, numerical, input, or environment change.  All findings below use the validated derived copy; the original archive remains byte-for-byte unchanged.
-
-\section{Size and density results}
-
-Across the 15 matched 32-CPU size/family points, the geometric-mean Rust-to-MATLAB time ratios are \BenchmarkSetupRatio{} for CMG setup, \BenchmarkApplyRatio{} for one stationary application, \BenchmarkPcgRatio{} for reused-preconditioner PCG, and \BenchmarkTotalRatio{} for setup plus solve.  Thus setup is the clearest aggregate advantage; solve time also favors Rust, but by less.  The corresponding geometric-mean process peak-RSS ratio is \BenchmarkMemoryRatio{}.  At one million vertices, Rust's setup-plus-solve time is lower for every family: the gap is smallest for the path and largest for the dense worker-firm graph, where the medians are 6.73 seconds for Rust and 14.8 seconds for MATLAB.  These aggregates summarize heterogeneous cases and should be read together with Figures~\ref{fig:size}--\ref{fig:ratios}, not as a substitute for them.
-
-All 15 main cases converged under each package's native stopping rule.  Rust's maximum reference-solution scaled error was \BenchmarkRustTruthMax{}, compared with \BenchmarkMatlabTruthMax{} for MATLAB; these solution-difference diagnostics are more sensitive to the Laplacian nullspace and conditioning than the backward error and independently recomputed residual.  The cross-package hierarchy had identical intermediate level sizes but a one-vertex terminal-level offset in \BenchmarkTerminalOffsetCases{} cases; the three dense worker-firm cases matched exactly.  The official hierarchy returned a nonzero status flag at \BenchmarkMatlabWarningPoints{} of the 15 reported 32-CPU points, all from the dense family.  Those warnings remain visible and are not converted into silent exclusions.
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/size_scaling_32.pdf}
-\caption{Primary size scaling at 32 application CPUs.  Both axes are logarithmic.}
-\label{fig:size}
-\end{figure}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/edge_scaling_32.pdf}
-\caption{The same primary stages against canonical edge count.}
-\label{fig:edges}
-\end{figure}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/rust_matlab_ratios.pdf}
-\caption{Rust-to-MATLAB median time ratios at 32 application CPUs.  Values below one favor Rust.}
-\label{fig:ratios}
-\end{figure}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.83\textwidth]{\BenchmarkFigureRoot/preconditioner_apply_32.pdf}
-\caption{Normalized stationary CMG preconditioner-application time at 32 application CPUs.}
-\label{fig:apply}
-\end{figure}
-
-\begin{figure}[p]
-\centering
-\includegraphics[width=0.83\textwidth]{\BenchmarkFigureRoot/input_assembly_32.pdf}
-\caption{Supplementary binary input load plus graph or sparse-matrix assembly time.  This stage is excluded from setup-plus-solve.}
-\label{fig:assembly}
-\end{figure}
-
-\begin{table}[p]
-\centering
-\caption{One-million-vertex results at 32 application CPUs.}
-\label{tab:one-million}
-\BenchmarkMillionTable
+\end{tabularx}
 \end{table}
 
-\section{Memory and work diagnostics}
+\subsection{Measured stages}
 
-\begin{figure}[p]
+\begin{description}[style=nextline]
+\item[Hierarchy/preconditioner setup] CMG hierarchy and terminal factor construction.  Rust reports reusable parallel-plan construction separately, and the plan is included in total time.
+\item[Stationary preconditioner apply] One normalized CMG application with an existing hierarchy and workspace.  Fast applications are looped and divided by the loop count.
+\item[Reused-preconditioner PCG] One PCG solve after setup.  The implementations retain their native stopping rules, so timings do not hold iteration counts or residual definitions fixed.
+\item[Setup + plan + solve] Fresh hierarchy setup, Rust plan setup when applicable, and one solve.  This is the main user-facing latency measure.
+\item[Peak RSS] Process peak resident set size from \texttt{/usr/bin/time -v}; this includes input and runtime storage and is not an allocation-by-allocation decomposition.
+\end{description}
+
+\clearpage
+\section{Rust and MATLAB on the same timing axes}
+
+Figure~\ref{fig:stage-times} puts the Rust and MATLAB lines together for every primary stage.  It is the quickest absolute comparison: Rust setup is substantially lower at every CPU count; PCG is close to MATLAB at one CPU and separates at 8 and 16 CPUs; both implementations show limited end-to-end scaling because hierarchy work and overhead remain important.
+
+\begin{figure}[htbp]
 \centering
-\includegraphics[width=0.83\textwidth]{\BenchmarkFigureRoot/memory_by_size.pdf}
-\caption{Peak resident set size from \texttt{/usr/bin/time -v}.  The measure includes each process's input and runtime storage.}
+\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/current_stage_timings.pdf}
+\caption{Geometric-mean stage times across the five graph families.  Rust is the solid blue line with circles; MATLAB is the dashed orange line with squares.  Both implementations share a zero-based linear time axis within each panel.}
+\label{fig:stage-times}
+\end{figure}
+
+\clearpage
+\section{Stage ratios}
+
+Figure~\ref{fig:stage-ratios} shows the corresponding Rust/MATLAB ratios for each family and the geometric mean.  The ratio view makes heterogeneity visible without hiding the absolute scale.  At 16 CPUs, the geometric-mean ratios are \ReportSixteenSetupRatio{}, \ReportSixteenApplyRatio{}, \ReportSixteenPcgRatio{}, and \ReportSixteenTotalRatio{} for setup, apply, PCG, and total time.  One one-CPU stationary-apply point is slightly above one; the main total is below one for all 20 family/CPU combinations.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.84\textwidth]{\BenchmarkFigureRoot/current_stage_ratios.pdf}
+
+\vspace{0.3em}
+{\footnotesize\textbf{Aggregate geometric means (Rust / MATLAB)}\par}
+\vspace{0.15em}
+{\footnotesize\ReportAggregateTable}
+\caption{Family-level Rust/MATLAB timing ratios plus the geometric mean.  The dotted reference is parity; values below one favor Rust.  The table gives the exact geometric-mean ratios at each CPU count.}
+\label{fig:stage-ratios}
+\end{figure}
+
+\clearpage
+\section{Family-level setup-plus-solve comparisons}
+
+The complete total-time curves in Figure~\ref{fig:family-times} place MATLAB directly beside Rust for each graph family.  Rust's best measured setting is 16 CPUs for the weighted path and both worker-firm graphs, and 8 CPUs for the grid and weak-community graphs.  MATLAB's best setting is 8 CPUs for dense worker-firm and 16 CPUs for the remaining families.  The error bars summarize resampling uncertainty within each implementation; they do not convert this controlled qualification into a population-level hardware claim.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/current_family_totals.pdf}
+\caption{Setup-plus-plan-plus-solve latency by family.  Rust and MATLAB share every panel and axis.  Points are medians of seven measurements; bars are the reducer's per-implementation bootstrap intervals.}
+\label{fig:family-times}
+\end{figure}
+
+\clearpage
+Figure~\ref{fig:family-ratios} gives the direct ratio view.  At 16 CPUs, Rust total time ranges from 0.248 times MATLAB on dense worker-firm to 0.656 times MATLAB on the path.  The 16-CPU family results in Table~\ref{tab:family-sixteen} show the absolute times and the different native iteration counts together.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth]{\BenchmarkFigureRoot/current_family_total_ratios.pdf}
+\caption{Rust/MATLAB setup-plus-solve ratio for every family and CPU count.  Values below one favor Rust.}
+\label{fig:family-ratios}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{One-million-vertex results at 16 application CPUs.}
+\label{tab:family-sixteen}
+\resizebox{\textwidth}{!}{\ReportFamilyTable}
+
+\vspace{0.35em}
+\footnotesize Times are medians.  ``R/M'' is Rust total divided by MATLAB total.  Iterations follow each package's native stopping rule.
+\end{table}
+
+\section{CPU scaling interpretation}
+
+The aggregate Rust total falls from 2.498 seconds at one CPU to \ReportSixteenRustTotal{} seconds at 16 CPUs, then rises to 1.803 seconds at 32 CPUs.  Every Rust family regresses from 16 to 32 CPUs: the increase ranges from about 10 percent on dense worker-firm to 55 percent on the grid.  The likely mechanism is the combined cost of scheduling, synchronization, fixed-order reductions, and memory traffic once additional workers no longer receive enough useful work.  This is an inference from the uniform 16-to-32 pattern, not a direct causal decomposition.
+
+For single-right-hand-side latency on Gold 6242, 16 CPUs are therefore the measured aggregate default, with 8 CPUs worth testing on sparse spatial or community graphs.  Thirty-two CPUs remain a supported configuration but are not the preferred setting for this workload.
+
+\clearpage
+\section{Memory comparison}
+
+Figure~\ref{fig:memory} shows Rust and MATLAB together in absolute units and presents the family-level ratios.  At 16 CPUs, Rust's geometric-mean peak RSS is \ReportSixteenRssRatio{} times MATLAB's.  Family ratios range from 0.121 on the path to 0.533 on dense worker-firm.  The dense case still uses 3.52 GiB in Rust, so the ratio should not be mistaken for a claim that large dense inputs are memory-free.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/current_memory.pdf}
+\caption{Process peak RSS.  Left: geometric-mean absolute memory with Rust and MATLAB on the same axis.  Right: family-level Rust/MATLAB ratios and their geometric mean.}
 \label{fig:memory}
 \end{figure}
 
-\begin{figure}[p]
+\section{Numerical validity and iteration counts}
+
+All \ReportConfigurations{} configurations converged and passed the scheduler, identity, timing, and numerical validators.  Rust's maximum backward error is \ReportMaxRustBackward{}.  Its maximum independently recomputed relative residual is \ReportMaxRustResidual{}, while MATLAB's maximum native relative residual is \ReportMaxMatlabResidual{}.  The larger independent Rust residual is compatible with the package's retained stopping and certification conventions; the report does not claim identical residual definitions.
+
+Rust uses fewer iterations than MATLAB for every family at 16 CPUs (Figure~\ref{fig:iterations}), ranging from 9 versus 11 on dense worker-firm to 53 versus 62 on the path.  Runtime differences therefore combine implementation speed with the packages' certified native iteration paths.  They should not be interpreted as fixed-work microbenchmarks.
+
+\clearpage
+\begin{figure}[htbp]
 \centering
-\includegraphics[width=0.83\textwidth]{\BenchmarkFigureRoot/iterations_time_per_iteration.pdf}
-\caption{PCG work diagnostics at 32 CPUs.  Iteration count separates convergence behavior from time per iteration.}
+\includegraphics[width=0.91\textwidth]{\BenchmarkFigureRoot/current_iterations.pdf}
+\caption{PCG iterations at 16 CPUs under each package's native stopping rule.  Iteration counts are invariant across the tested CPU grid within each implementation and family.}
 \label{fig:iterations}
 \end{figure}
 
-\section{CPU scaling}
+MATLAB reports official hierarchy flag 3 for the four dense worker-firm configurations.  All four outputs converge and pass the numerical validator.  The warnings remain explicit and are not silently discarded or converted into retries.
 
-For one-million-vertex setup-plus-solve, the geometric-mean 32-versus-1-CPU speedup across graph families is \BenchmarkRustTotalSpeedup{} for Rust and \BenchmarkMatlabTotalSpeedup{} for MATLAB.  These are only 5 and 15 percent aggregate reductions in elapsed time, respectively, and several individual curves are nonmonotone.  Application CPUs therefore should not be treated as a proportional speed multiplier for the complete workflow.  The stage- and family-specific paths below show where parallel overhead or sequential setup dominates.
+\section{Provenance and acceptance}
 
-Figures~\ref{fig:cpu-path}--\ref{fig:cpu-community} show time against application CPU count for every graph family.  Color denotes dataset size; solid lines are Rust and dashed lines are MATLAB.  A decrease indicates useful parallel scaling.  Setup stages can remain dominated by sequential hierarchy logic even when apply and solve kernels parallelize.
+The accepted array contains five tasks and 40 implementation/CPU configurations.  SGE reports \texttt{failed=0} and \texttt{exit\_status=0} for every task; task wall times range from 1,101 to 2,822 seconds and recorded \texttt{maxvmem} ranges from 9.05 to 13.47 GiB.  Each task also has an application-success receipt, a validation receipt, input hashes, topology, and process-memory records.
 
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/cpu_scaling_path.pdf}
-\caption{CPU scaling: weighted path.}\label{fig:cpu-path}
-\end{figure}
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/cpu_scaling_grid.pdf}
-\caption{CPU scaling: two-dimensional grid.}\label{fig:cpu-grid}
-\end{figure}
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/cpu_scaling_worker-firm.pdf}
-\caption{CPU scaling: worker-firm degree 3.}\label{fig:cpu-worker}
-\end{figure}
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/cpu_scaling_dense-worker-firm.pdf}
-\caption{CPU scaling: worker-firm degree 16.}\label{fig:cpu-dense}
-\end{figure}
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/cpu_scaling_weak-community.pdf}
-\caption{CPU scaling: weak-community graph.}\label{fig:cpu-community}
-\end{figure}
+\noindent\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{0.25\linewidth}X}
+\toprule
+Identity & Accepted value \\
+\midrule
+Protocol & \texttt{\ReportProtocol} \\
+Run & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportRunId}} \\
+Rust source & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportSourceCommit}} \\
+Source archive SHA-256 & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportSourceArchive}} \\
+Rust benchmark binary SHA-256 & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportRustBinary}} \\
+Official upstream source & \texttt{\footnotesize\expandafter\seqsplit\expandafter{\ReportUpstreamCommit}} \\
+Compact accepted record & \path{.ci/performance/scc-rust-matlab-current.json} \\
+Detailed retained reduction & \path{benchmarks/report/data/current_results.csv} \\
+\bottomrule
+\end{tabularx}
 
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/speedup_efficiency_1m.pdf}
-\caption{Speedup and parallel efficiency relative to one application CPU for one-million-vertex cases.}
-\label{fig:efficiency}
-\end{figure}
-
-\section{Repeated right-hand sides and isolated C kernels}
-
-\begin{figure}[p]\centering
-\includegraphics[width=0.84\textwidth]{\BenchmarkFigureRoot/batch16_scaling.pdf}
-\caption{Compact sixteen-RHS supplement.  Times are normalized per right-hand side after one reused setup.}
-\label{fig:batch}
-\end{figure}
-
-Rust uses the package's memory-bounded across-RHS executor for this supplement;
-the official MATLAB workflow invokes \texttt{pcg} sequentially for each right-hand side while allowing each invocation the requested MATLAB computational-thread limit.  \BenchmarkBatchSummary{}  The figure compares the native supported repeated-RHS workflows rather than forcing identical internal scheduling.
-
-\begin{figure}[p]\centering
-\includegraphics[width=\textwidth]{\BenchmarkFigureRoot/c_kernel_scope.pdf}
-\caption{Scientifically bounded standalone C-kernel comparison.  Large cases cover SpMV and projection only; recursive-cycle inputs are capped at 20,000 vertices.}
-\label{fig:c-kernels}
-\end{figure}
-
-The C harness compiles numerical kernels copied from the pinned upstream source and checks every output against Rust.  It uses the existing harness's own path and worker-firm formulas rather than the shared end-to-end binary fixtures.  Across the large path and worker-firm cases, Rust-to-C SpMV ratios range from \BenchmarkKernelSpmvRatioLow{} to \BenchmarkKernelSpmvRatioHigh{}; restriction and prolongation are near parity.  For the bounded recursive-cycle cases, the Rust-to-C ratio ranges from \BenchmarkKernelCycleRatioLow{} to \BenchmarkKernelCycleRatioHigh{}.  These timings isolate implementation overhead in SpMV, restriction/prolongation, and a small recursive stationary cycle.  They omit the official MATLAB hierarchy constructor, sparse-matrix assembly, MATLAB PCG, and end-to-end solver orchestration; therefore they must not be read as ``Rust versus a complete C solver.''
-
-\clearpage
-\section{Validation and acceptance}
-
-The smoke phase required successful MEX compilation, deterministic input hashes, numerical certification, and valid SGE accounting.  Production acceptance then required, for every task:
-\begin{itemize}
-\item SGE accounting with \texttt{failed=0} and \texttt{exit\_status=0};
-\item an application success receipt and a complete, nonduplicated implementation/thread grid;
-\item finite timing and RSS fields tied to the correct source, environment, and input hashes;
-\item MATLAB PCG flag zero, a reported native relative residual, Rust backward-error certification, and independent residual diagnostics; and
-\item a thread-invariant hierarchy within each implementation, with cross-implementation hierarchy differences retained rather than assumed away.
-\end{itemize}
-
-Build-path, transport, or wrapper failures were preserved and retried under new run identifiers.  Algorithmic warnings, convergence differences, timeouts, or memory failures would remain scientific results rather than being silently rerun.
-
-The main array satisfied these criteria after the narrowly scoped source-identity repair described above.  The correction is treated as derived bookkeeping, not as a rerun or replacement of experimental measurements.  Its machine-readable receipt and the immutable raw run make that judgment independently auditable.
-
-The batch array independently satisfied the same scheduler, application, identity, and numerical checks for all four tasks and 48 result rows without a provenance repair.  Its two sparse worker-firm cases reproduce the one-vertex terminal hierarchy offset; its two dense cases match exactly.  The official MATLAB hierarchy flag 3 appears in all 12 dense batch rows and remains an explicit warning rather than an exclusion.
-
-\section{Limitations and expansion protocol}
-
-This first phase uses deterministic synthetic graphs, three measured repetitions, one homogeneous CPU model, default release/MEX builds, and maximum size one million vertices.  The compact repetition count supports directional engineering conclusions but not formal confidence intervals.  MATLAB and Rust retain different native stopping conventions and hierarchy implementations; iteration and residual diagnostics must accompany raw time comparisons.  Peak RSS is process-level rather than a decomposition of every retained allocation.  MATLAB's CPU limit does not imply that every sparse primitive uses every permitted thread.  The CPU-scaling curves show that a 32-slot allocation does not imply 32-fold application speedup, particularly when hierarchy setup dominates.
-
-An expansion should create a new UTC run directory and preserve this run unchanged.  Recommended extensions are: larger vertex counts until time or memory limits are observed; additional community strength and degree sweeps; five or more repetitions for uncertainty summaries; a second CPU generation; and a separately labeled native-CPU build sensitivity.  The same binary fixture format, input hashes, source/toolchain manifests, scheduler receipts, validation program, and plotting script should be reused.  New failures must be plotted explicitly, and any protocol change should be versioned in the machine-readable schema.
-
-\section{Reproduction}
-
-This accepted first study is frozen.  Its exact first-generation harness and reduction scripts are preserved at Git tag \path{benchmarks-v1-2026-08-24}; the active successor workflow is documented in \path{benchmarks/scc/README.md}.  The compact study record lives at \path{.ci/performance/scc-first-study-2026-08.json}.  Raw repetitions and scheduler evidence intentionally remain outside the maintained source tree in the immutable SCC archive.
+\vspace{0.6em}
+The generator requires the complete 5-family by 2-implementation by 4-CPU grid and verifies every row's identity.  It recomputes the geometric means and checks them against the compact accepted JSON.  PDF compilation stops if a check differs beyond numerical roundoff.
 
 \end{document}

@@ -15,6 +15,13 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   reports for prepared parallel solvers and workspace pools.
 - Cross-platform correctness tests, reproducible benchmark harnesses, and pinned
   upstream provenance.
+- Prepared fixed-topology Laplacians for deterministic changing-weight numeric
+  assembly, solution-free caller-buffer PCG diagnostics, checked strided batch
+  views, optional warm starts, and explicit certified retained-preconditioner
+  solves.
+- Conservative and exact repeated-solve memory accounting that separates
+  prepared topology, current numeric state, stale hierarchy/plan, assembly
+  scratch, workspace pools, and caller buffers.
 
 ### Changed
 
