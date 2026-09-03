@@ -4,6 +4,9 @@ This is the maintained BU SCC workflow for immutable, reproducible CMG
 experiments. It compares the current Rust implementation with the official
 MATLAB solver and its default C MEX build, and it supports targeted routing,
 reuse, NUMA, memory, accuracy, batch, and matched-edge studies.
+The experimental fused-RHS lane adds `fused-smoke` and `fused` kinds. Their
+outputs and receipts are namespaced by kind so identical array task IDs cannot
+overwrite one another when both are run under one immutable campaign root.
 
 Every run uses a clean Git archive, a unique UTC run directory, build-time
 source and archive identity, canonical binary fixtures, raw timing and process
@@ -53,6 +56,8 @@ transport faults under a new run ID; preserve scientific failures as evidence.
 | `accuracy` | time/accuracy frontier |
 | `batch` | repeated-RHS scaling |
 | `matched-edge` | graph families at approximately equal edge counts |
+| `fused-smoke` | 100k-vertex width-four numerical and launcher smoke |
+| `fused` | paired scalar/fused 1M-vertex, RHS-count, mix, and target-CPU matrix |
 
 For example:
 

@@ -20,6 +20,14 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def task_roots(run_root: Path, experiment: str, task_id: int) -> tuple[Path, Path]:
+    """Return kind-scoped roots so smoke and full task IDs cannot collide."""
+    return (
+        run_root / "output" / experiment / f"task-{task_id}",
+        run_root / "receipts" / experiment / f"task-{task_id}",
+    )
+
+
 def main() -> None:
     run_id, task_file, task_id_text = sys.argv[1:]
     task_id = int(task_id_text)
@@ -35,8 +43,7 @@ def main() -> None:
     target_cpu = task["target_cpu"]
     target = "target" if target_cpu == "portable" else "target-cascadelake"
     binary = code_root / "benchmarks" / target / "release/fused-rhs-experiment"
-    output_root = run_root / "output" / f"task-{task_id}"
-    receipt_root = run_root / "receipts" / f"task-{task_id}"
+    output_root, receipt_root = task_roots(run_root, task["experiment"], task_id)
     output_root.mkdir(parents=True, exist_ok=True)
     receipt_root.mkdir(parents=True, exist_ok=True)
     command = [

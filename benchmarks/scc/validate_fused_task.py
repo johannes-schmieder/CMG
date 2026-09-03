@@ -20,7 +20,9 @@ def main() -> None:
     task_id = int(task_id_text)
     tasks = [json.loads(line) for line in Path(task_file).read_text().splitlines() if line]
     task = tasks[task_id - 1]
-    result = json.loads((run_root / "output" / f"task-{task_id}" / "fused.json").read_text())
+    output_root = run_root / "output" / task["experiment"] / f"task-{task_id}"
+    receipt_root = run_root / "receipts" / task["experiment"] / f"task-{task_id}"
+    result = json.loads((output_root / "fused.json").read_text())
     require(result["protocol_version"] == "cmg-fused-rhs-v1", "wrong fused protocol")
     require(result["run_id"] == run_root.name and result["task_id"] == task_id, "wrong task identity")
     require(result["source_commit"] == (run_root / "manifests/source-commit.txt").read_text().strip(), "wrong source")
@@ -39,7 +41,7 @@ def main() -> None:
     expected_binary = (run_root / "manifests" / f"fused-{task['target_cpu']}-binary-sha256.txt").read_text().strip()
     require(result["binary_sha256"] == expected_binary, "wrong fused binary hash")
     require(len(result["allocated_cpus"]) == 32, "unexpected CPU allocation")
-    require((run_root / "receipts" / f"task-{task_id}" / "SUCCESS").is_file(), "missing success receipt")
+    require((receipt_root / "SUCCESS").is_file(), "missing success receipt")
     print(f"CMG_FUSED_VALIDATE_SUCCESS task={task_id} ratio={ratio:.6f}")
 
 
