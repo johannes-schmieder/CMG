@@ -103,6 +103,8 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
                 target_cpu="portable",
                 slots=28,
                 host_num_proc=28,
+                host_cpu_type="E5-2680v4",
+                cpu_model_contains="E5-2680 v4",
                 warmups=1,
                 repetitions=1,
             )
@@ -120,6 +122,8 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
                 target_cpu="portable",
                 slots=28,
                 host_num_proc=28,
+                host_cpu_type="E5-2680v4",
+                cpu_model_contains="E5-2680 v4",
                 warmups=2,
                 repetitions=7,
             )

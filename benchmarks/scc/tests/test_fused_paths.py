@@ -29,6 +29,8 @@ class FusedPathTests(unittest.TestCase):
             self.assertEqual(task["target_cpu"], "portable")
             self.assertEqual(task["slots"], 28)
             self.assertEqual(task["host_num_proc"], 28)
+            self.assertEqual(task["host_cpu_type"], "E5-2680v4")
+            self.assertEqual(task["cpu_model_contains"], "E5-2680 v4")
 
 
 if __name__ == "__main__":

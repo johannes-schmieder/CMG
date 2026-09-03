@@ -25,12 +25,15 @@ Start from a clean local checkout:
 source_sha=$(git rev-parse HEAD)
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-${source_sha:0:12}-b2v1-smoke"
 bash benchmarks/scc/deploy.sh "$run_id" "$source_sha"
-ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/$source_sha/benchmarks/scc/bootstrap.sh $run_id"
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/$source_sha/benchmarks/scc/submit_bootstrap.sh $run_id 6G"
 ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/$source_sha/benchmarks/scc/submit.sh smoke $run_id"
 ```
 
-After the job leaves `qstat`, collect all array-task accounting and validate the
-complete run:
+The bootstrap submitter runs compilation and validation on a four-slot compute
+job, initializes Lmod explicitly, and refuses to overwrite an existing attempt
+or `BUILD_SUCCESS` receipt. Submit a benchmark only after its complete qacct,
+logs, manifests, hashes, and receipt validate. After an array leaves `qstat`,
+collect all task accounting and validate the complete run:
 
 ```bash
 ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/collect_accounting.sh RUN_ID JOB_ID 2"
@@ -75,10 +78,10 @@ ssh scc "module load python3/3.12.4 && python3 \
 
 The optional third submission argument is memory per core; allowed values are
 listed in `submit.sh`. Most SCC2 tasks retain the established 32-slot Gold-6242
-request. The fused kinds instead request 28 slots with whole-node linear binding
-and `num_proc=28`, omit a CPU-model restriction, and execute only the portable
-binary. This makes exactly 28-core hosts eligible while preserving paired
-scalar/fused measurements on the same hardware.
+request. The fused kinds instead request 28 slots with whole-node linear binding,
+`num_proc=28`, and `cpu_type=E5-2680v4`, and execute only the portable binary.
+This targets the SCC's large older Broadwell population while preserving paired
+scalar/fused measurements on consistent hardware.
 
 ## Reduce accepted results
 

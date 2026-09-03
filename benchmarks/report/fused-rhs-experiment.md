@@ -25,8 +25,8 @@ was 15.3 MB for worker-firm versus 4.5 MB for the scalar batch workspace, and
 four interleaved copies of every PCG and recursive CMG work vector.
 
 The SCC2 workflow contains separate `fused-smoke` and `fused` manifests. The
-fused tasks use the portable binary and request all 28 slots on hosts satisfying
-`num_proc=28`, without a CPU-model restriction. The full 12-task manifest
+fused tasks use the portable binary and request all 28 slots on Broadwell hosts
+satisfying `num_proc=28` and `cpu_type=E5-2680v4`. The full 12-task manifest
 covers one-million-vertex worker-firm and dense-worker-firm graphs, 4/16/32 RHS,
 homogeneous/mixed convergence, and seven paired repetitions. Each result records
 the host, CPU model, host processor count, allocation, source archive, and binary
@@ -36,3 +36,11 @@ An earlier full-array submission, job 7428004, requested 32 Gold-6242 slots and
 therefore excluded the intended older 28-core host population. It was canceled
 while still queued, before any array task ran and with zero `output/fused`
 artifacts. Its completed, namespaced `fused-smoke` evidence remains immutable.
+
+A subsequent corrected-run bootstrap, job 7428372 under run
+`20260903T114405Z-fc4d89a-b2v1-fused-28core`, completed the Rust stages but
+exited 127 before MATLAB and Python validation because its ad hoc compute-job
+launcher used non-login Bash and did not initialize Lmod. It produced no
+`BUILD_SUCCESS` receipt or benchmark artifacts. The maintained workflow now
+initializes Lmod explicitly and submits bootstraps through a guarded compute-job
+entrypoint with 6 GB per core.

@@ -25,7 +25,7 @@ esac
 case "$kind" in
     fused|fused-smoke)
         slots=28
-        host_requirement=num_proc=28
+        host_requirement=num_proc=28,cpu_type=E5-2680v4
         ;;
     *)
         slots=32

@@ -44,6 +44,7 @@ def main() -> None:
     require(len(result["allocated_cpus"]) == task["slots"], "unexpected CPU affinity")
     require(result["host_num_proc"] == task["host_num_proc"], "wrong host core count")
     require(bool(result["hostname"]) and bool(result["cpu_model"]), "missing host provenance")
+    require(task["cpu_model_contains"] in result["cpu_model"], "wrong host CPU model")
     require((receipt_root / "SUCCESS").is_file(), "missing success receipt")
     print(f"CMG_FUSED_VALIDATE_SUCCESS task={task_id} ratio={ratio:.6f}")
 

@@ -10,6 +10,13 @@ archive_sha=$(tr -d '\n' < "$run_root/manifests/source-archive-sha256.txt")
 code_root="$project_root/code-b2/$source_sha"
 test "$(sha256sum "$project_root/source-archives/$source_sha.tar" | cut -d' ' -f1)" = "$archive_sha"
 
+if ! type module >/dev/null 2>&1; then
+    set +u
+    source /etc/profile
+    set -u
+fi
+type module >/dev/null 2>&1
+
 export RUSTUP_HOME="$project_root/toolchains/rustup"
 export CARGO_HOME="$project_root/toolchains/cargo"
 export PATH="$CARGO_HOME/bin:$PATH"
@@ -125,6 +132,8 @@ for number, line in enumerate(open(manifest), 1):
     assert value["target_cpu"] == "portable"
     assert value["slots"] == 28
     assert value["host_num_proc"] == 28
+    assert value["host_cpu_type"] == "E5-2680v4"
+    assert value["cpu_model_contains"] == "E5-2680 v4"
     assert value["warmups"] >= 1 and value["repetitions"] >= 1
 PY
 done
