@@ -20,13 +20,15 @@ type module >/dev/null 2>&1
 export RUSTUP_HOME="$project_root/toolchains/rustup"
 export CARGO_HOME="$project_root/toolchains/cargo"
 export PATH="$CARGO_HOME/bin:$PATH"
+rustup_log="$run_root/logs/rustup.log"
 if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
-    "$project_root/toolchains/rustup-init" -y --profile minimal --default-toolchain 1.98.0 --no-modify-path
+    "$project_root/toolchains/rustup-init" -y --profile minimal --default-toolchain 1.98.0 --no-modify-path \
+        > "$rustup_log" 2>&1
 else
-    rustup toolchain install 1.98.0 --profile minimal
+    rustup toolchain install 1.98.0 --profile minimal > "$rustup_log" 2>&1
 fi
-rustup default 1.98.0
-rustup component add rustfmt clippy --toolchain 1.98.0
+rustup default 1.98.0 >> "$rustup_log" 2>&1
+rustup component add rustfmt clippy --toolchain 1.98.0 >> "$rustup_log" 2>&1
 rustc --version --verbose > "$run_root/manifests/rustc.txt"
 cargo --version --verbose > "$run_root/manifests/cargo.txt"
 
