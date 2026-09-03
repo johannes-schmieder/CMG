@@ -29,7 +29,7 @@ archive="$temporary/$source_sha.tar"
 git archive --format=tar --output="$archive" "$source_sha"
 archive_sha=$(shasum -a 256 "$archive" | awk '{print $1}')
 mkdir -p "$temporary/tasks"
-for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge; do
+for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge fused-smoke fused; do
     python3 benchmarks/scc/tasks/generate_tasks.py "$kind" "$temporary/tasks/$kind.jsonl"
 done
 find "$temporary/tasks" -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$temporary/task-manifests.sha256"

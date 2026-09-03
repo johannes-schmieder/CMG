@@ -6,7 +6,7 @@ rust-version = "1.85"
 publish = false
 
 [dependencies]
-cmg = { path = "..", features = ["parallel", "profiling"] }
+cmg = { path = "..", features = ["parallel", "profiling", "experimental-fused-rhs"] }
 
 [[bin]]
 name = "graph-build"
@@ -59,3 +59,7 @@ path = "src/bin/teaching-supplement.rs"
 [[bin]]
 name = "fixed-topology-sequence"
 path = "src/bin/fixed-topology-sequence.rs"
+
+[[bin]]
+name = "fused-rhs-experiment"
+path = "src/bin/fused-rhs-experiment.rs"

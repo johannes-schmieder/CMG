@@ -155,7 +155,7 @@ impl Aggregation {
     }
 
     #[inline]
-    fn label_at(&self, index: usize) -> usize {
+    pub(crate) fn label_at(&self, index: usize) -> usize {
         match &self.labels {
             LabelStorage::Compact(labels) => labels[index] as usize,
             LabelStorage::Native(labels) => labels[index],

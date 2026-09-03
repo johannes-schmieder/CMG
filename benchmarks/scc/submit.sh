@@ -18,7 +18,8 @@ test -f "$task_file"
 tasks=$(wc -l < "$task_file" | tr -d ' ')
 case "$kind" in
     smoke|baseline|routing|reuse|numa|memory|accuracy) runtime=02:00:00 ;;
-    batch|matched-edge) runtime=04:00:00 ;;
+    batch|matched-edge|fused) runtime=04:00:00 ;;
+    fused-smoke) runtime=02:00:00 ;;
     *) echo "unknown experiment $kind" >&2; exit 2 ;;
 esac
 job_id=$(qsub -terse -P welfgr -pe omp 32 -binding linear:32 \

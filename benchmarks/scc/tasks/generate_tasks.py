@@ -94,6 +94,21 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
             row = base(kind, family, vertices)
             row.update(implementations=["rust", "matlab"], rust_threads=list(THREADS), matlab_threads=[1, 32], rhs_count=1, warmups=2, repetitions=5)
             rows.append(row)
+    elif kind == "fused-smoke":
+        for mode, target_cpu in product(("homogeneous", "mixed"), ("portable", "cascadelake")):
+            row = base(kind, "worker-firm", 100_000)
+            row.update(rhs_count=4, mode=mode, target_cpu=target_cpu, warmups=1, repetitions=1)
+            rows.append(row)
+    elif kind == "fused":
+        for family, rhs_count, mode, target_cpu in product(
+            ("worker-firm", "dense-worker-firm"),
+            (4, 16, 32),
+            ("homogeneous", "mixed"),
+            ("portable", "cascadelake"),
+        ):
+            row = base(kind, family, 1_000_000)
+            row.update(rhs_count=rhs_count, mode=mode, target_cpu=target_cpu, warmups=2, repetitions=7)
+            rows.append(row)
     else:
         raise ValueError(f"unknown task kind {kind}")
     for index, row in enumerate(rows, start=1):
@@ -103,7 +118,7 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=("smoke", "baseline", "routing", "reuse", "numa", "memory", "accuracy", "batch", "matched-edge"))
+    parser.add_argument("kind", choices=("smoke", "baseline", "routing", "reuse", "numa", "memory", "accuracy", "batch", "matched-edge", "fused-smoke", "fused"))
     parser.add_argument("output", type=Path)
     parser.add_argument("--optimal-json", type=Path)
     args = parser.parse_args()

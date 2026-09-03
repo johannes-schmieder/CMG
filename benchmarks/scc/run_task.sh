@@ -10,10 +10,19 @@ code_root="$project_root/code-b2/$source_commit"
 
 module purge
 module load python3/3.12.4
-module load "$(tr -d '\n' < "$project_root/toolchains/matlab-module.txt")"
 export RUSTUP_HOME="$project_root/toolchains/rustup"
 export CARGO_HOME="$project_root/toolchains/cargo"
 export PATH="$CARGO_HOME/bin:$PATH"
+
+experiment=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().splitlines()[int(sys.argv[2])-1])["experiment"])' "$task_file" "$task_id")
+if [[ "$experiment" == fused || "$experiment" == fused-smoke ]]; then
+    python3 "$code_root/benchmarks/scc/run_fused_task.py" "$run_id" "$task_file" "$task_id"
+    python3 "$code_root/benchmarks/scc/validate_fused_task.py" \
+        "$project_root/runs/$run_id" "$task_file" "$task_id"
+    exit 0
+fi
+
+module load "$(tr -d '\n' < "$project_root/toolchains/matlab-module.txt")"
 
 python3 "$code_root/benchmarks/scc/run_task.py" "$run_id" "$task_file" "$task_id"
 python3 "$code_root/benchmarks/scc/validate_task.py" \

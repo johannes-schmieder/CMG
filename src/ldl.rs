@@ -414,4 +414,126 @@ impl GroundedLdl {
         }
         Ok(())
     }
+
+    #[cfg(feature = "experimental-fused-rhs")]
+    #[allow(clippy::needless_range_loop)]
+    pub(crate) fn solve_width4_into_compatible(
+        &self,
+        rhs: &[[f64; 4]],
+        solution: &mut [[f64; 4]],
+        forward: &mut [[f64; 4]],
+        factor_solution: &mut [[f64; 4]],
+        active: &[bool; 4],
+    ) -> Result<(), CmgError> {
+        if rhs.len() != self.vertex_count || solution.len() != self.vertex_count {
+            return Err(CmgError::InvalidHierarchy {
+                context: "fused LDL vector dimension mismatch",
+            });
+        }
+        let dimension = self.active_dimension();
+        if forward.len() != dimension || factor_solution.len() != dimension {
+            return Err(CmgError::InvalidHierarchy {
+                context: "fused LDL workspace dimension mismatch",
+            });
+        }
+
+        for row in 0..dimension {
+            let vertex = self.permutation[row];
+            let mut correction = [0.0; 4];
+            match &self.lower {
+                LowerFactor::Packed { values } => {
+                    let start = row.saturating_mul(row.saturating_sub(1)) / 2;
+                    for (offset, &lower) in values[start..start + row].iter().enumerate() {
+                        for lane in 0..4 {
+                            if active[lane] {
+                                correction[lane] += lower * forward[offset][lane];
+                            }
+                        }
+                    }
+                }
+                LowerFactor::Sparse {
+                    row_offsets,
+                    columns,
+                    row_values,
+                    ..
+                } => {
+                    for index in row_offsets[row]..row_offsets[row + 1] {
+                        let column = columns[index] as usize;
+                        let lower = row_values[index];
+                        for lane in 0..4 {
+                            if active[lane] {
+                                correction[lane] += lower * forward[column][lane];
+                            }
+                        }
+                    }
+                }
+            }
+            for lane in 0..4 {
+                if active[lane] {
+                    forward[row][lane] = rhs[vertex][lane] - correction[lane];
+                }
+            }
+        }
+        for row in 0..dimension {
+            let pivot = self.diagonal[row];
+            for lane in 0..4 {
+                if active[lane] {
+                    forward[row][lane] /= pivot;
+                }
+            }
+        }
+        for row in (0..dimension).rev() {
+            let mut correction = [0.0; 4];
+            match &self.lower {
+                LowerFactor::Packed { values } => {
+                    for later in (row + 1)..dimension {
+                        let index = later.saturating_mul(later.saturating_sub(1)) / 2 + row;
+                        let lower = values[index];
+                        for lane in 0..4 {
+                            if active[lane] {
+                                correction[lane] += lower * factor_solution[later][lane];
+                            }
+                        }
+                    }
+                }
+                LowerFactor::Sparse {
+                    column_offsets,
+                    rows,
+                    column_values,
+                    ..
+                } => {
+                    for index in column_offsets[row]..column_offsets[row + 1] {
+                        let later = rows[index] as usize;
+                        let lower = column_values[index];
+                        for lane in 0..4 {
+                            if active[lane] {
+                                correction[lane] += lower * factor_solution[later][lane];
+                            }
+                        }
+                    }
+                }
+            }
+            for lane in 0..4 {
+                if active[lane] {
+                    factor_solution[row][lane] = forward[row][lane] - correction[lane];
+                }
+            }
+        }
+
+        for values in solution.iter_mut() {
+            for lane in 0..4 {
+                if active[lane] {
+                    values[lane] = 0.0;
+                }
+            }
+        }
+        for (factor_index, &vertex) in self.permutation.iter().enumerate() {
+            for lane in 0..4 {
+                if active[lane] {
+                    solution[vertex][lane] = factor_solution[factor_index][lane];
+                }
+            }
+        }
+        Ok(())
+    }
 }

@@ -35,12 +35,19 @@ cargo test --release --locked --all-features > "$run_root/logs/cargo-release-tes
 cargo test --locked --all-features --manifest-path benchmarks/Cargo.toml > "$run_root/logs/cargo-bench-test.log" 2>&1
 cargo build --release --locked --all-features > "$run_root/logs/cargo-build.log" 2>&1
 cargo build --release --locked --all-features --all-targets --manifest-path benchmarks/Cargo.toml > "$run_root/logs/cargo-bench-build.log" 2>&1
+CARGO_TARGET_DIR=benchmarks/target-cascadelake RUSTFLAGS='-C target-cpu=cascadelake' \
+    cargo build --release --locked --manifest-path benchmarks/Cargo.toml --bin fused-rhs-experiment \
+    > "$run_root/logs/cargo-fused-cascadelake-build.log" 2>&1
 cargo fmt --all --check --manifest-path benchmarks/c-kernel/Cargo.toml > "$run_root/logs/cargo-c-kernel-fmt.log" 2>&1
 cargo clippy --locked --all-targets --manifest-path benchmarks/c-kernel/Cargo.toml -- -D warnings > "$run_root/logs/cargo-c-kernel-clippy.log" 2>&1
 cargo test --locked --manifest-path benchmarks/c-kernel/Cargo.toml > "$run_root/logs/cargo-c-kernel-test.log" 2>&1
 cargo build --release --locked -vv --manifest-path benchmarks/c-kernel/Cargo.toml > "$run_root/logs/cargo-c-kernel-build.log" 2>&1
 find "$code_root/benchmarks/target/release" -maxdepth 1 -type f -perm -0100 -print0 \
     | sort -z | xargs -0 sha256sum > "$run_root/manifests/benchmark-binaries-sha256.txt"
+sha256sum "$code_root/benchmarks/target/release/fused-rhs-experiment" | cut -d' ' -f1 \
+    > "$run_root/manifests/fused-portable-binary-sha256.txt"
+sha256sum "$code_root/benchmarks/target-cascadelake/release/fused-rhs-experiment" | cut -d' ' -f1 \
+    > "$run_root/manifests/fused-cascadelake-binary-sha256.txt"
 
 diagnostics="$code_root/benchmarks/target/release/scc2-diagnostics"
 "$diagnostics" identity "$run_root/manifests/rust-identity.json" > "$run_root/logs/rust-identity.log" 2>&1
@@ -101,6 +108,22 @@ manifest, schema = sys.argv[1:]
 validator = jsonschema.Draft202012Validator(json.load(open(schema)))
 for number, line in enumerate(open(manifest), 1):
     validator.validate(json.loads(line))
+PY
+done
+for kind in fused-smoke fused; do
+    python3 - "$run_root/manifests/tasks/$kind.jsonl" "$kind" <<'PY'
+import json
+import sys
+manifest, kind = sys.argv[1:]
+for number, line in enumerate(open(manifest), 1):
+    value = json.loads(line)
+    assert value["task_id"] == number
+    assert value["experiment"] == kind
+    assert value["family"] in ("worker-firm", "dense-worker-firm")
+    assert value["rhs_count"] in (4, 16, 32)
+    assert value["mode"] in ("homogeneous", "mixed")
+    assert value["target_cpu"] in ("portable", "cascadelake")
+    assert value["warmups"] >= 1 and value["repetitions"] >= 1
 PY
 done
 python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" smoke "$run_root/work/tasks-smoke-roundtrip.jsonl" > "$run_root/logs/task-generator.log" 2>&1
