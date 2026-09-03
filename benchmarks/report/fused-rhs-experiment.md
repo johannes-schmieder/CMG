@@ -24,8 +24,15 @@ was 15.3 MB for worker-firm versus 4.5 MB for the scalar batch workspace, and
 23.1 MB versus 6.3 MB for dense-worker-firm. This is the expected cost of keeping
 four interleaved copies of every PCG and recursive CMG work vector.
 
-The SCC2 workflow contains separate `fused-smoke` and `fused` manifests. It
-builds both portable and `target-cpu=cascadelake` binaries and records their
-hashes. The full manifest covers one-million-vertex worker-firm and
-dense-worker-firm graphs, 4/16/32 RHS, homogeneous/mixed convergence, and seven
-paired repetitions.
+The SCC2 workflow contains separate `fused-smoke` and `fused` manifests. The
+fused tasks use the portable binary and request all 28 slots on hosts satisfying
+`num_proc=28`, without a CPU-model restriction. The full 12-task manifest
+covers one-million-vertex worker-firm and dense-worker-firm graphs, 4/16/32 RHS,
+homogeneous/mixed convergence, and seven paired repetitions. Each result records
+the host, CPU model, host processor count, allocation, source archive, and binary
+hash.
+
+An earlier full-array submission, job 7428004, requested 32 Gold-6242 slots and
+therefore excluded the intended older 28-core host population. It was canceled
+while still queued, before any array task ran and with zero `output/fused`
+artifacts. Its completed, namespaced `fused-smoke` evidence remains immutable.

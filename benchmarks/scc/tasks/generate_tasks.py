@@ -95,19 +95,34 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
             row.update(implementations=["rust", "matlab"], rust_threads=list(THREADS), matlab_threads=[1, 32], rhs_count=1, warmups=2, repetitions=5)
             rows.append(row)
     elif kind == "fused-smoke":
-        for mode, target_cpu in product(("homogeneous", "mixed"), ("portable", "cascadelake")):
+        for mode in ("homogeneous", "mixed"):
             row = base(kind, "worker-firm", 100_000)
-            row.update(rhs_count=4, mode=mode, target_cpu=target_cpu, warmups=1, repetitions=1)
+            row.update(
+                rhs_count=4,
+                mode=mode,
+                target_cpu="portable",
+                slots=28,
+                host_num_proc=28,
+                warmups=1,
+                repetitions=1,
+            )
             rows.append(row)
     elif kind == "fused":
-        for family, rhs_count, mode, target_cpu in product(
+        for family, rhs_count, mode in product(
             ("worker-firm", "dense-worker-firm"),
             (4, 16, 32),
             ("homogeneous", "mixed"),
-            ("portable", "cascadelake"),
         ):
             row = base(kind, family, 1_000_000)
-            row.update(rhs_count=rhs_count, mode=mode, target_cpu=target_cpu, warmups=2, repetitions=7)
+            row.update(
+                rhs_count=rhs_count,
+                mode=mode,
+                target_cpu="portable",
+                slots=28,
+                host_num_proc=28,
+                warmups=2,
+                repetitions=7,
+            )
             rows.append(row)
     else:
         raise ValueError(f"unknown task kind {kind}")

@@ -22,16 +22,26 @@ case "$kind" in
     fused-smoke) runtime=02:00:00 ;;
     *) echo "unknown experiment $kind" >&2; exit 2 ;;
 esac
-job_id=$(qsub -terse -P welfgr -pe omp 32 -binding linear:32 \
-    -l cpu_type=Gold-6242 -l mem_per_core="$mem_per_core" -l h_rt="$runtime" \
+case "$kind" in
+    fused|fused-smoke)
+        slots=28
+        host_requirement=num_proc=28
+        ;;
+    *)
+        slots=32
+        host_requirement=cpu_type=Gold-6242
+        ;;
+esac
+job_id=$(qsub -terse -P welfgr -pe omp "$slots" -binding "linear:$slots" \
+    -l "$host_requirement" -l mem_per_core="$mem_per_core" -l h_rt="$runtime" \
     -t "1-$tasks" -tc 2 -N "cmg-b2-$kind" \
     -o "$run_root/logs" -e "$run_root/logs" \
     -v "CMG_RUN_ID=$run_id,CMG_TASK_FILE=$task_file" \
     "$code_root/benchmarks/scc/run_task.sh")
 base_job_id=${job_id%%.*}
 {
-    printf 'kind=%s\njob_id=%s\ntask_file=%s\ntasks=%s\nruntime=%s\nmem_per_core=%s\n' \
-        "$kind" "$job_id" "$task_file" "$tasks" "$runtime" "$mem_per_core"
+    printf 'kind=%s\njob_id=%s\ntask_file=%s\ntasks=%s\nruntime=%s\nmem_per_core=%s\nslots=%s\nhost_requirement=%s\n' \
+        "$kind" "$job_id" "$task_file" "$tasks" "$runtime" "$mem_per_core" "$slots" "$host_requirement"
     qstat -j "$base_job_id"
 } > "$run_root/manifests/submission-$kind.txt" 2>&1
 printf '%s\n' "$job_id"

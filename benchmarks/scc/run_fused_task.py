@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -28,6 +29,14 @@ def task_roots(run_root: Path, experiment: str, task_id: int) -> tuple[Path, Pat
     )
 
 
+def cpu_model_name() -> str:
+    """Return the Linux processor model used for benchmark provenance."""
+    for line in Path("/proc/cpuinfo").read_text().splitlines():
+        if line.startswith("model name"):
+            return line.split(":", 1)[1].strip()
+    raise SystemExit("missing CPU model name")
+
+
 def main() -> None:
     run_id, task_file, task_id_text = sys.argv[1:]
     task_id = int(task_id_text)
@@ -41,7 +50,12 @@ def main() -> None:
     if task["task_id"] != task_id or task["experiment"] not in ("fused", "fused-smoke"):
         raise SystemExit("invalid fused task identity")
     target_cpu = task["target_cpu"]
-    target = "target" if target_cpu == "portable" else "target-cascadelake"
+    if target_cpu == "portable":
+        target = "target"
+    elif target_cpu == "cascadelake":
+        target = "target-cascadelake"
+    else:
+        raise SystemExit("invalid fused target CPU")
     binary = code_root / "benchmarks" / target / "release/fused-rhs-experiment"
     output_root, receipt_root = task_roots(run_root, task["experiment"], task_id)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -60,6 +74,7 @@ def main() -> None:
     elapsed = time.time_ns() - started
     lines = [line for line in process.stdout.splitlines() if line.strip()]
     result = json.loads(lines[-1])
+    allocated_cpus = sorted(os.sched_getaffinity(0))
     result.update(
         protocol_version="cmg-fused-rhs-v1",
         run_id=run_id,
@@ -69,7 +84,11 @@ def main() -> None:
         source_commit=source,
         source_archive_sha256=archive,
         binary_sha256=sha256(binary),
-        allocated_cpus=sorted(os.sched_getaffinity(0)),
+        allocated_cpus=allocated_cpus,
+        allocated_slots=len(allocated_cpus),
+        host_num_proc=os.cpu_count(),
+        hostname=socket.gethostname(),
+        cpu_model=cpu_model_name(),
         process_wall_ns=elapsed,
     )
     destination = output_root / "fused.json"

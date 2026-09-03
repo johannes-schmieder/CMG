@@ -4,9 +4,11 @@ This is the maintained BU SCC workflow for immutable, reproducible CMG
 experiments. It compares the current Rust implementation with the official
 MATLAB solver and its default C MEX build, and it supports targeted routing,
 reuse, NUMA, memory, accuracy, batch, and matched-edge studies.
-The experimental fused-RHS lane adds `fused-smoke` and `fused` kinds. Their
-outputs and receipts are namespaced by kind so identical array task IDs cannot
-overwrite one another when both are run under one immutable campaign root.
+The experimental fused-RHS lane adds `fused-smoke` and `fused` kinds. They run
+the portable binary on exactly 28-core hosts, using all 28 slots for isolation
+while making the SCC's large older-node population eligible. Their outputs and
+receipts are namespaced by kind so identical array task IDs cannot overwrite
+one another when both are run under one immutable campaign root.
 
 Every run uses a clean Git archive, a unique UTC run directory, build-time
 source and archive identity, canonical binary fixtures, raw timing and process
@@ -56,8 +58,8 @@ transport faults under a new run ID; preserve scientific failures as evidence.
 | `accuracy` | time/accuracy frontier |
 | `batch` | repeated-RHS scaling |
 | `matched-edge` | graph families at approximately equal edge counts |
-| `fused-smoke` | 100k-vertex width-four numerical and launcher smoke |
-| `fused` | paired scalar/fused 1M-vertex, RHS-count, mix, and target-CPU matrix |
+| `fused-smoke` | 100k-vertex portable width-four numerical and 28-core-host launcher smoke |
+| `fused` | paired portable scalar/fused 1M-vertex RHS-count and mix matrix on 28-core hosts |
 
 For example:
 
@@ -72,9 +74,11 @@ ssh scc "module load python3/3.12.4 && python3 \
 ```
 
 The optional third submission argument is memory per core; allowed values are
-listed in `submit.sh`. Each task requests 32 Gold-6242 slots with whole-node
-linear binding. The task's application-level CPU grid is independent of the SGE
-allocation.
+listed in `submit.sh`. Most SCC2 tasks retain the established 32-slot Gold-6242
+request. The fused kinds instead request 28 slots with whole-node linear binding
+and `num_proc=28`, omit a CPU-model restriction, and execute only the portable
+binary. This makes exactly 28-core hosts eligible while preserving paired
+scalar/fused measurements on the same hardware.
 
 ## Reduce accepted results
 

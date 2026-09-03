@@ -122,7 +122,9 @@ for number, line in enumerate(open(manifest), 1):
     assert value["family"] in ("worker-firm", "dense-worker-firm")
     assert value["rhs_count"] in (4, 16, 32)
     assert value["mode"] in ("homogeneous", "mixed")
-    assert value["target_cpu"] in ("portable", "cascadelake")
+    assert value["target_cpu"] == "portable"
+    assert value["slots"] == 28
+    assert value["host_num_proc"] == 28
     assert value["warmups"] >= 1 and value["repetitions"] >= 1
 PY
 done

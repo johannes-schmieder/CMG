@@ -40,7 +40,10 @@ def main() -> None:
     require(int(result["fused_workspace_bytes"]) > 0, "missing fused workspace memory")
     expected_binary = (run_root / "manifests" / f"fused-{task['target_cpu']}-binary-sha256.txt").read_text().strip()
     require(result["binary_sha256"] == expected_binary, "wrong fused binary hash")
-    require(len(result["allocated_cpus"]) == 32, "unexpected CPU allocation")
+    require(result["allocated_slots"] == task["slots"], "unexpected slot allocation")
+    require(len(result["allocated_cpus"]) == task["slots"], "unexpected CPU affinity")
+    require(result["host_num_proc"] == task["host_num_proc"], "wrong host core count")
+    require(bool(result["hostname"]) and bool(result["cpu_model"]), "missing host provenance")
     require((receipt_root / "SUCCESS").is_file(), "missing success receipt")
     print(f"CMG_FUSED_VALIDATE_SUCCESS task={task_id} ratio={ratio:.6f}")
 
