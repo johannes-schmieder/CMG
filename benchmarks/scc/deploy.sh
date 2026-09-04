@@ -32,6 +32,19 @@ mkdir -p "$temporary/tasks"
 for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge fused-smoke fused; do
     python3 benchmarks/scc/tasks/generate_tasks.py "$kind" "$temporary/tasks/$kind.jsonl"
 done
+for kind in fused-smoke fused; do
+    python3 benchmarks/scc/validate_fused_manifest.py "$temporary/tasks/$kind.jsonl"
+done
+cpu_profiles=$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1])))))' \
+    benchmarks/scc/fused_cpu_profiles.json)
+for cpu_profile in $cpu_profiles; do
+    for kind in fused-cpu-smoke fused-cpu-screen; do
+        experiment="$kind-$cpu_profile"
+        python3 benchmarks/scc/tasks/generate_tasks.py "$kind" \
+            "$temporary/tasks/$experiment.jsonl" --cpu-profile "$cpu_profile"
+        python3 benchmarks/scc/validate_fused_manifest.py "$temporary/tasks/$experiment.jsonl"
+    done
+done
 find "$temporary/tasks" -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$temporary/task-manifests.sha256"
 
 ssh scc "test ! -e '$project_root/runs/$run_id' && mkdir -p '$project_root/runs/$run_id/manifests' '$project_root/runs/$run_id/logs' '$project_root/runs/$run_id/work' '$project_root/runs/$run_id/output' '$project_root/runs/$run_id/receipts' '$project_root/source-archives' '$project_root/code-b2'"

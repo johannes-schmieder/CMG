@@ -119,28 +119,24 @@ for number, line in enumerate(open(manifest), 1):
     validator.validate(json.loads(line))
 PY
 done
-for kind in fused-smoke fused; do
-    python3 - "$run_root/manifests/tasks/$kind.jsonl" "$kind" <<'PY'
-import json
-import sys
-manifest, kind = sys.argv[1:]
-for number, line in enumerate(open(manifest), 1):
-    value = json.loads(line)
-    assert value["task_id"] == number
-    assert value["experiment"] == kind
-    assert value["family"] in ("worker-firm", "dense-worker-firm")
-    assert value["rhs_count"] in (4, 16, 32)
-    assert value["mode"] in ("homogeneous", "mixed")
-    assert value["target_cpu"] == "portable"
-    assert value["slots"] == 28
-    assert value["host_num_proc"] == 28
-    assert value["host_cpu_type"] == "E5-2680v4"
-    assert value["cpu_model_contains"] == "E5-2680 v4"
-    assert value["warmups"] >= 1 and value["repetitions"] >= 1
-PY
+for manifest in "$run_root"/manifests/tasks/fused*.jsonl; do
+    python3 "$code_root/benchmarks/scc/validate_fused_manifest.py" "$manifest" \
+        >> "$run_root/logs/fused-manifests.log" 2>&1
 done
-python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" smoke "$run_root/work/tasks-smoke-roundtrip.jsonl" > "$run_root/logs/task-generator.log" 2>&1
+python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" smoke \
+    "$run_root/work/tasks-smoke-roundtrip.jsonl" > "$run_root/logs/task-generator.log" 2>&1
 cmp "$run_root/work/tasks-smoke-roundtrip.jsonl" "$run_root/manifests/tasks/smoke.jsonl"
+cpu_profiles=$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1])))))' \
+    "$code_root/benchmarks/scc/fused_cpu_profiles.json")
+for cpu_profile in $cpu_profiles; do
+    for kind in fused-cpu-smoke fused-cpu-screen; do
+        experiment="$kind-$cpu_profile"
+        roundtrip="$run_root/work/tasks-$experiment-roundtrip.jsonl"
+        python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" "$kind" "$roundtrip" \
+            --cpu-profile "$cpu_profile" >> "$run_root/logs/task-generator.log" 2>&1
+        cmp "$roundtrip" "$run_root/manifests/tasks/$experiment.jsonl"
+    done
+done
 
 {
     hostname

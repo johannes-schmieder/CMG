@@ -8,9 +8,13 @@ import json
 import sys
 from itertools import product
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from protocol import FAMILIES, PROTOCOL_VERSION, THREADS, write_jsonl  # noqa: E402
+
+CPU_PROFILES_PATH = Path(__file__).resolve().parents[1] / "fused_cpu_profiles.json"
+FUSED_CPU_PROFILES = json.loads(CPU_PROFILES_PATH.read_text())
 
 
 def base(experiment: str, family: str, vertices: int) -> dict:
@@ -24,8 +28,14 @@ def base(experiment: str, family: str, vertices: int) -> dict:
     }
 
 
-def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
+def tasks(kind: str, optimal: dict[str, int], cpu_profile: Optional[str] = None) -> list[dict]:
     rows: list[dict] = []
+    cpu_kinds = ("fused-cpu-smoke", "fused-cpu-screen")
+    if kind in cpu_kinds:
+        if cpu_profile not in FUSED_CPU_PROFILES:
+            raise ValueError(f"unknown or missing fused CPU profile: {cpu_profile}")
+    elif cpu_profile is not None:
+        raise ValueError(f"CPU profile is not valid for {kind}")
     if kind == "smoke":
         for family in ("path", "dense-worker-firm"):
             row = base(kind, family, 100_000)
@@ -128,6 +138,36 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
                 repetitions=7,
             )
             rows.append(row)
+    elif kind == "fused-cpu-smoke":
+        assert cpu_profile is not None
+        experiment = f"{kind}-{cpu_profile}"
+        row = base(experiment, "worker-firm", 100_000)
+        row.update(
+            rhs_count=4,
+            mode="homogeneous",
+            target_cpu="portable",
+            warmups=1,
+            repetitions=1,
+            **FUSED_CPU_PROFILES[cpu_profile],
+        )
+        rows.append(row)
+    elif kind == "fused-cpu-screen":
+        assert cpu_profile is not None
+        experiment = f"{kind}-{cpu_profile}"
+        for family, mode in product(
+            ("worker-firm", "dense-worker-firm"),
+            ("homogeneous", "mixed"),
+        ):
+            row = base(experiment, family, 1_000_000)
+            row.update(
+                rhs_count=16,
+                mode=mode,
+                target_cpu="portable",
+                warmups=2,
+                repetitions=7,
+                **FUSED_CPU_PROFILES[cpu_profile],
+            )
+            rows.append(row)
     else:
         raise ValueError(f"unknown task kind {kind}")
     for index, row in enumerate(rows, start=1):
@@ -137,15 +177,35 @@ def tasks(kind: str, optimal: dict[str, int]) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=("smoke", "baseline", "routing", "reuse", "numa", "memory", "accuracy", "batch", "matched-edge", "fused-smoke", "fused"))
+    parser.add_argument(
+        "kind",
+        choices=(
+            "smoke",
+            "baseline",
+            "routing",
+            "reuse",
+            "numa",
+            "memory",
+            "accuracy",
+            "batch",
+            "matched-edge",
+            "fused-smoke",
+            "fused",
+            "fused-cpu-smoke",
+            "fused-cpu-screen",
+        ),
+    )
     parser.add_argument("output", type=Path)
     parser.add_argument("--optimal-json", type=Path)
+    parser.add_argument("--cpu-profile", choices=sorted(FUSED_CPU_PROFILES))
     args = parser.parse_args()
     optimal = {"path": 1, "worker-firm": 16, "dense-worker-firm": 32}
     if args.optimal_json:
         optimal.update({key: int(value) for key, value in json.loads(args.optimal_json.read_text()).items()})
-    write_jsonl(args.output, tasks(args.kind, optimal))
-    print(f"CMG_SCC2_TASKS_SUCCESS kind={args.kind} tasks={len(tasks(args.kind, optimal))}")
+    task_rows = tasks(args.kind, optimal, args.cpu_profile)
+    write_jsonl(args.output, task_rows)
+    profile = f" cpu_profile={args.cpu_profile}" if args.cpu_profile else ""
+    print(f"CMG_SCC2_TASKS_SUCCESS kind={args.kind}{profile} tasks={len(task_rows)}")
 
 
 if __name__ == "__main__":

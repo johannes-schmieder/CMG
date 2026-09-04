@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -29,6 +30,13 @@ def task_roots(run_root: Path, experiment: str, task_id: int) -> tuple[Path, Pat
     )
 
 
+def is_fused_experiment(experiment: str) -> bool:
+    """Return whether an experiment name is a safe fused-RHS namespace."""
+    if experiment in ("fused", "fused-smoke"):
+        return True
+    return bool(re.fullmatch(r"fused-cpu-(?:smoke|screen)-[a-z0-9]+(?:-[a-z0-9]+)*", experiment))
+
+
 def cpu_model_name() -> str:
     """Return the Linux processor model used for benchmark provenance."""
     for line in Path("/proc/cpuinfo").read_text().splitlines():
@@ -47,7 +55,7 @@ def main() -> None:
     code_root = project_root / "code-b2" / source
     tasks = [json.loads(line) for line in Path(task_file).read_text().splitlines() if line]
     task = tasks[task_id - 1]
-    if task["task_id"] != task_id or task["experiment"] not in ("fused", "fused-smoke"):
+    if task["task_id"] != task_id or not is_fused_experiment(task["experiment"]):
         raise SystemExit("invalid fused task identity")
     target_cpu = task["target_cpu"]
     if target_cpu == "portable":

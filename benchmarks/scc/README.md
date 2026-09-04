@@ -6,9 +6,10 @@ MATLAB solver and its default C MEX build, and it supports targeted routing,
 reuse, NUMA, memory, accuracy, batch, and matched-edge studies.
 The experimental fused-RHS lane adds `fused-smoke` and `fused` kinds. They run
 the portable binary on exactly 28-core hosts, using all 28 slots for isolation
-while making the SCC's large older-node population eligible. Their outputs and
-receipts are namespaced by kind so identical array task IDs cannot overwrite
-one another when both are run under one immutable campaign root.
+while making the SCC's large older-node population eligible. CPU screening adds
+profile-specific `fused-cpu-smoke-*` and `fused-cpu-screen-*` experiments. All
+fused outputs and receipts are namespaced by experiment so overlapping array
+task IDs cannot overwrite one another under one immutable campaign root.
 
 Every run uses a clean Git archive, a unique UTC run directory, build-time
 source and archive identity, canonical binary fixtures, raw timing and process
@@ -63,6 +64,8 @@ transport faults under a new run ID; preserve scientific failures as evidence.
 | `matched-edge` | graph families at approximately equal edge counts |
 | `fused-smoke` | 100k-vertex portable width-four numerical and 28-core-host launcher smoke |
 | `fused` | paired portable scalar/fused 1M-vertex RHS-count and mix matrix on 28-core hosts |
+| `fused-cpu-smoke-*` | one 100k-vertex launcher and host-contract check per CPU profile |
+| `fused-cpu-screen-*` | four 1M-vertex RHS-16 sparse/dense and homogeneous/mixed cases per CPU profile |
 
 For example:
 
@@ -82,6 +85,41 @@ request. The fused kinds instead request 28 slots with whole-node linear binding
 `num_proc=28`, and `cpu_type=E5-2680v4`, and execute only the portable binary.
 This targets the SCC's large older Broadwell population while preserving paired
 scalar/fused measurements on consistent hardware.
+
+## Cross-CPU fused screening
+
+The CPU screen re-runs Broadwell alongside representative SCC generations so
+every hardware comparison uses one source commit, archive, and portable binary.
+Profiles and their exact scheduler/core/model contracts live in
+`fused_cpu_profiles.json`; do not reproduce or override that mapping in an ad
+hoc `qsub` command. The maintained profiles are E5-2650v2, E5-2680v4,
+Gold-6132, Gold-6242, Gold-6326, and EPYC-9124.
+
+After the common compute-node bootstrap passes, submit all one-task CPU smokes
+through the dedicated guarded entrypoint:
+
+```bash
+for profile in e5-2650v2 e5-2680v4 gold-6132 gold-6242 gold-6326 epyc-9124; do
+  ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/submit_fused_cpu.sh fused-cpu-smoke $profile RUN_ID 4G"
+done
+```
+
+Require complete successful accounting, empty scheduler stderr, application and
+validation success markers, exact output/receipt counts, bitwise identity, and
+the manifest's CPU model/core/affinity contract for every profile. Only after
+all six smokes pass, submit the four-task screens exactly once:
+
+```bash
+for profile in e5-2650v2 e5-2680v4 gold-6132 gold-6242 gold-6326 epyc-9124; do
+  ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/submit_fused_cpu.sh fused-cpu-screen $profile RUN_ID 4G"
+done
+```
+
+Each profile reserves and binds the whole matching host and runs one array task
+at a time. Use one campaign monitor for the common bootstrap, all CPU smokes,
+and all CPU screens. If any smoke fails, preserve the run and do not submit any
+screen. A missing submission response is ambiguous: inspect the profile's
+`submission-*` receipt and exact queued arguments before retrying.
 
 ## Reduce accepted results
 

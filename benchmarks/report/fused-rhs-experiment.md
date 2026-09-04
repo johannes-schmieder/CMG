@@ -44,3 +44,31 @@ launcher used non-login Bash and did not initialize Lmod. It produced no
 `BUILD_SUCCESS` receipt or benchmark artifacts. The maintained workflow now
 initializes Lmod explicitly and submits bootstraps through a guarded compute-job
 entrypoint with 6 GB per core.
+
+## Broadwell SCC result (2026-09-03)
+
+Immutable run `20260903T202102Z-2147c47-b2v1-fused-broadwell`, source
+`2147c470951f9ab932c5153759a5176977f0fd0e`, completed on Intel E5-2680 v4
+hosts. All 12 tasks had clean accounting and logs, the required outputs and
+receipts, correct source/archive/binary provenance, and bitwise-identical scalar
+and fused results.
+
+| Family | RHS | Mix | Fused/scalar | 95% paired bootstrap CI | Result |
+|---|---:|---|---:|---:|---|
+| worker-firm | 4 | homogeneous | 1.02349 | [1.02345, 1.02367] | regression |
+| worker-firm | 4 | mixed | 1.20389 | [1.20331, 1.20424] | regression |
+| worker-firm | 16 | homogeneous | 0.99205 | [0.99106, 0.99261] | gain |
+| worker-firm | 16 | mixed | 1.26563 | [1.26516, 1.26638] | regression |
+| worker-firm | 32 | homogeneous | 0.99246 | [0.99170, 0.99374] | gain |
+| worker-firm | 32 | mixed | 1.25917 | [1.25811, 1.26063] | regression |
+| dense-worker-firm | 4 | homogeneous | 0.46199 | [0.46039, 0.46329] | gain |
+| dense-worker-firm | 4 | mixed | 0.59158 | [0.59032, 0.59197] | gain |
+| dense-worker-firm | 16 | homogeneous | 0.45891 | [0.45882, 0.46715] | gain |
+| dense-worker-firm | 16 | mixed | 0.58480 | [0.58024, 0.58484] | gain |
+| dense-worker-firm | 32 | homogeneous | 0.45419 | [0.45414, 0.45433] | gain |
+| dense-worker-firm | 32 | mixed | 0.57930 | [0.57910, 0.57949] | gain |
+
+The density and convergence-mix interaction is large, and it disagrees with
+the smaller local ARM64 worker-firm result. Automatic dispatch therefore needs
+cross-CPU screening and intermediate-density evidence; the experimental path
+remains opt-in.

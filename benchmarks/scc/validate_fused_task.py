@@ -25,6 +25,7 @@ def main() -> None:
     result = json.loads((output_root / "fused.json").read_text())
     require(result["protocol_version"] == "cmg-fused-rhs-v1", "wrong fused protocol")
     require(result["run_id"] == run_root.name and result["task_id"] == task_id, "wrong task identity")
+    require(result["experiment"] == task["experiment"], "wrong experiment")
     require(result["source_commit"] == (run_root / "manifests/source-commit.txt").read_text().strip(), "wrong source")
     require(result["source_archive_sha256"] == (run_root / "manifests/source-archive-sha256.txt").read_text().strip(), "wrong archive")
     for key in ("family", "vertices", "rhs_count", "mode", "target_cpu", "warmups", "repetitions"):
@@ -45,7 +46,13 @@ def main() -> None:
     require(result["host_num_proc"] == task["host_num_proc"], "wrong host core count")
     require(bool(result["hostname"]) and bool(result["cpu_model"]), "missing host provenance")
     require(task["cpu_model_contains"] in result["cpu_model"], "wrong host CPU model")
-    require((receipt_root / "SUCCESS").is_file(), "missing success receipt")
+    receipt_path = receipt_root / "SUCCESS"
+    require(receipt_path.is_file(), "missing success receipt")
+    receipt_lines = receipt_path.read_text().splitlines()
+    require(
+        receipt_lines == ["success=true", f"binary_sha256={expected_binary}"],
+        "wrong success receipt",
+    )
     print(f"CMG_FUSED_VALIDATE_SUCCESS task={task_id} ratio={ratio:.6f}")
 
 

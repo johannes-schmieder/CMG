@@ -161,6 +161,52 @@ CPU model; classify a clear gain only when the interval's upper bound is below
 1 and a clear regression only when its lower bound is above 1. Also report the
 qacct walltime/maxvmem ranges and the observed RHS crossover.
 
+## Cross-CPU fused-RHS screening campaign
+
+Treat cross-CPU screening as a separate immutable campaign; never add tasks to
+or reuse an accepted Broadwell run. The purpose is to compare one exact portable
+binary across representative SCC hardware before designing automatic dispatch.
+The checked-in `benchmarks/scc/fused_cpu_profiles.json` is authoritative for
+profile names, scheduler CPU types, core counts, slots, and model substrings.
+
+The required stages are:
+
+1. Commit and deploy one clean source snapshot under a new run ID.
+2. Submit and fully validate the common four-core bootstrap.
+3. Submit one `fused-cpu-smoke` task for every checked-in CPU profile.
+4. Wait for every profile smoke to pass all gates; if any fails, stop without
+   submitting a screen.
+5. Submit one four-task `fused-cpu-screen` array for every profile.
+6. Validate and compare all profiles without modifying remote evidence.
+
+Use the dedicated guarded submitter, not `submit.sh` or direct `qsub`:
+
+```bash
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/$source_sha/benchmarks/scc/submit_fused_cpu.sh fused-cpu-smoke PROFILE $run_id 4G"
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/$source_sha/benchmarks/scc/submit_fused_cpu.sh fused-cpu-screen PROFILE $run_id 4G"
+```
+
+Before every invocation, check that the exact
+`manifests/submission-KIND-PROFILE.txt` receipt, output namespace, and receipt
+namespace do not exist. If the client response is ambiguous, inspect those
+paths and `qstat -u johannes` before any retry. Never submit a screen for only a
+subset of profiles after a smoke failure unless the user explicitly narrows the
+scientific comparison.
+
+Each task must match the manifest's exact whole-host request and must report the
+same portable binary hash. Apply the fused acceptance checks to every task,
+including complete qacct, empty stderr, both success markers, exact manifest
+correspondence, bitwise identity, finite paired intervals, positive workspace
+memory, bound-CPU count, host processor count, CPU model, and hostname. Also
+require task-result hostnames to agree with qacct. Keep experiment-specific logs,
+outputs, receipts, and submission records disjoint across profiles.
+
+The screen has four RHS-16 cases per profile: worker-firm and dense-worker-firm,
+each in homogeneous and mixed modes. Summarize ratios and confidence intervals
+by CPU, graph family, and mode. Use the result only to decide which CPUs and
+density region need a follow-up sweep; two graph-density endpoints do not by
+themselves identify a production dispatch threshold.
+
 ## Monitoring and recovery
 
 - Poll at a useful interval (normally ten minutes for this campaign) and keep

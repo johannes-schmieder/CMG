@@ -1,0 +1,38 @@
+{
+  "e5-2650v2": {
+    "cpu_model_contains": "E5-2650 v2",
+    "host_cpu_type": "E5-2650v2",
+    "host_num_proc": 16,
+    "slots": 16
+  },
+  "e5-2680v4": {
+    "cpu_model_contains": "E5-2680 v4",
+    "host_cpu_type": "E5-2680v4",
+    "host_num_proc": 28,
+    "slots": 28
+  },
+  "epyc-9124": {
+    "cpu_model_contains": "EPYC 9124",
+    "host_cpu_type": "EPYC-9124",
+    "host_num_proc": 32,
+    "slots": 32
+  },
+  "gold-6132": {
+    "cpu_model_contains": "Gold 6132",
+    "host_cpu_type": "Gold-6132",
+    "host_num_proc": 28,
+    "slots": 28
+  },
+  "gold-6242": {
+    "cpu_model_contains": "Gold 6242",
+    "host_cpu_type": "Gold-6242",
+    "host_num_proc": 32,
+    "slots": 32
+  },
+  "gold-6326": {
+    "cpu_model_contains": "Gold 6326",
+    "host_cpu_type": "Gold-6326",
+    "host_num_proc": 32,
+    "slots": 32
+  }
+}
