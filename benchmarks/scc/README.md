@@ -127,7 +127,8 @@ This separate, bounded study uses `fused-dispatch-experiment` and
 `dispatch_campaign.py`. It does not reopen the closed Broadwell/full-CPU runs.
 `submit_dispatch.sh` is the sole submission entrypoint, with exactly these
 profiles: `e5-2680v4` and `gold-6242`. Benchmark tasks reserve **one slot**,
-`linear:1`, `4G`, and the exact CPU type plus host processor count (28/32).
+`4G`, and the exact CPU type plus host processor count (28/32), with verified
+application-managed, nonexclusive one-CPU affinity in the authorized `-app1` retry.
 This intentional shared-host exception does not modify whole-host fused profiles.
 No EPYC or other CPU is included.
 
@@ -245,9 +246,38 @@ execution host had a local configuration override. The installed SGE manual
 states that binding options are ignored by default unless this is enabled.
 Therefore neither `-binding set` nor `-binding env` establishes CPU pinning on
 these hosts. The null-binding diagnostic is now tested and fails clearly.
-Further retries are paused: a separately authorized application-level one-CPU
-affinity policy would be nonexclusive and must be recorded as such, not described
-as scheduler-assigned or whole-host isolation. No validation arrays have run.
+That retry was stopped before requesting the next change; no validation array
+ran in either failed namespace. The following explicitly authorized attempt
+supersedes those historical scheduler-binding commands.
+
+### Application-managed, nonexclusive pinning
+
+The user authorized one fresh `-app1` attempt. Commit and deploy the new helper
+under a fresh `-b2v1-dispatch-validator` deployment ID, without rebuilding. Run
+its `dispatch_serial_retry.py prepare` exactly once. It verifies the original
+bootstrap and both earlier pairs of exact pre-computation failures, then creates
+`20260905T151045Z-becd4ac-b2v1-dispatch-app1` with checksummed references to the
+original successful build and canonical tasks. No old evidence is overwritten.
+
+Invoke the helper's `submit_dispatch.sh` twice for `dispatch-smoke`, using this
+exact new run ID and the two Intel profiles. The current submitter rejects the
+old run IDs. It omits PE and scheduler `-binding` options: one slot is reserved,
+but no particular physical CPU is exclusive. After loading modules, the launcher
+uses SHA-256 of `JOB_ID:SGE_TASK_ID` modulo the size of the sorted allowed CPU
+mask, then applies and verifies singleton affinity inherited by all children.
+The choice is deterministic, does not inspect load or timing, and remains within
+the OS-allowed mask. It records raw scheduler values (including absent binding),
+initial/bound masks, helper identity, and a binding policy explicitly marked
+`binding_source=application` and `exclusive_cpu=false`.
+
+Use `dispatch_serial_retry.py gate/accept/summary` for `-app1`: it checks this
+provenance and reconstructs CPU selection in addition to the original numerical
+and performance checks. Only after both new smokes pass may the same guarded
+submitter launch the unchanged three-task validation array for each CPU.
+Original numerical source, archive, binary, task manifests, and frozen promotion
+thresholds are unchanged. Shared-host interference can still block the tight
+performance gates. Stop on another focused smoke failure; do not quietly add
+retries or relax the gates.
 
 ## Reduce accepted results
 

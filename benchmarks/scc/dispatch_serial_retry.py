@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One authorized fresh serial retry, reusing—not replaying—the accepted build."""
+"""Authorized application-affinity retry, reusing—not replaying—the accepted build."""
 import json
 from pathlib import Path
 import subprocess
@@ -7,7 +7,7 @@ import sys
 
 import dispatch_campaign as dc
 import dispatch_validator_reuse as reuse
-from dispatch_serial_launcher import selected_cpu
+from dispatch_serial_launcher import BINDING_POLICY, selected_cpu
 
 
 def references(original):
@@ -33,8 +33,25 @@ def verify_references(run, helper_source):
                    and dc.sha256(path) == spec["sha256"], "reused evidence link mismatch")
 
 
-def failed_smokes(original):
-    for profile, job in zip(dc.PROFILES, ("7469361", "7469362")):
+def check_failure_logs(stdout, stderr, profile, serial_attempt):
+    if serial_attempt:
+        prefix = "CMG_DISPATCH_SERIAL_ENV "
+        dc.require(stdout.startswith(prefix) and len(stdout.splitlines()) == 1,
+                   "missing raw failed-launcher provenance")
+        dc.require(json.loads(stdout[len(prefix):]) ==
+                   dict(raw=dict(NSLOTS="1", PE=None, SGE_BINDING=None),
+                        affinity=list(range(dc.PROFILES[profile][0]))), "unexpected serial environment")
+        dc.require('selected = environment.get("SGE_BINDING", "").split()' in stderr
+                   and stderr.rstrip().endswith("AttributeError: 'NoneType' object has no attribute 'split'"),
+                   "unexpected serial failure boundary")
+    else:
+        dc.require(stdout == "" and stderr.rstrip().endswith("ValueError: single-slot contract failed"),
+                   "failure is not the authorized launcher boundary")
+
+
+def failed_smokes(original, serial_attempt=False):
+    jobs = ("7469449", "7469448") if serial_attempt else ("7469361", "7469362")
+    for profile, job in zip(dc.PROFILES, jobs):
         experiment = f"dispatch-smoke-{profile}"
         dc.require(dc.submission(original, experiment) == job, "unexpected failed job")
         queued = subprocess.run(["qstat", "-j", job], text=True, capture_output=True)
@@ -49,26 +66,31 @@ def failed_smokes(original):
         dc.require(all(record.get(k) not in (None, "", "0", "-/-") for k in
                        ("hostname", "start_time", "end_time", "ru_wallclock", "maxvmem")),
                    "incomplete failed accounting")
+        dc.require(dc.positive(float(record["ru_wallclock"])), "invalid failed walltime")
         log = original / "logs" / experiment
         out, err = list(log.glob(f"*.o{job}.1")), list(log.glob(f"*.e{job}.1"))
-        dc.require(len(out) == len(err) == 1 and out[0].stat().st_size == 0
-                   and err[0].read_text().rstrip().endswith("ValueError: single-slot contract failed"),
-                   "failure is not the authorized launcher boundary")
-        dc.require(not any((original / "output" / experiment).rglob("*.*")) and
-                   not list((original / "receipts" / experiment).glob("task-*/SUCCESS")),
+        dc.require(len(out) == len(err) == 1, "missing failed scheduler logs")
+        check_failure_logs(out[0].read_text(), err[0].read_text(), profile, serial_attempt)
+        dc.require(not any(p.is_file() for p in (original / "output" / experiment).rglob("*")) and
+                   not any(p.is_file() for p in (original / "receipts" / experiment).rglob("*")),
                    "refusing to replay numerical evidence")
 
 
 def prepare(helper):
     original = dc.PROJECT / "runs" / reuse.REUSABLE_RUN
-    run = dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN
+    previous = dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN
+    run = dc.PROJECT / "runs" / reuse.APPLICATION_RETRY_RUN
     proof = reuse.verify(original, helper)
     dc.bootstrap_gate(original)
     failed_smokes(original)
-    for profile in dc.PROFILES:
-        experiment = f"dispatch-validate-{profile}"
-        dc.require(not (original / "manifests" / f"submission-{experiment}.txt").exists()
-                   and not (original / "output" / experiment).exists(), "validation already started")
+    verify_references(previous, "292fed7675122b0f3ff1768a5727d806a5c42902")
+    failed_smokes(previous, serial_attempt=True)
+    for prior in (original, previous):
+        for profile in dc.PROFILES:
+            experiment = f"dispatch-validate-{profile}"
+            dc.require(not (prior / "manifests" / f"submission-{experiment}.txt").exists()
+                       and not (prior / "manifests" / f"submission-{experiment}.lock").exists()
+                       and not (prior / "output" / experiment).exists(), "validation already started")
     links = references(original)
     # Exclusive root creation prevents duplicate attempts, including partial setup.
     run.mkdir()
@@ -82,7 +104,7 @@ def prepare(helper):
     with (run / "manifests/run-id.txt").open("x") as handle:
         handle.write(run.name + "\n")
     reuse.verify(run, helper)
-    print(f"CMG_DISPATCH_SERIAL_RETRY_READY run={run.name}")
+    print(f"CMG_DISPATCH_APPLICATION_RETRY_READY run={run.name}")
 
 
 def accept(run, kind, profile, helper):
@@ -93,8 +115,11 @@ def accept(run, kind, profile, helper):
         launch = json.loads((run / "work" / f"launcher-{task['experiment']}-{task['task_id']}.json").read_text())
         cpu = selected_cpu(launch["raw"], launch["initial_cpus"])
         dc.require(launch["bound_cpus"] == result["allocated_cpus"] == [cpu]
+                   and launch["binding_policy"] == BINDING_POLICY
                    and launch["hostname"] == result["hostname"] and launch["task"] == task
                    and launch["job_id"] == dc.submission(run, task["experiment"])
+                   and launch["raw"]["JOB_ID"] == launch["job_id"]
+                   and launch["raw"]["SGE_TASK_ID"] == str(task["task_id"])
                    and launch["launcher_source_commit"] == proof["validator_source_commit"],
                    "serial launcher provenance mismatch")
     return results, records
@@ -108,7 +133,7 @@ def main():
         prepare(helper)
         return
     run = Path(args[0]).resolve()
-    dc.require(run == dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN, "unexpected retry namespace")
+    dc.require(run == dc.PROJECT / "runs" / reuse.APPLICATION_RETRY_RUN, "unexpected retry namespace")
     if action == "gate":
         reuse.verify(run, helper)
         dc.gate(run, args[1])

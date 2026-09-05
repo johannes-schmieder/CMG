@@ -83,21 +83,34 @@ maxvmem 0.3G
                     dict(helper, **{"benchmarks/scc/run_task.sh": b"changed"})):
             with self.assertRaises(ValueError): reuse.verify_delta(original, bad)
 
-    def test_serial_environment_requires_scheduler_cpu(self):
-        for env in ({"SGE_BINDING": "7"}, {"SGE_BINDING": "7", "NSLOTS": "1", "PE": "NONE"}):
-            self.assertEqual(serial.selected_cpu(env, [3, 7]), 7)
-        for env in ({}, {"SGE_BINDING": None}, {"SGE_BINDING": "3 7"}, {"SGE_BINDING": "-1"}, {"SGE_BINDING": "99"},
-                    {"SGE_BINDING": "7", "NSLOTS": "2"}, {"SGE_BINDING": "7", "NSLOTS": ""},
-                    {"SGE_BINDING": "7", "PE": "omp"}):
-            with self.assertRaises(ValueError): serial.selected_cpu(env, [3, 7])
+    def test_application_cpu_selection_is_allowed_deterministic_and_nonexclusive(self):
+        env = dict(JOB_ID="123", SGE_TASK_ID="1", NSLOTS="1", PE=None, SGE_BINDING=None)
+        cpu = serial.selected_cpu(env, [3, 7])
+        self.assertIn(cpu, [3, 7])
+        # Absent, ignored, or stale scheduler hints must not masquerade as allocation.
+        for binding in (None, "", "99", "3 7"):
+            self.assertEqual(serial.selected_cpu(dict(env, SGE_BINDING=binding), [3, 7]), cpu)
+        self.assertEqual(serial.selected_cpu(dict(env, NSLOTS=None, PE="NONE"), [3, 7]), cpu)
+        self.assertEqual(serial.selected_cpu(env, [7]), 7)
+        self.assertEqual(serial.BINDING_POLICY["binding_source"], "application")
+        self.assertIs(serial.BINDING_POLICY["exclusive_cpu"], False)
+        for mask in ([], [7, 3], [3, 3], [-1], [True], [3.0], ["3"]):
+            with self.assertRaises(ValueError): serial.selected_cpu(env, mask)
+        for key, value in (("NSLOTS", "2"), ("NSLOTS", ""), ("PE", "omp"),
+                           ("JOB_ID", None), ("JOB_ID", "0"), ("JOB_ID", "-1"),
+                           ("JOB_ID", "１２３"), ("SGE_TASK_ID", "undefined")):
+            with self.assertRaises(ValueError): serial.selected_cpu(dict(env, **{key: value}), [3, 7])
+        selected = {serial.selected_cpu(dict(env, JOB_ID=str(job)), [3, 7]) for job in range(100, 120)}
+        self.assertEqual(selected, {3, 7})
 
     def test_serial_launcher_pins_records_and_executes_original_runner(self):
         task = dc.tasks("dispatch-smoke", "gold-6242")[0]
-        run = dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN
+        run = dc.PROJECT / "runs" / reuse.APPLICATION_RETRY_RUN
         env = dict(CMG_RUN_ID=run.name, CMG_TASK_FILE=str(run / "manifests/tasks" / f"{task['experiment']}.jsonl"),
-                   SGE_TASK_ID="1", JOB_ID="123", SGE_BINDING="7")
+                   SGE_TASK_ID="1", JOB_ID="123", NSLOTS="1")
+        cpu = serial.selected_cpu(env, [3, 7])
         with patch.dict(serial.os.environ, env, clear=True), \
-             patch.object(serial.os, "sched_getaffinity", side_effect=[{3, 7}, {7}], create=True), \
+             patch.object(serial.os, "sched_getaffinity", side_effect=[{3, 7}, {cpu}], create=True), \
              patch.object(serial.os, "sched_setaffinity", create=True) as pin, \
              patch.object(serial.os, "execv") as execute, \
              patch.object(dc, "manifest", return_value=[task]), \
@@ -105,17 +118,30 @@ maxvmem 0.3G
              patch.object(dc, "identity", return_value=(reuse.REUSABLE_SOURCE, None, None, None)), \
              patch("builtins.print"):
             serial.main()
-            pin.assert_called_once_with(0, {7})
+            pin.assert_called_once_with(0, {cpu})
             record = write.call_args.args[1]
-            self.assertIsNone(record["raw"]["NSLOTS"])
-            self.assertEqual(record["bound_cpus"], [7])
+            self.assertIsNone(record["raw"]["SGE_BINDING"])
+            self.assertEqual(record["raw"]["NSLOTS"], "1")
+            self.assertEqual(record["bound_cpus"], [cpu])
+            self.assertEqual(record["binding_policy"], serial.BINDING_POLICY)
             self.assertEqual(serial.os.environ["NSLOTS"], "1")
             self.assertIn(reuse.REUSABLE_SOURCE, execute.call_args.args[1][1])
+
+    def test_only_observed_precomputation_failure_is_retriable(self):
+        err = ('    selected = environment.get("SGE_BINDING", "").split()\n'
+               "AttributeError: 'NoneType' object has no attribute 'split'\n")
+        for profile, (cores, _, _) in dc.PROFILES.items():
+            value = dict(raw=dict(NSLOTS="1", PE=None, SGE_BINDING=None), affinity=list(range(cores)))
+            out = "CMG_DISPATCH_SERIAL_ENV " + json.dumps(value) + "\n"
+            retry.check_failure_logs(out, err, profile, True)
+            for stdout, stderr in ((out, "numerical failure"), (out + out, err),
+                                   (out.replace('"NSLOTS": "1"', '"NSLOTS": "2"'), err)):
+                with self.assertRaises(ValueError): retry.check_failure_logs(stdout, stderr, profile, True)
 
     def test_retry_references_are_exact_links_not_relabelled_builds(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(dc, "PROJECT", Path(directory)):
             original = dc.PROJECT / "runs" / reuse.REUSABLE_RUN
-            run = dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN
+            run = dc.PROJECT / "runs" / reuse.APPLICATION_RETRY_RUN
             for root in (original, run):
                 for subdir in ("manifests/tasks", "receipts", "logs"):
                     (root / subdir).mkdir(parents=True)

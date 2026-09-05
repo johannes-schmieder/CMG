@@ -8,7 +8,7 @@ memory=${4:-4G}
 case "$kind" in dispatch-smoke) runtime=00:15:00; tasks=1;; dispatch-validate) runtime=02:00:00; tasks=3;; *) exit 2;; esac
 case "$profile" in e5-2680v4) cores=28; cpu=E5-2680v4;; gold-6242) cores=32; cpu=Gold-6242;; *) exit 2;; esac
 test "$memory" = 4G
-[[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-dispatch(-serial1)?$ ]]
+[[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-dispatch-app1$ ]]
 project=/projectnb/welfgr/cmg-benchmarks
 run="$project/runs/$run_id"
 source_sha=$(tr -d '\n' < "$run/manifests/source-commit.txt")
@@ -35,13 +35,13 @@ validator_identity=$(python3 "$validator/dispatch_validator_reuse.py" "$run" "$v
 python3 "$validator/dispatch_campaign.py" check-manifest "$task_file" >/dev/null
 python3 "$validator/dispatch_campaign.py" gate "$run" "$kind" >/dev/null
 runner="$validator/run_dispatch_serial.sh"
-if [[ "$run_id" = *-serial1 ]]; then
-    python3 "$validator/dispatch_serial_retry.py" gate "$run" "$kind" >/dev/null
-fi
+python3 "$validator/dispatch_serial_retry.py" gate "$run" "$kind" >/dev/null
 # Atomic reservation remains on a failed/ambiguous submit: inspect, never retry blindly.
 mkdir "$run/manifests/submission-$experiment.lock"
 mkdir "$run/logs/$experiment"
-job_id=$(qsub -terse -P welfgr -binding env linear:1 \
+# SCC ignores -binding without ENABLE_BINDING. The launcher applies a verified,
+# explicitly nonexclusive one-CPU mask; no PE means exactly one reserved slot.
+job_id=$(qsub -terse -P welfgr \
     -l "num_proc=$cores,cpu_type=$cpu" -l mem_per_core=4G -l "h_rt=$runtime" \
     -t "1-$tasks" -tc 1 -N "cmg-b2-$experiment" \
     -o "$run/logs/$experiment" -e "$run/logs/$experiment" \
@@ -51,6 +51,7 @@ set -o noclobber
 {
     printf 'kind=%s\ncpu_profile=%s\njob_id=%s\ntasks=%s\nslots=1\nmem_per_core=4G\nruntime=%s\n' "$kind" "$profile" "$job_id" "$tasks" "$runtime"
     printf 'task_file=%s\nhost_num_proc=%s\nhost_cpu_type=%s\n' "$task_file" "$cores" "$cpu"
+    printf 'binding_source=application\nexclusive_cpu=false\n'
     printf '%s\n' "$validator_identity"
     qstat -j "${job_id%%.*}" || printf 'qstat_snapshot=unavailable_after_submission\n'
 } > "$receipt" 2>&1

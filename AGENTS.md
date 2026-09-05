@@ -268,8 +268,31 @@ installed SGE manual says binding is ignored unless `execd_params` includes
 had no local override. Check this setting before relying on any `-binding`
 request. A whole-host-sized affinity mask alone does not prove that binding was
 applied. Do not retry the scheduler-binding approach or infer a reserved physical
-core from a one-slot allocation. Application-managed, nonexclusive CPU pinning
-needs an explicitly authorized fresh attempt and honest binding provenance.
+core from a one-slot allocation.
+
+### Authorized application-affinity attempt (2026-09-05)
+
+The user subsequently authorized application-managed, nonexclusive one-CPU
+pinning and retrying only the two failed smokes. The current helper's exclusive
+`dispatch_serial_retry.py prepare` creates only the fresh original run suffix
+`-app1`, after rechecking the build and both earlier pairs of pre-computation
+failures. The `-serial1` attempt stays immutable. Do not rebuild the binary.
+
+The serial submitter omits `-binding` and any PE; it reserves one slot and 4G.
+After module initialization the launcher deterministically selects a CPU from
+the sorted allowed mask using SHA-256 of job/task IDs, pins itself and its
+children, and verifies the resulting singleton mask. It does not probe load or
+retune based on timing. Raw environment, original/final masks, selection policy,
+and `exclusive_cpu=false` are mandatory provenance, independently cross-checked
+against task, job, host, and one-slot accounting. This supersedes the earlier
+scheduler-selected-only restriction for this exact attempt, not other studies.
+
+Use the committed helper's guarded submitter and retry gate/accept/summary for
+`-app1`. Both smokes must validate before the unchanged six validation tasks can
+run. Shared-host contention remains a limitation; the frozen performance gates
+still block promotion if inconclusive. Stop and report if the focused retest
+fails. No further retry, threshold revision, historical replay, or EPYC work is
+authorized by this exception.
 
 - Poll at a useful interval (normally ten minutes for this campaign) and keep
   one monitor responsible for the whole bootstrap-smoke-full progression.
