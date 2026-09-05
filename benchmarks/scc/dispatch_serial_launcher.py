@@ -11,7 +11,7 @@ import dispatch_campaign as dc
 def selected_cpu(environment, initial_cpus):
     dc.require(environment.get("NSLOTS") in (None, "1"), "unexpected raw NSLOTS")
     dc.require(environment.get("PE") in (None, "", "NONE"), "expected a serial allocation")
-    selected = environment.get("SGE_BINDING", "").split()
+    selected = (environment.get("SGE_BINDING") or "").split()
     dc.require(len(selected) == 1 and selected[0].isdigit(), "scheduler did not select one OS CPU")
     cpu = int(selected[0])
     dc.require(cpu in initial_cpus, "scheduler CPU is outside allowed affinity")

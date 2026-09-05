@@ -261,6 +261,16 @@ the retry root. Use the helper's `submit_dispatch.sh` and
 checked. Both retry smokes must pass before the unchanged validation matrix.
 No additional retry, numerical change, extra CPU, or threshold change is implied.
 
+The `serial1` retest also failed before numerical execution. Its raw provenance
+showed `NSLOTS=1`, no `SGE_BINDING`, and unrestricted 28/32-CPU affinity. The
+installed SGE manual says binding is ignored unless `execd_params` includes
+`ENABLE_BINDING`; global SCC configuration lacked it and both execution hosts
+had no local override. Check this setting before relying on any `-binding`
+request. A whole-host-sized affinity mask alone does not prove that binding was
+applied. Do not retry the scheduler-binding approach or infer a reserved physical
+core from a one-slot allocation. Application-managed, nonexclusive CPU pinning
+needs an explicitly authorized fresh attempt and honest binding provenance.
+
 - Poll at a useful interval (normally ten minutes for this campaign) and keep
   one monitor responsible for the whole bootstrap-smoke-full progression.
 - A job absent from `qstat` remains pending until all expected qacct records are

@@ -86,7 +86,7 @@ maxvmem 0.3G
     def test_serial_environment_requires_scheduler_cpu(self):
         for env in ({"SGE_BINDING": "7"}, {"SGE_BINDING": "7", "NSLOTS": "1", "PE": "NONE"}):
             self.assertEqual(serial.selected_cpu(env, [3, 7]), 7)
-        for env in ({}, {"SGE_BINDING": "3 7"}, {"SGE_BINDING": "-1"}, {"SGE_BINDING": "99"},
+        for env in ({}, {"SGE_BINDING": None}, {"SGE_BINDING": "3 7"}, {"SGE_BINDING": "-1"}, {"SGE_BINDING": "99"},
                     {"SGE_BINDING": "7", "NSLOTS": "2"}, {"SGE_BINDING": "7", "NSLOTS": ""},
                     {"SGE_BINDING": "7", "PE": "omp"}):
             with self.assertRaises(ValueError): serial.selected_cpu(env, [3, 7])

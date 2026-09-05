@@ -238,6 +238,17 @@ original scientific gates plus launcher/host/CPU provenance checks. The existing
 The helper is separately fingerprinted; numerical source/archive/binary identities
 remain the original build's. Any failure of this focused retry pauses the campaign.
 
+The `serial1` retry failed before computation: raw NSLOTS was already one, but
+there was no SGE_BINDING and the affinity mask covered the host. Read-only checks
+confirmed that SCC did not set `ENABLE_BINDING` in `execd_params` and neither
+execution host had a local configuration override. The installed SGE manual
+states that binding options are ignored by default unless this is enabled.
+Therefore neither `-binding set` nor `-binding env` establishes CPU pinning on
+these hosts. The null-binding diagnostic is now tested and fails clearly.
+Further retries are paused: a separately authorized application-level one-CPU
+affinity policy would be nonexclusive and must be recorded as such, not described
+as scheduler-assigned or whole-host isolation. No validation arrays have run.
+
 ## Reduce accepted results
 
 Copy or mount accepted run directories, then generate inspectable CSVs and a
