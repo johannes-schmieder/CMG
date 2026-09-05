@@ -210,6 +210,12 @@ higher than for scalar batches. See the [experimental API and profiling
 guide](docs/experimental-fused-rhs.md) before opting in. This experimental-branch
 API is separate from the default `main` installation and stable solver routes.
 
+The same feature now includes an opt-in `CalibratedPcgBatchSolver`: it measures
+the first eligible batch, conservatively selects scalar or fused, and reuses
+that choice for subsequent compatible batches. It supports explicit overrides
+and calibration time/memory budgets. See [calibrated dispatch](docs/calibrated-dispatch.md)
+for startup cost, reset rules and the separate performance-qualification gate.
+
 ## Validated benchmarks
 
 A current-code qualification on Intel Xeon Gold 6242 nodes compared this crate

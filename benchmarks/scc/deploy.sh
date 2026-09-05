@@ -45,6 +45,13 @@ for cpu_profile in $cpu_profiles; do
         python3 benchmarks/scc/validate_fused_manifest.py "$temporary/tasks/$experiment.jsonl"
     done
 done
+for profile in e5-2680v4 gold-6242; do
+    for kind in dispatch-smoke dispatch-validate; do
+        manifest="$temporary/tasks/$kind-$profile.jsonl"
+        python3 benchmarks/scc/dispatch_campaign.py generate "$kind" "$profile" > "$manifest"
+        python3 benchmarks/scc/dispatch_campaign.py check-manifest "$manifest"
+    done
+done
 find "$temporary/tasks" -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$temporary/task-manifests.sha256"
 
 ssh scc "test ! -e '$project_root/runs/$run_id' && mkdir -p '$project_root/runs/$run_id/manifests' '$project_root/runs/$run_id/logs' '$project_root/runs/$run_id/work' '$project_root/runs/$run_id/output' '$project_root/runs/$run_id/receipts' '$project_root/source-archives' '$project_root/code-b2'"

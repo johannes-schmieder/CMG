@@ -97,10 +97,10 @@ across graphs, seeds, hosts or applications. The five other Intel smoke
 observations contain only one timed pair each. No EPYC measurement is available.
 
 Consequently, do not infer a density- or CPU-based dispatch policy from these
-data. CMG should own any eventual selection and memory accounting, with an
-explicit downstream override. For now, downstream code should opt in only after
-checking its own workload; it should not need to reproduce the fused solver or
-invent an allegedly universal density cutoff.
+data. The new [calibrated dispatcher](calibrated-dispatch.md) instead measures
+the caller's workload, owns selection/memory accounting, and exposes an explicit
+downstream override. It remains opt-in and subject to separate qualification;
+downstream code need not reproduce the fused solver or invent a density cutoff.
 
 ## Diagnosing mixed and partially occupied groups
 
@@ -152,8 +152,8 @@ are hypotheses, not established optimizations. Any change must preserve per-RHS
 arithmetic order, certification and observable error-prefix behavior. No such
 optimization or automatic routing change is implemented by this profiling work.
 
-If production auto-selection becomes necessary later, define a meaningful gain
-margin and memory limit first, then investigate intermediate graph degrees,
-distinct nonzero RHS with similar/different convergence, multiple sizes/seeds
-and repeated allocations. The current campaign is closed; this is a research
-plan, not authorization for additional jobs.
+The original campaign remains closed. A separately authorized bounded dispatch
+study now freezes a 10% calibration gain margin before testing intermediate
+degrees, distinct/heterogeneous fresh RHS, multiple sizes and allocations. Its
+protocol and promotion gates are documented in the calibrated-dispatch guide;
+old outputs are neither rerun nor overwritten.

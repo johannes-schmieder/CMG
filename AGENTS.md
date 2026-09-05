@@ -209,6 +209,20 @@ themselves identify a production dispatch threshold.
 
 ## Monitoring and recovery
 
+### Calibrated-dispatch qualification exception
+
+The separately authorized dispatch study uses `submit_dispatch.sh`, not either
+older fused submitter. Read the calibrated-dispatch section of the SCC README.
+Its authoritative canonical matrix is in `dispatch_campaign.py`: two Intel
+profiles only (E5-2680v4, Gold-6242), exactly one bound slot and 4G per benchmark
+task on shared hosts. The four-slot bootstrap remains mandatory, followed by
+both one-task smokes, then three eight-case validation allocations per CPU.
+This is an intentional exception to whole-host isolation, not permission to
+change the frozen fused profiles, include EPYC, rerun completed evidence, or
+expand the validation matrix. Use a fresh `-b2v1-dispatch` run. Never remove
+submission reservations or overwrite artifacts/accounting. Keep policy and
+promotion gates frozen before qualification and report shared-host limitations.
+
 - Poll at a useful interval (normally ten minutes for this campaign) and keep
   one monitor responsible for the whole bootstrap-smoke-full progression.
 - A job absent from `qstat` remains pending until all expected qacct records are

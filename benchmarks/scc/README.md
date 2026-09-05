@@ -121,6 +121,68 @@ and all CPU screens. If any smoke fails, preserve the run and do not submit any
 screen. A missing submission response is ambiguous: inspect the profile's
 `submission-*` receipt and exact queued arguments before retrying.
 
+## Calibrated dispatch qualification
+
+This separate, bounded study uses `fused-dispatch-experiment` and
+`dispatch_campaign.py`. It does not reopen the closed Broadwell/full-CPU runs.
+`submit_dispatch.sh` is the sole submission entrypoint, with exactly these
+profiles: `e5-2680v4` and `gold-6242`. Benchmark tasks reserve **one slot**,
+`linear:1`, `4G`, and the exact CPU type plus host processor count (28/32).
+This intentional shared-host exception does not modify whole-host fused profiles.
+No EPYC or other CPU is included.
+
+Deploy a clean committed source with a fresh run suffix `-b2v1-dispatch`; use
+the normal four-core guarded bootstrap. Deployment generates canonical
+`dispatch-smoke-PROFILE.jsonl` and `dispatch-validate-PROFILE.jsonl` manifests.
+Bootstrap tests and roundtrips them and fingerprints the portable dispatch
+binary. The submitter rechecks successful complete bootstrap accounting/logs,
+compiled source/archive/binary identity, and every earlier-stage gate.
+
+```bash
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/submit_dispatch.sh dispatch-smoke e5-2680v4 RUN_ID 4G"
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/submit_dispatch.sh dispatch-smoke gold-6242 RUN_ID 4G"
+# Only after both smokes pass (enforced again by the submitter):
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/submit_dispatch.sh dispatch-validate e5-2680v4 RUN_ID 4G"
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/SOURCE_SHA/benchmarks/scc/submit_dispatch.sh dispatch-validate gold-6242 RUN_ID 4G"
+```
+
+Each smoke is one task with two 10k-vertex cases and a 15-minute limit.
+Validation is three separately scheduled tasks per CPU, concurrency one and
+two hours per task. Each allocation contains eight cases: 100k vertices,
+degree 3/8/16, RHS 4, distinct/heterogeneous; plus 300k degree-3 RHS-5
+heterogeneous and 300k degree-16 RHS-16 distinct. All graphs use one fixed
+connected worker-firm construction. Heterogeneous groups contain zero, smooth,
+and independent random RHS. Each first batch calibrates under the frozen
+30-second/10%/five-pair policy with a 1 GiB principal-workspace cap. Seven fresh
+same-class holdout batches then compare direct scalar, direct fused, and cached
+Auto on the same hierarchy with rotating execution order. No holdout changes
+the decision. Allocation/setup, RHS generation and agreement checks are outside
+holdout timing; startup/calibration cost is reported separately.
+
+Atomic submission reservations, exclusive output creation and experiment-scoped
+logs/receipts prevent reruns from overwriting evidence. A failed or ambiguous
+submission reservation is not permission to retry: inspect the exact receipt,
+queue and arguments. Never delete a reservation to make a duplicate possible.
+
+Use `dispatch_campaign.py accept RUN_ROOT KIND PROFILE` after queue departure
+to validate complete per-task accounting, slots/host agreement, exact manifests,
+one portable binary, raw logs, markers and checksummed receipts. `qstat`
+disappearance alone is never success. Preserve raw qacct without overwriting
+existing accounting; the legacy `collect_accounting.sh` overwrites and is not
+used for this study. One campaign monitor may continue the staged workflow;
+use hourly checks for a long wait and keep unchanged state quiet.
+
+Promotion gates are fixed in advance: bitwise output and every diagnostic field,
+bounded memory, both route selections, and per-case/per-allocation paired 95%
+upper bounds no greater than 1.02 for cached Auto/direct-selected and 1.05 for
+Auto/scalar on holdouts. Report raw intervals, allocation-specific outcomes,
+startup amortization and walltime/maxvmem ranges. Do not pool within-allocation
+timings as independent host replications. Shared-host interference can make the
+tight overhead gate inconclusive; that blocks promotion, not preservation of a
+valid result. Any policy revision needs a new development/holdout split and new
+immutable run, not retuning and reusing these results. Existing APIs remain
+unchanged even if this opt-in API qualifies.
+
 ## Reduce accepted results
 
 Copy or mount accepted run directories, then generate inspectable CSVs and a

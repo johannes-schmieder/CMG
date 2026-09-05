@@ -35,6 +35,7 @@ cargo --version --verbose > "$run_root/manifests/cargo.txt"
 export CMG_BENCH_COMMIT="$source_sha"
 export CMG_BENCH_ARCHIVE_SHA256="$archive_sha"
 cd "$code_root"
+sha256sum -c "$run_root/manifests/source-files-sha256.txt" > "$run_root/logs/source-files.log" 2>&1
 cargo fmt --all --check > "$run_root/logs/cargo-fmt.log" 2>&1
 cargo fmt --all --check --manifest-path benchmarks/Cargo.toml > "$run_root/logs/cargo-bench-fmt.log" 2>&1
 cargo clippy --locked --all-features --all-targets -- -D warnings > "$run_root/logs/cargo-clippy.log" 2>&1
@@ -55,6 +56,16 @@ find "$code_root/benchmarks/target/release" -maxdepth 1 -type f -perm -0100 -pri
     | sort -z | xargs -0 sha256sum > "$run_root/manifests/benchmark-binaries-sha256.txt"
 sha256sum "$code_root/benchmarks/target/release/fused-rhs-experiment" | cut -d' ' -f1 \
     > "$run_root/manifests/fused-portable-binary-sha256.txt"
+sha256sum "$code_root/benchmarks/target/release/fused-dispatch-experiment" | cut -d' ' -f1 \
+    > "$run_root/manifests/dispatch-portable-binary-sha256.txt"
+"$code_root/benchmarks/target/release/fused-dispatch-experiment" identity \
+    > "$run_root/manifests/dispatch-identity.json"
+python3 - "$run_root/manifests/dispatch-identity.json" "$source_sha" "$archive_sha" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1]))
+assert value == dict(source_commit=sys.argv[2], source_archive_sha256=sys.argv[3])
+PY
 sha256sum "$code_root/benchmarks/target-cascadelake/release/fused-rhs-experiment" | cut -d' ' -f1 \
     > "$run_root/manifests/fused-cascadelake-binary-sha256.txt"
 
@@ -135,6 +146,17 @@ for cpu_profile in $cpu_profiles; do
         python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" "$kind" "$roundtrip" \
             --cpu-profile "$cpu_profile" >> "$run_root/logs/task-generator.log" 2>&1
         cmp "$roundtrip" "$run_root/manifests/tasks/$experiment.jsonl"
+    done
+done
+
+for profile in e5-2680v4 gold-6242; do
+    for kind in dispatch-smoke dispatch-validate; do
+        manifest="$run_root/manifests/tasks/$kind-$profile.jsonl"
+        python3 "$code_root/benchmarks/scc/dispatch_campaign.py" check-manifest "$manifest" \
+            >> "$run_root/logs/dispatch-manifests.log" 2>&1
+        roundtrip="$run_root/work/tasks-$kind-$profile-roundtrip.jsonl"
+        python3 "$code_root/benchmarks/scc/dispatch_campaign.py" generate "$kind" "$profile" > "$roundtrip"
+        cmp "$roundtrip" "$manifest"
     done
 done
 

@@ -12,6 +12,9 @@
 
 #![allow(clippy::needless_range_loop)]
 
+mod dispatch;
+pub use dispatch::*;
+
 use super::{PcgBatchMut, PcgBatchRef, PcgDiagnostics};
 use crate::{
     CmgError, CmgPreconditioner, Components, Laplacian, PcgOptions, TerminalReason,
@@ -115,17 +118,24 @@ impl FusedPcgWorkspace4 {
     /// Fallibly allocate a fused workspace for a fixed preconditioner.
     pub fn try_new(preconditioner: &CmgPreconditioner) -> Result<Self, CmgError> {
         let hierarchy = preconditioner.hierarchy();
-        let dimensions: Vec<usize> = hierarchy
-            .levels()
-            .iter()
-            .map(|level| level.graph().vertex_count())
-            .collect();
+        let mut dimensions = try_filled(hierarchy.levels().len(), 0, "fused dimensions")?;
+        for (dimension, level) in dimensions.iter_mut().zip(hierarchy.levels()) {
+            *dimension = level.graph().vertex_count();
+        }
         let dimension = dimensions.first().copied().unwrap_or(0);
-        let components: Vec<Components> = hierarchy
-            .levels()
-            .iter()
-            .map(|level| Components::from_laplacian(level.graph()))
-            .collect();
+        let mut components = Vec::new();
+        components
+            .try_reserve_exact(dimensions.len())
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "fused component metadata",
+            })?;
+        for level in hierarchy.levels() {
+            let graph = level.graph();
+            components.push(Components::try_from_endpoints(
+                graph.vertex_count(),
+                graph.edges().iter().map(|edge| (edge.u(), edge.v())),
+            )?);
+        }
         let mut component_workspaces = Vec::new();
         component_workspaces
             .try_reserve_exact(components.len())

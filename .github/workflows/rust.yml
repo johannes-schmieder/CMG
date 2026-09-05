@@ -62,6 +62,14 @@ jobs:
       - name: Benchmark Clippy
         run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
 
+      - name: SCC protocol tests
+        run: |
+          python3 -m pip install 'jsonschema>=4,<5'
+          python3 -m unittest discover -s benchmarks/scc/tests -v
+
+      - name: Experimental dispatcher without parallel runtime
+        run: cargo test --features experimental-fused-rhs
+
       - name: Benchmark release build
         run: cargo build --manifest-path benchmarks/Cargo.toml --all-targets --release
 
@@ -78,6 +86,9 @@ jobs:
           assert value['source_archive_sha256'] == os.environ['CMG_BENCH_ARCHIVE_SHA256']
           assert value['protocol_version'] == 'cmg-scc2-v1'
           assert 'unknown' not in value.values()
+          import subprocess
+          dispatch = json.loads(subprocess.check_output(['benchmarks/target/release/fused-dispatch-experiment', 'identity'], text=True))
+          assert dispatch == dict(source_commit=os.environ['CMG_BENCH_COMMIT'], source_archive_sha256=os.environ['CMG_BENCH_ARCHIVE_SHA256'])
           PY
 
       - name: Documentation
@@ -112,3 +123,17 @@ jobs:
 
       - name: Release build (all features)
         run: cargo build --all-features --release --verbose
+
+  msrv:
+    name: MSRV / Rust 1.85.1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV
+        run: rustup toolchain install 1.85.1 --profile minimal
+      - name: Check all features and benchmark targets
+        run: |
+          cargo +1.85.1 check --locked --all-targets --all-features
+          cargo +1.85.1 check --locked --all-targets --manifest-path benchmarks/Cargo.toml
+      - name: Test dispatcher on MSRV
+        run: cargo +1.85.1 test --locked --features experimental-fused-rhs

@@ -467,7 +467,7 @@ fn try_zeroed(len: usize, context: &'static str) -> Result<Vec<f64>, CmgError> {
 }
 
 impl PcgWorkspace {
-    #[cfg(feature = "parallel")]
+    #[cfg(any(feature = "parallel", feature = "experimental-fused-rhs"))]
     pub(crate) fn required_bytes(preconditioner: &CmgPreconditioner) -> usize {
         let dimension = preconditioner.hierarchy().levels()[0]
             .graph()
