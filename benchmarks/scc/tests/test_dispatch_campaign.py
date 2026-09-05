@@ -4,10 +4,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dispatch_campaign as dc
 import dispatch_validator_reuse as reuse
+import dispatch_serial_launcher as serial
+import dispatch_serial_retry as retry
 
 
 class DispatchCampaignTests(unittest.TestCase):
@@ -79,6 +82,58 @@ maxvmem 0.3G
                     dict(helper, **{key: b"def parse_qacct(): return 2\ndef gate(): return 0\n"}),
                     dict(helper, **{"benchmarks/scc/run_task.sh": b"changed"})):
             with self.assertRaises(ValueError): reuse.verify_delta(original, bad)
+
+    def test_serial_environment_requires_scheduler_cpu(self):
+        for env in ({"SGE_BINDING": "7"}, {"SGE_BINDING": "7", "NSLOTS": "1", "PE": "NONE"}):
+            self.assertEqual(serial.selected_cpu(env, [3, 7]), 7)
+        for env in ({}, {"SGE_BINDING": "3 7"}, {"SGE_BINDING": "-1"}, {"SGE_BINDING": "99"},
+                    {"SGE_BINDING": "7", "NSLOTS": "2"}, {"SGE_BINDING": "7", "NSLOTS": ""},
+                    {"SGE_BINDING": "7", "PE": "omp"}):
+            with self.assertRaises(ValueError): serial.selected_cpu(env, [3, 7])
+
+    def test_serial_launcher_pins_records_and_executes_original_runner(self):
+        task = dc.tasks("dispatch-smoke", "gold-6242")[0]
+        run = dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN
+        env = dict(CMG_RUN_ID=run.name, CMG_TASK_FILE=str(run / "manifests/tasks" / f"{task['experiment']}.jsonl"),
+                   SGE_TASK_ID="1", JOB_ID="123", SGE_BINDING="7")
+        with patch.dict(serial.os.environ, env, clear=True), \
+             patch.object(serial.os, "sched_getaffinity", side_effect=[{3, 7}, {7}], create=True), \
+             patch.object(serial.os, "sched_setaffinity", create=True) as pin, \
+             patch.object(serial.os, "execv") as execute, \
+             patch.object(dc, "manifest", return_value=[task]), \
+             patch.object(dc, "exclusive_json") as write, \
+             patch.object(dc, "identity", return_value=(reuse.REUSABLE_SOURCE, None, None, None)), \
+             patch("builtins.print"):
+            serial.main()
+            pin.assert_called_once_with(0, {7})
+            record = write.call_args.args[1]
+            self.assertIsNone(record["raw"]["NSLOTS"])
+            self.assertEqual(record["bound_cpus"], [7])
+            self.assertEqual(serial.os.environ["NSLOTS"], "1")
+            self.assertIn(reuse.REUSABLE_SOURCE, execute.call_args.args[1][1])
+
+    def test_retry_references_are_exact_links_not_relabelled_builds(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(dc, "PROJECT", Path(directory)):
+            original = dc.PROJECT / "runs" / reuse.REUSABLE_RUN
+            run = dc.PROJECT / "runs" / reuse.SERIAL_RETRY_RUN
+            for root in (original, run):
+                for subdir in ("manifests/tasks", "receipts", "logs"):
+                    (root / subdir).mkdir(parents=True)
+            names = ["manifests/source-commit.txt", "manifests/source-archive-sha256.txt",
+                     "manifests/dispatch-portable-binary-sha256.txt", "manifests/dispatch-identity.json",
+                     "manifests/submission-bootstrap.txt", "receipts/BUILD_SUCCESS", "logs/rustup.log"]
+            names += [f"manifests/tasks/{kind}-{profile}.jsonl" for kind in
+                      ("dispatch-smoke", "dispatch-validate") for profile in dc.PROFILES]
+            for name in names:
+                (original / name).write_text(name)
+                (run / name).symlink_to(original / name)
+            receipt = dict(original_run_id=original.name, bootstrap_job_id="7469156",
+                           launcher_source_commit="test-helper", references=retry.references(original))
+            dc.exclusive_json(run / "manifests/reused-build.json", receipt)
+            retry.verify_references(run, "test-helper")
+            with self.assertRaises(ValueError): retry.verify_references(run, "other-helper")
+            (original / "logs/rustup.log").write_text("changed")
+            with self.assertRaises(ValueError): retry.verify_references(run, "test-helper")
 
     def test_scientific_gates(self):
         spec = dc.tasks("dispatch-smoke", "gold-6242")[0]["cases"][0]

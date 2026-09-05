@@ -211,6 +211,33 @@ original numerical source/binary hashes. This explicit, run-specific exception
 does not allow patching deployed code, changing numerical policy or weakening
 the frozen performance gates. Any such change needs a new scientific run.
 
+### Serial-job launcher retry
+
+The first dispatch smokes stopped before numerical execution: SCC's JSV removes
+the PE for one-slot requests, and NSLOTS is a parallel-job variable. The corrected
+submitter requests a serial job with `-binding env linear:1`. After loading modules,
+`run_dispatch_serial.sh` applies exactly the one OS CPU supplied in `SGE_BINDING`.
+It rejects absent/multiple/out-of-affinity CPU selections and unexpected NSLOTS/PE;
+it never invents a core. `work/launcher-EXPERIMENT-TASK.json` and stdout record raw
+environment and affinity before normalization. Original numerical execution and
+its one-CPU checks remain unchanged. Final accounting must independently show one slot.
+
+The user authorized one fresh retry using the successful original binary. After
+committing and deploying the helper to a fresh `-b2v1-dispatch-validator` deployment
+(no bootstrap), run its `dispatch_serial_retry.py prepare` once. This verifies both
+exact failed jobs and creates `20260905T151045Z-becd4ac-b2v1-dispatch-serial1`.
+It links, rather than reruns or relabels, the original bootstrap evidence and task
+manifests; `manifests/reused-build.json` fingerprints every origin. Failed outputs,
+logs and submissions are not carried over. No existing file is overwritten.
+
+Use the helper's `submit_dispatch.sh` with this retry run ID for each smoke and,
+only after both pass, for the unchanged validation arrays. Use
+`dispatch_serial_retry.py gate/accept/summary` for this attempt: it applies the
+original scientific gates plus launcher/host/CPU provenance checks. The existing
+`dispatch_campaign.py collect` can preserve successful raw accounting exclusively.
+The helper is separately fingerprinted; numerical source/archive/binary identities
+remain the original build's. Any failure of this focused retry pauses the campaign.
+
 ## Reduce accepted results
 
 Copy or mount accepted run directories, then generate inspectable CSVs and a

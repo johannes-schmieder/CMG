@@ -16,10 +16,13 @@ REUSABLE_RUN = "20260905T151045Z-becd4ac-b2v1-dispatch"
 REUSABLE_SOURCE = "becd4ac569c93aa26c6b07030cad0c08352cd4a4"
 REUSABLE_ARCHIVE = "e989929028c434e9e7f14a17285a7de827fce4ace28031d0b00db57193a4b033"
 REUSABLE_BINARY = "4f311d6e6ec11c045b2bb28fe7ad52897183fe01ff256bae0910b85f8eaa7a17"
+SERIAL_RETRY_RUN = REUSABLE_RUN + "-serial1"
 ALLOWED_CHANGES = {
     "AGENTS.md", "benchmarks/scc/README.md", "benchmarks/scc/submit_dispatch.sh",
     "benchmarks/scc/dispatch_campaign.py", "benchmarks/scc/dispatch_validator_reuse.py",
     "benchmarks/scc/tests/test_dispatch_campaign.py",
+    "benchmarks/scc/dispatch_serial_retry.py", "benchmarks/scc/dispatch_serial_launcher.py",
+    "benchmarks/scc/run_dispatch_serial.sh",
 }
 
 
@@ -65,12 +68,15 @@ def verify(run, validator):
             "validator is not an immutable deployment")
     helper_files, helper_archive = archive_files(helper_source)
     if helper_source != source:
-        require(run == PROJECT / "runs" / REUSABLE_RUN and
+        require(run in (PROJECT / "runs" / REUSABLE_RUN, PROJECT / "runs" / SERIAL_RETRY_RUN) and
                 (source, archive, binary) == (REUSABLE_SOURCE, REUSABLE_ARCHIVE, REUSABLE_BINARY),
                 "reuse is authorized only for the recorded successful bootstrap")
         original_files, original_archive = archive_files(source)
         require(original_archive == archive, "original archive changed")
         verify_delta(original_files, helper_files)
+        if run.name == SERIAL_RETRY_RUN:
+            from dispatch_serial_retry import verify_references
+            verify_references(run, helper_source)
     else:
         require(helper_archive == archive, "validator archive mismatch")
     return dict(validator_source_commit=helper_source,

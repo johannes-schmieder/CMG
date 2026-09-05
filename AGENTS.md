@@ -240,6 +240,27 @@ evidence and deployed code remain immutable. This narrow exception does not
 authorize scientific changes, threshold changes, or replaying completed jobs.
 See the SCC README for the continuation commands and frozen promotion gates.
 
+### Authorized serial-launcher retry (2026-09-05)
+
+After smokes 7469361/7469362 failed before numerical execution, the user
+authorized a launcher-only correction and one retry, reusing the built binary.
+SCC removes the PE from one-slot jobs, so `NSLOTS` can be absent. Submit serial
+jobs with `-binding env linear:1`, then explicitly bind only the single OS CPU
+listed by `SGE_BINDING`; never choose an arbitrary core or weaken affinity checks.
+Log raw NSLOTS/PE/binding, initial/final affinity and the helper revision before
+normalizing missing NSLOTS to one and executing the original immutable runner.
+
+Deploy the committed helper separately, without a build. Its guarded
+`dispatch_serial_retry.py prepare` creates only
+`20260905T151045Z-becd4ac-b2v1-dispatch-serial1`. It first verifies the successful
+bootstrap and both exact pre-computation failures, then links the original
+build evidence and task manifests with a checksummed `reused-build.json` record.
+The original failed run is untouched; new submissions, logs and outputs go to
+the retry root. Use the helper's `submit_dispatch.sh` and
+`dispatch_serial_retry.py gate/accept/summary` so launcher provenance is also
+checked. Both retry smokes must pass before the unchanged validation matrix.
+No additional retry, numerical change, extra CPU, or threshold change is implied.
+
 - Poll at a useful interval (normally ten minutes for this campaign) and keep
   one monitor responsible for the whole bootstrap-smoke-full progression.
 - A job absent from `qstat` remains pending until all expected qacct records are
