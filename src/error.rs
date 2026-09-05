@@ -153,6 +153,11 @@ pub enum CmgError {
         /// Allocation or preparation stage that could not reserve storage.
         context: &'static str,
     },
+    /// Experimental calibration failed numerical agreement or needs resetting.
+    CalibrationFailed {
+        /// Failed agreement check or poisoned-state diagnostic.
+        context: &'static str,
+    },
     /// An option was non-finite or outside its allowed range.
     InvalidOption {
         /// Option name.
@@ -285,6 +290,9 @@ impl fmt::Display for CmgError {
             ),
             Self::AllocationFailed { context } => {
                 write!(formatter, "allocation failed while preparing {context}")
+            }
+            Self::CalibrationFailed { context } => {
+                write!(formatter, "batch calibration failed: {context}")
             }
             Self::InvalidOption { name, value } => {
                 write!(formatter, "option {name} has invalid value {value}")

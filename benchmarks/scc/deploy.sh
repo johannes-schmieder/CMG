@@ -29,8 +29,28 @@ archive="$temporary/$source_sha.tar"
 git archive --format=tar --output="$archive" "$source_sha"
 archive_sha=$(shasum -a 256 "$archive" | awk '{print $1}')
 mkdir -p "$temporary/tasks"
-for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge; do
+for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge fused-smoke fused; do
     python3 benchmarks/scc/tasks/generate_tasks.py "$kind" "$temporary/tasks/$kind.jsonl"
+done
+for kind in fused-smoke fused; do
+    python3 benchmarks/scc/validate_fused_manifest.py "$temporary/tasks/$kind.jsonl"
+done
+cpu_profiles=$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1])))))' \
+    benchmarks/scc/fused_cpu_profiles.json)
+for cpu_profile in $cpu_profiles; do
+    for kind in fused-cpu-smoke fused-cpu-screen; do
+        experiment="$kind-$cpu_profile"
+        python3 benchmarks/scc/tasks/generate_tasks.py "$kind" \
+            "$temporary/tasks/$experiment.jsonl" --cpu-profile "$cpu_profile"
+        python3 benchmarks/scc/validate_fused_manifest.py "$temporary/tasks/$experiment.jsonl"
+    done
+done
+for profile in e5-2680v4 gold-6242; do
+    for kind in dispatch-smoke dispatch-validate; do
+        manifest="$temporary/tasks/$kind-$profile.jsonl"
+        python3 benchmarks/scc/dispatch_campaign.py generate "$kind" "$profile" > "$manifest"
+        python3 benchmarks/scc/dispatch_campaign.py check-manifest "$manifest"
+    done
 done
 find "$temporary/tasks" -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$temporary/task-manifests.sha256"
 

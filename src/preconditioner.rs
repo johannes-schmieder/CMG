@@ -464,7 +464,7 @@ pub struct CmgPreconditioner {
 }
 
 impl CmgPreconditioner {
-    #[cfg(feature = "parallel")]
+    #[cfg(any(feature = "parallel", feature = "experimental-fused-rhs"))]
     pub(crate) fn workspace_bytes(&self) -> usize {
         CmgWorkspace::required_bytes(
             &self.hierarchy,

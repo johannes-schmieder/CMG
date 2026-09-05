@@ -200,6 +200,22 @@ raw submitted edges, the complete bounded hierarchy, an optional parallel plan,
 and the requested reusable workspace pool. `memory_report` provides exact
 principal retained bytes after construction without changing solver behavior.
 
+## Experimental fused RHS
+
+The `experimental-fused-rhs` feature exposes an explicit four-lane, zero-start
+Laplacian batch solver. It shares traversals across independent RHS; it is not
+multicore PCG and does not change existing automatic routing. Measured gains
+depend strongly on graph structure and RHS convergence, and workspace use is
+higher than for scalar batches. See the [experimental API and profiling
+guide](docs/experimental-fused-rhs.md) before opting in. This experimental-branch
+API is separate from the default `main` installation and stable solver routes.
+
+The same feature now includes an opt-in `CalibratedPcgBatchSolver`: it measures
+the first eligible batch, conservatively selects scalar or fused, and reuses
+that choice for subsequent compatible batches. It supports explicit overrides
+and calibration time/memory budgets. See [calibrated dispatch](docs/calibrated-dispatch.md)
+for startup cost, reset rules and the separate performance-qualification gate.
+
 ## Validated benchmarks
 
 A current-code qualification on Intel Xeon Gold 6242 nodes compared this crate

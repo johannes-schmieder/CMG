@@ -10,6 +10,11 @@ use rayon::prelude::*;
 #[cfg(feature = "profiling")]
 use std::time::Instant;
 
+/// Experimental fixed-width independent-RHS solver.
+#[cfg(feature = "experimental-fused-rhs")]
+#[doc(hidden)]
+pub mod experimental;
+
 /// Reusable vectors for repeated PCG solves with one preconditioner.
 #[derive(Debug, Clone)]
 pub struct PcgWorkspace {
@@ -462,7 +467,7 @@ fn try_zeroed(len: usize, context: &'static str) -> Result<Vec<f64>, CmgError> {
 }
 
 impl PcgWorkspace {
-    #[cfg(feature = "parallel")]
+    #[cfg(any(feature = "parallel", feature = "experimental-fused-rhs"))]
     pub(crate) fn required_bytes(preconditioner: &CmgPreconditioner) -> usize {
         let dimension = preconditioner.hierarchy().levels()[0]
             .graph()

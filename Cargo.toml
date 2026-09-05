@@ -27,6 +27,7 @@ include = [
 default = []
 parallel = ["dep:rayon"]
 profiling = ["parallel"]
+experimental-fused-rhs = []
 
 [dependencies]
 rayon = { version = "1.12", optional = true }

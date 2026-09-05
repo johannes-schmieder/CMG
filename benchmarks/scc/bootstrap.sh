@@ -10,22 +10,32 @@ archive_sha=$(tr -d '\n' < "$run_root/manifests/source-archive-sha256.txt")
 code_root="$project_root/code-b2/$source_sha"
 test "$(sha256sum "$project_root/source-archives/$source_sha.tar" | cut -d' ' -f1)" = "$archive_sha"
 
+if ! type module >/dev/null 2>&1; then
+    set +u
+    source /etc/profile
+    set -u
+fi
+type module >/dev/null 2>&1
+
 export RUSTUP_HOME="$project_root/toolchains/rustup"
 export CARGO_HOME="$project_root/toolchains/cargo"
 export PATH="$CARGO_HOME/bin:$PATH"
+rustup_log="$run_root/logs/rustup.log"
 if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
-    "$project_root/toolchains/rustup-init" -y --profile minimal --default-toolchain 1.98.0 --no-modify-path
+    "$project_root/toolchains/rustup-init" -y --profile minimal --default-toolchain 1.98.0 --no-modify-path \
+        > "$rustup_log" 2>&1
 else
-    rustup toolchain install 1.98.0 --profile minimal
+    rustup toolchain install 1.98.0 --profile minimal > "$rustup_log" 2>&1
 fi
-rustup default 1.98.0
-rustup component add rustfmt clippy --toolchain 1.98.0
+rustup default 1.98.0 >> "$rustup_log" 2>&1
+rustup component add rustfmt clippy --toolchain 1.98.0 >> "$rustup_log" 2>&1
 rustc --version --verbose > "$run_root/manifests/rustc.txt"
 cargo --version --verbose > "$run_root/manifests/cargo.txt"
 
 export CMG_BENCH_COMMIT="$source_sha"
 export CMG_BENCH_ARCHIVE_SHA256="$archive_sha"
 cd "$code_root"
+sha256sum -c "$run_root/manifests/source-files-sha256.txt" > "$run_root/logs/source-files.log" 2>&1
 cargo fmt --all --check > "$run_root/logs/cargo-fmt.log" 2>&1
 cargo fmt --all --check --manifest-path benchmarks/Cargo.toml > "$run_root/logs/cargo-bench-fmt.log" 2>&1
 cargo clippy --locked --all-features --all-targets -- -D warnings > "$run_root/logs/cargo-clippy.log" 2>&1
@@ -35,12 +45,29 @@ cargo test --release --locked --all-features > "$run_root/logs/cargo-release-tes
 cargo test --locked --all-features --manifest-path benchmarks/Cargo.toml > "$run_root/logs/cargo-bench-test.log" 2>&1
 cargo build --release --locked --all-features > "$run_root/logs/cargo-build.log" 2>&1
 cargo build --release --locked --all-features --all-targets --manifest-path benchmarks/Cargo.toml > "$run_root/logs/cargo-bench-build.log" 2>&1
+CARGO_TARGET_DIR=benchmarks/target-cascadelake RUSTFLAGS='-C target-cpu=cascadelake' \
+    cargo build --release --locked --manifest-path benchmarks/Cargo.toml --bin fused-rhs-experiment \
+    > "$run_root/logs/cargo-fused-cascadelake-build.log" 2>&1
 cargo fmt --all --check --manifest-path benchmarks/c-kernel/Cargo.toml > "$run_root/logs/cargo-c-kernel-fmt.log" 2>&1
 cargo clippy --locked --all-targets --manifest-path benchmarks/c-kernel/Cargo.toml -- -D warnings > "$run_root/logs/cargo-c-kernel-clippy.log" 2>&1
 cargo test --locked --manifest-path benchmarks/c-kernel/Cargo.toml > "$run_root/logs/cargo-c-kernel-test.log" 2>&1
 cargo build --release --locked -vv --manifest-path benchmarks/c-kernel/Cargo.toml > "$run_root/logs/cargo-c-kernel-build.log" 2>&1
 find "$code_root/benchmarks/target/release" -maxdepth 1 -type f -perm -0100 -print0 \
     | sort -z | xargs -0 sha256sum > "$run_root/manifests/benchmark-binaries-sha256.txt"
+sha256sum "$code_root/benchmarks/target/release/fused-rhs-experiment" | cut -d' ' -f1 \
+    > "$run_root/manifests/fused-portable-binary-sha256.txt"
+sha256sum "$code_root/benchmarks/target/release/fused-dispatch-experiment" | cut -d' ' -f1 \
+    > "$run_root/manifests/dispatch-portable-binary-sha256.txt"
+"$code_root/benchmarks/target/release/fused-dispatch-experiment" identity \
+    > "$run_root/manifests/dispatch-identity.json"
+python3 - "$run_root/manifests/dispatch-identity.json" "$source_sha" "$archive_sha" <<'PY'
+import json
+import sys
+value = json.load(open(sys.argv[1]))
+assert value == dict(source_commit=sys.argv[2], source_archive_sha256=sys.argv[3])
+PY
+sha256sum "$code_root/benchmarks/target-cascadelake/release/fused-rhs-experiment" | cut -d' ' -f1 \
+    > "$run_root/manifests/fused-cascadelake-binary-sha256.txt"
 
 diagnostics="$code_root/benchmarks/target/release/scc2-diagnostics"
 "$diagnostics" identity "$run_root/manifests/rust-identity.json" > "$run_root/logs/rust-identity.log" 2>&1
@@ -103,8 +130,35 @@ for number, line in enumerate(open(manifest), 1):
     validator.validate(json.loads(line))
 PY
 done
-python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" smoke "$run_root/work/tasks-smoke-roundtrip.jsonl" > "$run_root/logs/task-generator.log" 2>&1
+for manifest in "$run_root"/manifests/tasks/fused*.jsonl; do
+    python3 "$code_root/benchmarks/scc/validate_fused_manifest.py" "$manifest" \
+        >> "$run_root/logs/fused-manifests.log" 2>&1
+done
+python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" smoke \
+    "$run_root/work/tasks-smoke-roundtrip.jsonl" > "$run_root/logs/task-generator.log" 2>&1
 cmp "$run_root/work/tasks-smoke-roundtrip.jsonl" "$run_root/manifests/tasks/smoke.jsonl"
+cpu_profiles=$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1])))))' \
+    "$code_root/benchmarks/scc/fused_cpu_profiles.json")
+for cpu_profile in $cpu_profiles; do
+    for kind in fused-cpu-smoke fused-cpu-screen; do
+        experiment="$kind-$cpu_profile"
+        roundtrip="$run_root/work/tasks-$experiment-roundtrip.jsonl"
+        python3 "$code_root/benchmarks/scc/tasks/generate_tasks.py" "$kind" "$roundtrip" \
+            --cpu-profile "$cpu_profile" >> "$run_root/logs/task-generator.log" 2>&1
+        cmp "$roundtrip" "$run_root/manifests/tasks/$experiment.jsonl"
+    done
+done
+
+for profile in e5-2680v4 gold-6242; do
+    for kind in dispatch-smoke dispatch-validate; do
+        manifest="$run_root/manifests/tasks/$kind-$profile.jsonl"
+        python3 "$code_root/benchmarks/scc/dispatch_campaign.py" check-manifest "$manifest" \
+            >> "$run_root/logs/dispatch-manifests.log" 2>&1
+        roundtrip="$run_root/work/tasks-$kind-$profile-roundtrip.jsonl"
+        python3 "$code_root/benchmarks/scc/dispatch_campaign.py" generate "$kind" "$profile" > "$roundtrip"
+        cmp "$roundtrip" "$manifest"
+    done
+done
 
 {
     hostname

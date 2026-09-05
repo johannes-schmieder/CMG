@@ -180,7 +180,7 @@ impl CenteringPlan {
         CenteringWorkspace::try_new(self.sizes.len())
     }
 
-    #[cfg(feature = "parallel")]
+    #[cfg(any(feature = "parallel", feature = "experimental-fused-rhs"))]
     pub(crate) fn workspace_bytes(&self) -> usize {
         CenteringWorkspace::byte_len_for(self.sizes.len())
     }
@@ -438,7 +438,7 @@ impl Components {
         ComponentWorkspace::try_new(self.count())
     }
 
-    #[cfg(feature = "parallel")]
+    #[cfg(any(feature = "parallel", feature = "experimental-fused-rhs"))]
     pub(crate) fn workspace_bytes(&self) -> usize {
         ComponentWorkspace::byte_len_for(self.count())
     }

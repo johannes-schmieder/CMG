@@ -57,6 +57,9 @@ pub use parallel_solver::{
 };
 #[cfg(feature = "profiling")]
 pub use pcg::PcgBatchPhaseProfile;
+#[cfg(feature = "experimental-fused-rhs")]
+#[doc(hidden)]
+pub use pcg::experimental;
 #[cfg(feature = "profiling")]
 pub use pcg::profile_pcg_batch_into_with_workspace;
 pub use pcg::{

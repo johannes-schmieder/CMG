@@ -23,7 +23,7 @@ pub struct CmgWorkspace {
 }
 
 impl CmgWorkspace {
-    #[cfg(feature = "parallel")]
+    #[cfg(any(feature = "parallel", feature = "experimental-fused-rhs"))]
     pub(crate) fn required_bytes(
         hierarchy: &CmgHierarchy,
         direct_terminal: Option<&GroundedLdl>,
