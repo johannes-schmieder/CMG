@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dispatch_campaign as dc
+import dispatch_validator_reuse as reuse
 
 
 class DispatchCampaignTests(unittest.TestCase):
@@ -53,6 +54,31 @@ maxvmem 0.3G
                     record.replace("slots 1", "slots 28"), record.replace("end_time Sat Sep 05 10:01:00 2026", "end_time 0")):
             with self.assertRaises(ValueError): dc.parse_qacct(bad, "123", ["1"], 1)
         with self.assertRaises(ValueError): dc.parse_qacct(record, "123", ["1", "2"], 1)
+
+        # Real SCC qacct pads both keys and values, including non-array taskids.
+        lines = []
+        for line in record.splitlines():
+            parts = line.split(None, 1)
+            lines.append(f"{parts[0]:<13}{parts[1]:<30}" if len(parts) == 2 else line)
+        padded = "\n".join(lines) + "\n"
+        self.assertEqual(dc.parse_qacct(padded, "123", ["1"], 1),
+                         dc.parse_qacct(record, "123", ["1"], 1))
+        bootstrap = padded.replace("taskid       1", "taskid       undefined").replace("slots        1", "slots        4")
+        self.assertEqual(dc.parse_qacct(bootstrap, "123", ["undefined"], 4)[0]["slots"], "4")
+        for bad in (padded+padded, padded+"exit_status 0\n", padded.replace("failed       0", "failed       1"),
+                    padded.replace("exit_status  0", "exit_status  1"),
+                    padded.replace("jobnumber    123", "jobnumber    124")):
+            with self.assertRaises(ValueError): dc.parse_qacct(bad, "123", ["1"], 1)
+
+    def test_reuse_rejects_science_and_gate_changes(self):
+        key = "benchmarks/scc/dispatch_campaign.py"
+        original = {key: b"def parse_qacct(): return 0\ndef gate(): return 1\n", "src/lib.rs": b"numerics"}
+        helper = dict(original, **{key: b"def parse_qacct(): return 2\ndef gate(): return 1\n"})
+        reuse.verify_delta(original, helper)
+        for bad in (dict(helper, **{"src/lib.rs": b"changed"}),
+                    dict(helper, **{key: b"def parse_qacct(): return 2\ndef gate(): return 0\n"}),
+                    dict(helper, **{"benchmarks/scc/run_task.sh": b"changed"})):
+            with self.assertRaises(ValueError): reuse.verify_delta(original, bad)
 
     def test_scientific_gates(self):
         spec = dc.tasks("dispatch-smoke", "gold-6242")[0]["cases"][0]

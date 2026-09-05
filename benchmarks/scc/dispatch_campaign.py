@@ -195,7 +195,13 @@ def run_task(run, task):
 def parse_qacct(raw, job_id, task_ids, slots):
     records = []
     for block in re.split(r"(?m)^=+\s*$", raw):
-        record = dict(line.split(None, 1) for line in block.splitlines() if len(line.split(None, 1)) == 2)
+        record = {}
+        for line in block.splitlines():
+            fields = line.split(None, 1)
+            if len(fields) == 2:
+                key, value = fields
+                require(key not in record, "duplicate qacct field")
+                record[key] = value.strip()
         if not record:
             continue
         required = {"jobnumber", "taskid", "failed", "exit_status", "slots", "hostname", "start_time", "end_time", "ru_wallclock", "maxvmem"}

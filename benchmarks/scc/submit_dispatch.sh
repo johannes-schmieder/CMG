@@ -13,6 +13,9 @@ project=/projectnb/welfgr/cmg-benchmarks
 run="$project/runs/$run_id"
 source_sha=$(tr -d '\n' < "$run/manifests/source-commit.txt")
 code="$project/code-b2/$source_sha"
+# The submit-time validator may be a separately committed accounting-only fix.
+# Execution still uses the original run's immutable runner and portable binary.
+validator=$(cd "$(dirname "$0")" && pwd -P)
 experiment="$kind-$profile"
 receipt="$run/manifests/submission-$experiment.txt"
 task_file="$run/manifests/tasks/$experiment.jsonl"
@@ -28,8 +31,9 @@ fi
 module purge
 module load python3/3.12.4
 export PYTHONDONTWRITEBYTECODE=1
-python3 "$code/benchmarks/scc/dispatch_campaign.py" check-manifest "$task_file" >/dev/null
-python3 "$code/benchmarks/scc/dispatch_campaign.py" gate "$run" "$kind" >/dev/null
+validator_identity=$(python3 "$validator/dispatch_validator_reuse.py" "$run" "$validator")
+python3 "$validator/dispatch_campaign.py" check-manifest "$task_file" >/dev/null
+python3 "$validator/dispatch_campaign.py" gate "$run" "$kind" >/dev/null
 # Atomic reservation remains on a failed/ambiguous submit: inspect, never retry blindly.
 mkdir "$run/manifests/submission-$experiment.lock"
 mkdir "$run/logs/$experiment"
@@ -43,6 +47,7 @@ set -o noclobber
 {
     printf 'kind=%s\ncpu_profile=%s\njob_id=%s\ntasks=%s\nslots=1\nmem_per_core=4G\nruntime=%s\n' "$kind" "$profile" "$job_id" "$tasks" "$runtime"
     printf 'task_file=%s\nhost_num_proc=%s\nhost_cpu_type=%s\n' "$task_file" "$cores" "$cpu"
+    printf '%s\n' "$validator_identity"
     qstat -j "${job_id%%.*}" || printf 'qstat_snapshot=unavailable_after_submission\n'
 } > "$receipt" 2>&1
 printf '%s\n' "$job_id"

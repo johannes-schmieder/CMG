@@ -183,6 +183,34 @@ valid result. Any policy revision needs a new development/holdout split and new
 immutable run, not retuning and reusing these results. Existing APIs remain
 unchanged even if this opt-in API qualifies.
 
+### Reuse after the accounting-reader fix
+
+Bootstrap 7469156 for `20260905T151045Z-becd4ac-b2v1-dispatch` succeeded.
+SGE pads fields with trailing spaces; the original accounting reader compared
+those padded strings literally and blocked submission before any benchmark ran.
+The user authorized retaining the build, tests and exact numerical binary while
+repairing only the external reader. No completed numerical task is rerun.
+
+Commit the parser/continuation fix, then use normal `deploy.sh` with a fresh
+`-b2v1-dispatch-validator` ID and the helper commit. This is a helper deployment
+only: do not submit its bootstrap or any benchmark against that new ID. Invoke
+the **helper commit's** `submit_dispatch.sh` against the **original** run ID.
+It fingerprints both archives, verifies deployed bytes, restricts the source
+delta and compares the campaign AST with only `parse_qacct` excluded. The
+original `run_task.sh`, task manifests, binary and scientific gates are retained.
+
+```bash
+# HELPER_SHA is the separately committed/deployed accounting-only fix.
+ssh scc "bash /projectnb/welfgr/cmg-benchmarks/code-b2/HELPER_SHA/benchmarks/scc/submit_dispatch.sh dispatch-smoke e5-2680v4 20260905T151045Z-becd4ac-b2v1-dispatch 4G"
+```
+
+Repeat for Gold-6242, then use `dispatch-validate` only after both smokes pass.
+Use the helper's `dispatch_campaign.py accept/collect/summary` to read padded
+accounting. Every submission receipt records the helper source/archive and
+original numerical source/binary hashes. This explicit, run-specific exception
+does not allow patching deployed code, changing numerical policy or weakening
+the frozen performance gates. Any such change needs a new scientific run.
+
 ## Reduce accepted results
 
 Copy or mount accepted run directories, then generate inspectable CSVs and a

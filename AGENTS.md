@@ -223,6 +223,23 @@ expand the validation matrix. Use a fresh `-b2v1-dispatch` run. Never remove
 submission reservations or overwrite artifacts/accounting. Keep policy and
 promotion gates frozen before qualification and report shared-host limitations.
 
+### Authorized accounting-only continuation (2026-09-05)
+
+The user explicitly authorized reuse of the successful bootstrap 7469156 for
+`20260905T151045Z-becd4ac-b2v1-dispatch`. Its numerical source remains
+`becd4ac569c93aa26c6b07030cad0c08352cd4a4`; do not rebuild or rerun it.
+The only defect was trailing whitespace in `qacct` fields, not failed execution.
+Deploy the committed accounting fix separately with `deploy.sh` under a fresh
+`-b2v1-dispatch-validator` deployment ID, without submitting its bootstrap.
+Use that deployment's guarded `submit_dispatch.sh` for the original run's
+unstarted tasks. Its reuse verifier requires exact archived/deployed bytes,
+unchanged numerical code, runner, manifests and scientific gates; only the
+accounting parser and explicitly listed continuation/docs/tests may differ.
+Submission receipts record both validator and numerical identities. Original
+evidence and deployed code remain immutable. This narrow exception does not
+authorize scientific changes, threshold changes, or replaying completed jobs.
+See the SCC README for the continuation commands and frozen promotion gates.
+
 - Poll at a useful interval (normally ten minutes for this campaign) and keep
   one monitor responsible for the whole bootstrap-smoke-full progression.
 - A job absent from `qstat` remains pending until all expected qacct records are
