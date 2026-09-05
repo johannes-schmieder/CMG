@@ -1,5 +1,9 @@
 #![cfg(feature = "experimental-fused-rhs")]
 
+#[cfg(feature = "profiling")]
+use cmg::experimental::{
+    FusedPcgBatchPhaseProfile, profile_pcg_batch_fused_width4_into_with_workspace,
+};
 use cmg::experimental::{FusedPcgWorkspace4, solve_pcg_batch_fused_width4_into_with_workspace};
 use cmg::{
     CmgOptions, CmgPreconditioner, Laplacian, PcgBatchMut, PcgBatchRef, PcgBatchWorkspace,
@@ -13,6 +17,32 @@ fn path(vertex_count: usize) -> Laplacian {
             .map(|vertex| (vertex, vertex + 1, 0.5 + (vertex % 7) as f64 / 8.0)),
     )
     .unwrap()
+}
+
+#[test]
+fn documented_caller_buffer_example() -> Result<(), cmg::CmgError> {
+    let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 1.0)])?;
+    let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default())?;
+    let rhs = [1.0, 0.0, -1.0].repeat(5);
+    let mut solutions = vec![0.0; rhs.len()];
+    let mut diagnostics = vec![PcgDiagnostics::default(); 5];
+    let mut workspace = FusedPcgWorkspace4::try_new(&preconditioner)?;
+    solve_pcg_batch_fused_width4_into_with_workspace(
+        &graph,
+        &preconditioner,
+        PcgBatchRef::contiguous(&rhs, 5, 3)?,
+        PcgBatchMut::contiguous(&mut solutions, 5, 3)?,
+        &mut diagnostics,
+        PcgOptions::default(),
+        &mut workspace,
+    )?;
+    assert!(workspace.byte_len() > 0);
+    for solution in solutions.chunks(3) {
+        for (&actual, expected) in solution.iter().zip([1.0, 0.0, -1.0]) {
+            assert!((actual - expected).abs() < 1.0e-12);
+        }
+    }
+    Ok(())
 }
 
 fn rhs_batch(graph: &Laplacian, count: usize) -> Vec<f64> {
@@ -76,6 +106,104 @@ fn compare_paths(graph: &Laplacian, cmg_options: CmgOptions, rhs_count: usize) {
     for (scalar, fused) in scalar_output.iter().zip(&fused_output) {
         assert_eq!(scalar.to_bits(), fused.to_bits());
     }
+    #[cfg(feature = "profiling")]
+    {
+        fused_output.fill(f64::NAN);
+        fused_diagnostics.fill(PcgDiagnostics::default());
+        let profile = profile_pcg_batch_fused_width4_into_with_workspace(
+            graph,
+            &preconditioner,
+            PcgBatchRef::contiguous(&rhs, rhs_count, graph.vertex_count()).unwrap(),
+            PcgBatchMut::contiguous(&mut fused_output, rhs_count, graph.vertex_count()).unwrap(),
+            &mut fused_diagnostics,
+            options,
+            &mut fused_workspace,
+        )
+        .unwrap();
+        assert_eq!(fused_workspace.byte_len(), bytes);
+        assert_eq!(scalar_diagnostics, fused_diagnostics);
+        for (scalar, fused) in scalar_output.iter().zip(&fused_output) {
+            assert_eq!(scalar.to_bits(), fused.to_bits());
+        }
+        check_profile(profile, &fused_diagnostics);
+    }
+}
+
+#[cfg(feature = "profiling")]
+fn check_profile(profile: FusedPcgBatchPhaseProfile, diagnostics: &[PcgDiagnostics]) {
+    let groups = profile.groups_by_rhs_count();
+    let iterations = profile.iterations_by_active_lanes();
+    assert_eq!(groups[0], 0);
+    assert_eq!(iterations[0], 0);
+    assert_eq!(
+        groups
+            .iter()
+            .enumerate()
+            .map(|(lanes, count)| lanes * count)
+            .sum::<usize>(),
+        diagnostics.len()
+    );
+    assert_eq!(groups.iter().sum::<usize>(), diagnostics.len().div_ceil(4));
+    assert_eq!(
+        profile.active_lane_iterations(),
+        diagnostics
+            .iter()
+            .map(|item| item.iterations())
+            .sum::<usize>()
+    );
+    assert_eq!(
+        profile.lane_iteration_capacity(),
+        4 * iterations.iter().sum::<usize>()
+    );
+    assert!(profile.active_lane_iterations() <= profile.lane_iteration_capacity());
+    assert_eq!(profile.matvec().calls_by_active_lanes(), iterations);
+    // Reconstruct the entire occupancy histogram independently from per-RHS
+    // convergence, not just its weighted total (which could hide wrong bins).
+    let mut reconstructed = [0; 5];
+    for group in diagnostics.chunks(4) {
+        for step in 1..=group.iter().map(|item| item.iterations()).max().unwrap() {
+            reconstructed[group
+                .iter()
+                .filter(|item| item.iterations() >= step)
+                .count()] += 1;
+        }
+    }
+    assert_eq!(iterations, reconstructed);
+    let mut kernel_ns = 0;
+    for sample in [
+        profile.preconditioner(),
+        profile.matvec(),
+        profile.residual_recompute(),
+    ] {
+        assert_eq!(sample.calls_by_active_lanes()[0], 0);
+        assert_eq!(sample.nanoseconds_by_active_lanes()[0], 0);
+        assert_eq!(
+            sample.nanoseconds(),
+            sample.nanoseconds_by_active_lanes().iter().sum()
+        );
+        for (calls, ns) in sample
+            .calls_by_active_lanes()
+            .iter()
+            .zip(sample.nanoseconds_by_active_lanes())
+        {
+            if *calls == 0 {
+                assert_eq!(ns, 0);
+            }
+        }
+        kernel_ns += sample.nanoseconds();
+    }
+    assert!(kernel_ns <= profile.solve_nanoseconds());
+    assert_eq!(
+        kernel_ns + profile.other_solve_nanoseconds(),
+        profile.solve_nanoseconds()
+    );
+    assert!(
+        profile.validation_nanoseconds()
+            + profile.gather_nanoseconds()
+            + profile.solve_nanoseconds()
+            + profile.scatter_nanoseconds()
+            <= profile.total_nanoseconds()
+    );
 }
 
 #[test]
@@ -151,6 +279,26 @@ fn disconnected_weighted_and_strided_batch_is_bitwise_scalar() {
     for (scalar, fused) in scalar.iter().zip(&fused) {
         assert_eq!(scalar.to_bits(), fused.to_bits());
     }
+    #[cfg(feature = "profiling")]
+    {
+        fused.fill(-77.0);
+        fused_diagnostics.fill(PcgDiagnostics::default());
+        let profile = profile_pcg_batch_fused_width4_into_with_workspace(
+            &graph,
+            &preconditioner,
+            PcgBatchRef::strided(&rhs, rhs_count, graph.vertex_count(), 1, 7).unwrap(),
+            PcgBatchMut::strided(&mut fused, rhs_count, graph.vertex_count(), 1, 8).unwrap(),
+            &mut fused_diagnostics,
+            options,
+            &mut FusedPcgWorkspace4::new(&preconditioner),
+        )
+        .unwrap();
+        assert_eq!(scalar_diagnostics, fused_diagnostics);
+        for (scalar, fused) in scalar.iter().zip(&fused) {
+            assert_eq!(scalar.to_bits(), fused.to_bits());
+        }
+        check_profile(profile, &fused_diagnostics);
+    }
 }
 
 #[test]
@@ -188,6 +336,124 @@ fn failure_preserves_scalar_prefix_observability() {
     assert_eq!(scalar_diagnostics, fused_diagnostics);
     for (scalar, fused) in scalar.iter().zip(&fused) {
         assert_eq!(scalar.to_bits(), fused.to_bits());
+    }
+    #[cfg(feature = "profiling")]
+    {
+        fused.fill(-13.0);
+        fused_diagnostics.fill(PcgDiagnostics::default());
+        let profile_error = profile_pcg_batch_fused_width4_into_with_workspace(
+            &graph,
+            &preconditioner,
+            PcgBatchRef::contiguous(&rhs, 3, graph.vertex_count()).unwrap(),
+            PcgBatchMut::contiguous(&mut fused, 3, graph.vertex_count()).unwrap(),
+            &mut fused_diagnostics,
+            PcgOptions::default(),
+            &mut FusedPcgWorkspace4::new(&preconditioner),
+        )
+        .unwrap_err();
+        assert_eq!(scalar_error, profile_error);
+        assert_eq!(scalar_diagnostics, fused_diagnostics);
+        for (scalar, fused) in scalar.iter().zip(&fused) {
+            assert_eq!(scalar.to_bits(), fused.to_bits());
+        }
+    }
+}
+
+#[cfg(feature = "profiling")]
+#[test]
+fn profile_counts_full_partial_zero_and_empty_groups_without_stale_state() {
+    let graph = path(96);
+    let preconditioner = CmgPreconditioner::build(
+        &graph,
+        CmgOptions {
+            direct_threshold: 2,
+            ..CmgOptions::default()
+        },
+    )
+    .unwrap();
+    let nonzero_rhs = rhs_batch(&graph, 2)[graph.vertex_count()..].to_vec();
+    let mut workspace = FusedPcgWorkspace4::new(&preconditioner);
+    // The same workspace alternates full, partial, zero, mixed and empty batches.
+    for (count, zero_first, all_zero) in [
+        (4, false, false),
+        (5, false, false),
+        (4, false, true),
+        (4, true, false),
+        (0, false, false),
+        (1, false, false),
+    ] {
+        let mut rhs = nonzero_rhs.repeat(count);
+        if all_zero {
+            rhs.fill(0.0);
+        } else if zero_first {
+            rhs[..graph.vertex_count()].fill(0.0);
+        }
+        let mut output = vec![f64::NAN; rhs.len()];
+        let mut diagnostics = vec![PcgDiagnostics::default(); count];
+        let options = PcgOptions {
+            residual_recompute_interval: 7,
+            max_iterations: 600,
+            ..PcgOptions::default()
+        };
+        let profile = profile_pcg_batch_fused_width4_into_with_workspace(
+            &graph,
+            &preconditioner,
+            PcgBatchRef::contiguous(&rhs, count, graph.vertex_count()).unwrap(),
+            PcgBatchMut::contiguous(&mut output, count, graph.vertex_count()).unwrap(),
+            &mut diagnostics,
+            options,
+            &mut workspace,
+        )
+        .unwrap();
+        check_profile(profile, &diagnostics);
+        let mut expected_groups = [0; 5];
+        expected_groups[4] = count / 4;
+        if count % 4 != 0 {
+            expected_groups[count % 4] = 1;
+        }
+        assert_eq!(profile.groups_by_rhs_count(), expected_groups);
+        let mut expected_iterations = [0; 5];
+        for group in diagnostics.chunks(4) {
+            for iteration in 1..=group.iter().map(|item| item.iterations()).max().unwrap() {
+                let active = group
+                    .iter()
+                    .filter(|item| item.iterations() >= iteration)
+                    .count();
+                expected_iterations[active] += 1;
+            }
+        }
+        assert_eq!(profile.iterations_by_active_lanes(), expected_iterations);
+        if all_zero || count == 0 {
+            assert_eq!(profile.lane_iteration_capacity(), 0);
+            assert_eq!(profile.preconditioner().calls_by_active_lanes(), [0; 5]);
+            assert_eq!(profile.residual_recompute().calls_by_active_lanes(), [0; 5]);
+        } else {
+            assert!(profile.active_lane_iterations() > 0);
+            assert!(
+                profile
+                    .residual_recompute()
+                    .calls_by_active_lanes()
+                    .iter()
+                    .sum::<usize>()
+                    > 0
+            );
+        }
+        let mut ordinary_output = vec![f64::NAN; rhs.len()];
+        let mut ordinary_diagnostics = vec![PcgDiagnostics::default(); count];
+        solve_pcg_batch_fused_width4_into_with_workspace(
+            &graph,
+            &preconditioner,
+            PcgBatchRef::contiguous(&rhs, count, graph.vertex_count()).unwrap(),
+            PcgBatchMut::contiguous(&mut ordinary_output, count, graph.vertex_count()).unwrap(),
+            &mut ordinary_diagnostics,
+            options,
+            &mut workspace,
+        )
+        .unwrap();
+        assert_eq!(diagnostics, ordinary_diagnostics);
+        for (profiled, ordinary) in output.iter().zip(ordinary_output) {
+            assert_eq!(profiled.to_bits(), ordinary.to_bits());
+        }
     }
 }
 

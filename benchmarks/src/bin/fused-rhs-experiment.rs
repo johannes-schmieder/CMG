@@ -1,5 +1,6 @@
 use cmg::experimental::{
-    FusedPcgWorkspace4, profile_pcg_batch_fused_width4_into_with_workspace,
+    FusedPcgBatchPhaseProfile, FusedPcgPhaseSample, FusedPcgWorkspace4,
+    profile_pcg_batch_fused_width4_into_with_workspace,
     solve_pcg_batch_fused_width4_into_with_workspace,
 };
 use cmg::{
@@ -139,8 +140,9 @@ fn main() -> Result<(), AnyError> {
     let scalar_median = median(&scalar_ns);
     let fused_median = median(&fused_ns);
     let (ratio_ci_low, ratio_ci_high) = paired_ratio_bootstrap(&scalar_ns, &fused_ns);
+    let detailed_profile = detailed_profile_json(fused_profile, &fused_diagnostics)?;
     let payload = format!(
-        "{{\"family\":\"{}\",\"vertices\":{},\"edges\":{},\"rhs_count\":{},\"mode\":\"{}\",\"warmups\":{},\"repetitions\":{},\"bitwise_identical\":true,\"scalar_ns\":{:?},\"fused_ns\":{:?},\"scalar_median_ns\":{},\"fused_median_ns\":{},\"fused_over_scalar\":{},\"paired_bootstrap_ratio_ci95\":[{},{}],\"speedup\":{},\"scalar_workspace_bytes\":{},\"fused_workspace_bytes\":{},\"scalar_profile\":{{\"validation_ns\":{},\"gather_ns\":{},\"solve_ns\":{},\"scatter_ns\":{},\"total_ns\":{}}},\"fused_profile\":{{\"validation_ns\":{},\"gather_ns\":{},\"solve_ns\":{},\"scatter_ns\":{},\"total_ns\":{}}}}}",
+        "{{\"family\":\"{}\",\"vertices\":{},\"edges\":{},\"rhs_count\":{},\"mode\":\"{}\",\"warmups\":{},\"repetitions\":{},\"bitwise_identical\":true,\"scalar_ns\":{:?},\"fused_ns\":{:?},\"scalar_median_ns\":{},\"fused_median_ns\":{},\"fused_over_scalar\":{},\"paired_bootstrap_ratio_ci95\":[{},{}],\"speedup\":{},\"scalar_workspace_bytes\":{},\"fused_workspace_bytes\":{},\"scalar_profile\":{{\"validation_ns\":{},\"gather_ns\":{},\"solve_ns\":{},\"scatter_ns\":{},\"total_ns\":{}}},\"fused_profile\":{{\"validation_ns\":{},\"gather_ns\":{},\"solve_ns\":{},\"scatter_ns\":{},\"total_ns\":{}}},\"fused_detailed_profile\":{}}}",
         family,
         vertices,
         graph.edges().len(),
@@ -168,12 +170,66 @@ fn main() -> Result<(), AnyError> {
         fused_profile.solve_nanoseconds(),
         fused_profile.scatter_nanoseconds(),
         fused_profile.total_nanoseconds(),
+        detailed_profile,
     );
     println!("{payload}");
     if let Some(path) = output_path {
         std::fs::write(path, format!("{payload}\n"))?;
     }
     Ok(())
+}
+
+fn detailed_profile_json(
+    profile: FusedPcgBatchPhaseProfile,
+    diagnostics: &[PcgDiagnostics],
+) -> Result<String, AnyError> {
+    let iterations: Vec<usize> = diagnostics.iter().map(|item| item.iterations()).collect();
+    let restarts: Vec<usize> = diagnostics.iter().map(|item| item.restarts()).collect();
+    let submitted_rhs: usize = profile
+        .groups_by_rhs_count()
+        .iter()
+        .enumerate()
+        .map(|(lanes, groups)| lanes * groups)
+        .sum();
+    let kernel_ns = profile.preconditioner().nanoseconds()
+        + profile.matvec().nanoseconds()
+        + profile.residual_recompute().nanoseconds();
+    if profile.active_lane_iterations() != iterations.iter().sum::<usize>()
+        || profile.matvec().calls_by_active_lanes() != profile.iterations_by_active_lanes()
+        || submitted_rhs != diagnostics.len()
+        || kernel_ns > profile.solve_nanoseconds()
+    {
+        return Err("fused profile does not reconstruct diagnostics or solve timing".into());
+    }
+    let capacity = profile.lane_iteration_capacity();
+    let occupancy = if capacity == 0 {
+        "null".to_owned()
+    } else {
+        (profile.active_lane_iterations() as f64 / capacity as f64).to_string()
+    };
+    Ok(format!(
+        "{{\"version\":\"cmg-fused-profile-v1\",\"groups_by_rhs_count\":{:?},\"iterations_by_active_lanes\":{:?},\"active_lane_iterations\":{},\"lane_iteration_capacity\":{},\"iteration_weighted_occupancy\":{},\"per_rhs_iterations\":{:?},\"per_rhs_restarts\":{:?},\"preconditioner\":{},\"matvec\":{},\"residual_recompute\":{},\"other_solve_ns\":{}}}",
+        profile.groups_by_rhs_count(),
+        profile.iterations_by_active_lanes(),
+        profile.active_lane_iterations(),
+        capacity,
+        occupancy,
+        iterations,
+        restarts,
+        phase_sample_json(profile.preconditioner()),
+        phase_sample_json(profile.matvec()),
+        phase_sample_json(profile.residual_recompute()),
+        profile.other_solve_nanoseconds(),
+    ))
+}
+
+fn phase_sample_json(sample: FusedPcgPhaseSample) -> String {
+    format!(
+        "{{\"ns_by_active_lanes\":{:?},\"calls_by_active_lanes\":{:?},\"total_ns\":{}}}",
+        sample.nanoseconds_by_active_lanes(),
+        sample.calls_by_active_lanes(),
+        sample.nanoseconds(),
+    )
 }
 
 fn parse(value: Option<String>, default: usize, name: &str) -> Result<usize, AnyError> {

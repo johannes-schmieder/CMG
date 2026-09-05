@@ -7,6 +7,9 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Added
 
+- Explicit experimental four-lane independent-RHS Laplacian solves, with
+  documented opt-in/memory constraints and separate profiling of active-lane
+  occupancy and numerical phase costs. Existing solver routing is unchanged.
 - Deterministic stationary CMG preconditioning and certified PCG solves for
   weighted graph Laplacians and SDDM systems.
 - Optional package-owned parallel execution and reusable repeated-right-hand-side

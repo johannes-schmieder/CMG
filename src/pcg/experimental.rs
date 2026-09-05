@@ -1,4 +1,14 @@
 //! Experimental fixed-width independent-RHS PCG implementation.
+//!
+//! Enable `experimental-fused-rhs` and call this module explicitly. Existing
+//! scalar and parallel routing never selects this implementation automatically.
+//! Four lanes share graph traversals but retain independent PCG coefficients,
+//! convergence checks and diagnostics; this is not block CG or multicore PCG.
+//! Only zero initial guesses and graph Laplacians are supported here.
+//!
+//! Performance depends on graph structure, RHS convergence and hardware. The
+//! retained workspace is larger than the scalar batch workspace. Benchmark a
+//! representative workload before opting in; see `docs/experimental-fused-rhs.md`.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -264,6 +274,94 @@ pub struct FusedPcgBatchPhaseProfile {
     solve_nanoseconds: u128,
     scatter_nanoseconds: u128,
     total_nanoseconds: u128,
+    groups_by_rhs_count: [usize; 5],
+    iterations_by_active_lanes: [usize; 5],
+    preconditioner: FusedPcgPhaseSample,
+    matvec: FusedPcgPhaseSample,
+    residual_recompute: FusedPcgPhaseSample,
+}
+
+/// Kernel timing and call counts indexed by the number of active RHS lanes.
+///
+/// Index zero is unused. Preconditioner timings include recursive CMG work;
+/// its internal matrix-vector products are not counted again in the separate
+/// finest-level matvec sample. Timings are diagnostic, instrumented measurements.
+#[cfg(feature = "profiling")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FusedPcgPhaseSample {
+    nanoseconds_by_active_lanes: [u128; 5],
+    calls_by_active_lanes: [usize; 5],
+}
+
+#[cfg(feature = "profiling")]
+impl FusedPcgPhaseSample {
+    /// Return wall-clock nanoseconds for calls with zero through four active lanes.
+    #[must_use]
+    pub const fn nanoseconds_by_active_lanes(self) -> [u128; 5] {
+        self.nanoseconds_by_active_lanes
+    }
+
+    /// Return call counts with zero through four active lanes.
+    #[must_use]
+    pub const fn calls_by_active_lanes(self) -> [usize; 5] {
+        self.calls_by_active_lanes
+    }
+
+    /// Return total measured wall-clock nanoseconds for this kernel.
+    #[must_use]
+    pub fn nanoseconds(self) -> u128 {
+        self.nanoseconds_by_active_lanes.iter().sum()
+    }
+}
+
+enum FusedPhase {
+    Preconditioner,
+    Matvec,
+    ResidualRecompute,
+}
+
+// Static dispatch keeps clock reads and occupancy counters out of ordinary
+// solves, even when both profiling and experimental-fused-rhs are enabled.
+trait FusedObserver {
+    type Stamp;
+    fn start(&self) -> Self::Stamp;
+    fn finish(&mut self, phase: FusedPhase, active: &Mask, stamp: Self::Stamp);
+    fn iteration(&mut self, active: &Mask);
+}
+
+impl FusedObserver for () {
+    type Stamp = ();
+    #[inline(always)]
+    fn start(&self) {}
+    #[inline(always)]
+    fn finish(&mut self, _: FusedPhase, _: &Mask, _: ()) {}
+    #[inline(always)]
+    fn iteration(&mut self, _: &Mask) {}
+}
+
+#[cfg(feature = "profiling")]
+impl FusedObserver for FusedPcgBatchPhaseProfile {
+    type Stamp = Instant;
+
+    fn start(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn finish(&mut self, phase: FusedPhase, active: &Mask, stamp: Instant) {
+        let elapsed = stamp.elapsed().as_nanos();
+        let lanes = active.iter().filter(|&&value| value).count();
+        let sample = match phase {
+            FusedPhase::Preconditioner => &mut self.preconditioner,
+            FusedPhase::Matvec => &mut self.matvec,
+            FusedPhase::ResidualRecompute => &mut self.residual_recompute,
+        };
+        sample.nanoseconds_by_active_lanes[lanes] += elapsed;
+        sample.calls_by_active_lanes[lanes] += 1;
+    }
+
+    fn iteration(&mut self, active: &Mask) {
+        self.iterations_by_active_lanes[active.iter().filter(|&&value| value).count()] += 1;
+    }
 }
 
 #[cfg(feature = "profiling")]
@@ -293,9 +391,93 @@ impl FusedPcgBatchPhaseProfile {
     pub const fn total_nanoseconds(self) -> u128 {
         self.total_nanoseconds
     }
+
+    /// Return the number of groups containing zero through four submitted RHS.
+    ///
+    /// Counts include groups whose RHS converge immediately, before iteration.
+    #[must_use]
+    pub const fn groups_by_rhs_count(self) -> [usize; 5] {
+        self.groups_by_rhs_count
+    }
+
+    /// Return iteration counts by active lane count at the start of each step.
+    ///
+    /// This counts group iterations, not iterations summed across individual
+    /// RHS. Index zero is always zero. Zero-iteration RHS do not contribute.
+    #[must_use]
+    pub const fn iterations_by_active_lanes(self) -> [usize; 5] {
+        self.iterations_by_active_lanes
+    }
+
+    /// Return the number of active RHS-iteration pairs across all groups.
+    ///
+    /// On success this equals the sum of iterations in the per-RHS diagnostics.
+    #[must_use]
+    pub fn active_lane_iterations(self) -> usize {
+        self.iterations_by_active_lanes
+            .iter()
+            .enumerate()
+            .map(|(lanes, iterations)| lanes * iterations)
+            .sum()
+    }
+
+    /// Return four times the number of group iterations, including tail capacity.
+    ///
+    /// Divide active lane iterations by this value to obtain iteration-weighted
+    /// occupancy. For all-zero or empty batches this value is zero; occupancy is
+    /// undefined. It is not a measurement of SIMD instruction utilization.
+    #[must_use]
+    pub fn lane_iteration_capacity(self) -> usize {
+        4 * self.iterations_by_active_lanes.iter().sum::<usize>()
+    }
+
+    /// Return inclusive CMG application timing and lane counts.
+    #[must_use]
+    pub const fn preconditioner(self) -> FusedPcgPhaseSample {
+        self.preconditioner
+    }
+
+    /// Return direction matvec timing at the finest level, once per group step.
+    #[must_use]
+    pub const fn matvec(self) -> FusedPcgPhaseSample {
+        self.matvec
+    }
+
+    /// Return residual replacement and certification timing with their lane counts.
+    ///
+    /// Includes fresh residual matvecs, subtraction, norms and convergence checks,
+    /// plus the final residual check on iteration exhaustion. Excludes CMG work.
+    #[must_use]
+    pub const fn residual_recompute(self) -> FusedPcgPhaseSample {
+        self.residual_recompute
+    }
+
+    /// Return solve time outside the three measured kernels, including overhead.
+    ///
+    /// Covers initial projection, reductions, centering, vector updates, control
+    /// flow and instrumentation. This is a residual, not a separately timed phase.
+    #[must_use]
+    pub fn other_solve_nanoseconds(self) -> u128 {
+        self.solve_nanoseconds.saturating_sub(
+            self.preconditioner.nanoseconds()
+                + self.matvec.nanoseconds()
+                + self.residual_recompute.nanoseconds(),
+        )
+    }
 }
 
 /// Solve arbitrary many zero-start right-hand sides in independent groups of four.
+///
+/// Accepts contiguous or strided input and output views, including empty batches
+/// and incomplete final groups. Reuses the caller's workspace. Each RHS retains
+/// scalar PCG arithmetic order and certification. Successful results and
+/// diagnostics before the first failing RHS are written in input order; the
+/// failing RHS and later outputs are left untouched. Input views, graph identity
+/// and workspace compatibility are checked before outputs are changed.
+///
+/// The workspace is not governed by the parallel solver's memory budget. Use
+/// [`FusedPcgWorkspace4::try_new`] for fallible allocation and inspect
+/// [`FusedPcgWorkspace4::byte_len`] when deciding whether to retain it.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_pcg_batch_fused_width4_into_with_workspace(
     graph: &Laplacian,
@@ -321,7 +503,7 @@ pub fn solve_pcg_batch_fused_width4_into_with_workspace(
     for start in (0..right_hand_sides.rhs_count).step_by(4) {
         let count = 4.min(right_hand_sides.rhs_count - start);
         gather_group(right_hand_sides, start, count, workspace);
-        let outcomes = solve_group(graph, preconditioner, count, options, workspace)?;
+        let outcomes = solve_group(graph, preconditioner, count, options, workspace, &mut ())?;
         for lane in 0..count {
             match &outcomes[lane] {
                 Ok(diagnostic) => {
@@ -336,6 +518,10 @@ pub fn solve_pcg_batch_fused_width4_into_with_workspace(
 }
 
 /// Profile the exact experimental fused caller-buffer path.
+///
+/// Collects occupancy and kernel timings on a separate instrumented call. Use
+/// the ordinary solve entrypoint for performance ratios: profiling introduces
+/// clock and counting overhead, while retaining the same numerical operations.
 #[cfg(feature = "profiling")]
 #[allow(clippy::too_many_arguments)]
 pub fn profile_pcg_batch_fused_width4_into_with_workspace(
@@ -369,13 +555,22 @@ pub fn profile_pcg_batch_fused_width4_into_with_workspace(
     let mut gather_nanoseconds = 0;
     let mut solve_nanoseconds = 0;
     let mut scatter_nanoseconds = 0;
+    let mut profile = FusedPcgBatchPhaseProfile::default();
     for start in (0..right_hand_sides.rhs_count).step_by(4) {
         let count = 4.min(right_hand_sides.rhs_count - start);
+        profile.groups_by_rhs_count[count] += 1;
         let timer = Instant::now();
         gather_group(right_hand_sides, start, count, workspace);
         gather_nanoseconds += timer.elapsed().as_nanos();
         let timer = Instant::now();
-        let outcomes = solve_group(graph, preconditioner, count, options, workspace)?;
+        let outcomes = solve_group(
+            graph,
+            preconditioner,
+            count,
+            options,
+            workspace,
+            &mut profile,
+        )?;
         solve_nanoseconds += timer.elapsed().as_nanos();
         for lane in 0..count {
             match &outcomes[lane] {
@@ -395,6 +590,7 @@ pub fn profile_pcg_batch_fused_width4_into_with_workspace(
         solve_nanoseconds,
         scatter_nanoseconds,
         total_nanoseconds: total.elapsed().as_nanos(),
+        ..profile
     })
 }
 
@@ -471,12 +667,13 @@ fn try_filled<T: Clone>(len: usize, value: T, context: &'static str) -> Result<V
     Ok(values)
 }
 
-fn solve_group(
+fn solve_group<Observer: FusedObserver>(
     graph: &Laplacian,
     preconditioner: &CmgPreconditioner,
     count: usize,
     options: PcgOptions,
     workspace: &mut FusedPcgWorkspace4,
+    observer: &mut Observer,
 ) -> Result<[Result<PcgDiagnostics, CmgError>; 4], CmgError> {
     let mut active = std::array::from_fn(|lane| lane < count);
     let mut outcomes: [Option<Result<PcgDiagnostics, CmgError>>; 4] = std::array::from_fn(|_| None);
@@ -538,6 +735,7 @@ fn solve_group(
     }
 
     if active.iter().any(|value| *value) {
+        let stamp = observer.start();
         fused_preconditioner_apply(
             preconditioner,
             &workspace.residual,
@@ -547,6 +745,7 @@ fn solve_group(
             &mut workspace.component_workspaces,
             &active,
         )?;
+        observer.finish(FusedPhase::Preconditioner, &active, stamp);
         center_width4(
             &mut workspace.preconditioned,
             &workspace.components[0],
@@ -576,12 +775,15 @@ fn solve_group(
         if !active.iter().any(|value| *value) {
             break;
         }
+        observer.iteration(&active);
+        let stamp = observer.start();
         matvec_width4(
             graph,
             &workspace.direction,
             &mut workspace.matrix_direction,
             &active,
         )?;
+        observer.finish(FusedPhase::Matvec, &active, stamp);
         let curvature = dots_width4(&workspace.direction, &workspace.matrix_direction, &active);
         let mut alpha = [0.0; 4];
         for lane in 0..count {
@@ -629,6 +831,7 @@ fn solve_group(
             }
         }
         if recompute.iter().any(|value| *value) {
+            let stamp = observer.start();
             matvec_width4(
                 graph,
                 &workspace.solution,
@@ -682,6 +885,7 @@ fn solve_group(
                     }
                 }
             }
+            observer.finish(FusedPhase::ResidualRecompute, &recompute, stamp);
         }
         if iteration == options.max_iterations || !active.iter().any(|value| *value) {
             break;
@@ -693,6 +897,7 @@ fn solve_group(
             &mut workspace.component_workspaces[0],
             &active,
         )?;
+        let stamp = observer.start();
         fused_preconditioner_apply(
             preconditioner,
             &workspace.residual,
@@ -702,6 +907,7 @@ fn solve_group(
             &mut workspace.component_workspaces,
             &active,
         )?;
+        observer.finish(FusedPhase::Preconditioner, &active, stamp);
         center_width4(
             &mut workspace.preconditioned,
             &workspace.components[0],
@@ -743,6 +949,7 @@ fn solve_group(
     }
 
     if active.iter().any(|value| *value) {
+        let stamp = observer.start();
         matvec_width4(
             graph,
             &workspace.solution,
@@ -773,6 +980,7 @@ fn solve_group(
                 }));
             }
         }
+        observer.finish(FusedPhase::ResidualRecompute, &active, stamp);
     }
 
     Ok(std::array::from_fn(|lane| {
