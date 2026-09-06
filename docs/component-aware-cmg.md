@@ -713,3 +713,147 @@ Reference timing binary SHA-256:
 `bcc55e1da5c950c372378a5e7b97c3540dbcff86e1bb1ca8d2a40f6d65a0f60d`.
 Prototype timing binary SHA-256:
 `3098a59c3c8255c0ac1ffa8d9a38c7d75811c95898f11c0ace963b3953f69db1`.
+
+### Regression diagnosis and paired PCG norms
+
+Two subsequent 21-round, interleaved comparisons reproduce the large connected
+path regression: the centering prototype takes approximately 2–3% longer than
+`e0d21ae`, with identical iterations, diagnostics and solution fingerprints.
+The public CMG application also slows down, while setup stays near parity.
+Thus the change in solve time is not explained by poorer Krylov convergence.
+
+The added layout flag grew `Components` from 48 to 56 bytes on this build,
+`GroundedLdl` from 280 to 288, and `CmgPreconditioner` from 424 to 432. Commit
+`b8fd5b483baad9702cf54e7e7d188898c3ea6bf6` stores the fixed-length experimental
+labels as a boxed slice, restoring all three sizes without another heap buffer
+or unsafe representation. The default feature configuration retains its
+original vector storage. The compact version removes most of the measured
+penalty: reference/compact total ratios are 0.988 [0.979, 1.003] for one RHS and
+1.001 [0.991, 1.007] for four. These results support a layout contribution;
+they do not isolate a particular cache effect from changes in generated code.
+
+Commit `07af84bc8baf217331a073911cee7cda278bad57` then pairs the solution and
+recursive-residual norms in each PCG iteration. Their independent maximum-scale
+and compensated-square-sum chains share two traversal loops. Each norm retains
+its original per-element divisions and compensated addition order, including
+the zero-scale case. It does not replace scaled norms with unscaled squares or
+change residual replacement, tolerance calculation or certification. This
+kernel is feature-gated and also serves the one-thread planned/profiling path;
+multithreaded plans retain their existing fixed-chunk reduction trees.
+
+On this ARM64 release build, the compiler places the two compensated chains in
+separate SIMD lanes (`fdiv.2d`, `fadd.2d`, `fsub.2d`), without reassociating either
+sum across vertices. Separate profiles show the large connected path's median
+norm phase falling from 4.27 to 2.46 ms, approximately 42% less time. The large
+path mixture falls from 5.90 to 3.44 ms and the interleaved weighted mixture
+from 5.43 to 3.04 ms. These are phase attribution measurements, not whole-solve
+speedups.
+
+The final three-arm comparison keeps the reference, compact metadata and paired
+norm binaries fixed. It repeats the original 22 cases and 12 held-out stress
+wirings nine times, and the ten large cases three times, with one and four RHSs.
+The connected-path regression receives a separate 21-round comparison. Ratios
+below include setup, workspace allocation, all solves and certification; larger
+than one favors the paired-norm candidate.
+
+| Fixture | Reference/candidate, 1 RHS | Reference/candidate, 4 RHS | Compact/candidate, 1 RHS | Compact/candidate, 4 RHS |
+|---|---:|---:|---:|---:|
+| Large connected path, 21 rounds | 1.025x | 1.028x | 1.039x | 1.029x |
+| Weighted connected path | 1.051x | 1.095x | 1.066x | 1.072x |
+| Interleaved weighted path + pairs | 1.033x | 1.032x | 1.033x | 1.045x |
+| Path + pairs | 1.255x | 1.263x | 1.014x | 1.011x |
+| Grid + pairs | 1.167x | 1.160x | 1.033x | 1.032x |
+| Dense connected worker-firm | 1.002x | 1.004x | 0.996x | 0.993x |
+
+The large connected path's reference/candidate ratios have exploratory paired
+bootstrap 95% intervals of [1.017, 1.039] and [1.016, 1.040]. The earlier local
+regression has therefore become a small net improvement in this comparison.
+The held-out weighted connected path improves 1.059x/1.062x overall; the paired
+norm increment is 1.048x/1.057x. The three-round large path and grid mixtures
+retain overall gains of 1.179x/1.212x and 1.138x/1.173x, respectively.
+
+Intervals resample whole external-round pairs 10,000 times, reporting the median
+ratio with percentile endpoints and fixed resampling seed 20260909. They are
+exploratory local intervals without adjustment for multiple fixtures, not a
+cross-machine guarantee. No nine-round original or held-out total-time interval
+identifies a regression. Individual rounds still contain outliers; three large
+screen rounds alone cannot resolve percent-level control differences.
+
+The one-RHS large worker-firm cases with suspicious three-round point estimates
+receive a separate 21-round follow-up. Their reference/candidate total ratios
+are 1.005 [0.999, 1.007] for dense connected, 1.011 [1.003, 1.023] for dense
+mixed, 1.011 [1.006, 1.025] for sparse connected, and 1.021 [1.019, 1.037] for
+sparse mixed. This focused check finds small gains or parity, with no clear
+regression under the same exploratory interval convention.
+
+The full comparison has 180 successful invocations, 2,016 samples and 5,040
+original-system certificates. The dedicated path comparison adds 126 samples
+and 315 certificates; the worker-firm follow-up adds 63 invocations, 252 samples
+and 252 certificates. All paired iteration counts, residuals, tolerances,
+known-solution errors, solution-bit fingerprints and hierarchy levels match.
+Separate profiling covers 1,056 recorded solves across both binaries and all
+44 fixture wirings, with complete vectors and diagnostics matching scalar and
+one-thread planned PCG. All 32 allocation cases have zero warmed application
+and caller-buffer PCG allocations and setup peaks within their estimates.
+
+All 139 all-feature and 91 default-feature tests pass in debug and release,
+including the new extreme-scale, signed-zero and executor-reduction checks.
+Formatting, root and benchmark Clippy, private rustdoc, the two fixture tests,
+release builds, and Rust 1.85 root/benchmark compatibility checks pass. This is
+still an opt-in investigation branch; its measured gains are from local macOS
+ARM64 runs and it has not received a new cross-platform CI qualification.
+
+The most promising further experiments are:
+
+1. Fuse the final centering subtraction of the preconditioned vector with
+   `r^T z`, retaining its vertex-ordered compensated dot product. This could
+   remove a full vector pass without changing PCG, but the fused serial
+   reduction could also inhibit vectorization of the subtraction. Measure the
+   complete iteration and preserve finite-input checks before mutation.
+2. Build a stable component traversal for interleaved labels. Their largest
+   weighted mixture still spends approximately 34.5% of solve time in finest
+   centering after the norm improvement. Account for extra indices, gathering
+   and setup; preserve ascending vertex order within each component sum.
+3. Solve tiny disconnected components once and exclude them from finest-level
+   Krylov vectors. Coarse pruning currently leaves those fine vertices in every
+   vector update, centering operation and reduction. A direct tiny-component
+   solve plus PCG on the remaining block could remove that repeated work. This
+   changes the recurrence and requires a separate experiment with full-system
+   residual certification, compatible error budgets and correct gauges; it is
+   not part of the bit-preserving kernel above.
+4. Profile inside CMG application before attempting another dense-graph PCG
+   optimization. After pairing norms, it occupies approximately 69% of large
+   connected-path solves and 88.5% of large dense worker-firm solves. Distinguish
+   smoothing/edge traversals, restriction/prolongation, repeated coarse cycles
+   and terminal solves; outer-vector optimizations have limited scope there.
+
+### Regression follow-up evidence
+
+Raw records and one-off runners/auditors remain outside the repository. The
+following are SHA-256 hashes of each directory's `SHA256SUMS`:
+
+- `/private/tmp/cmg-connected-path-reproduction`:
+  `454ebd9bc1e7297e0817922c85d936cf298c0c00a52b07d8a3c831b5b195a712`.
+- `/private/tmp/cmg-connected-path-layout`:
+  `875a7ca91a005bf21f4aad7d0a2b778ac46a7d568efdaf7fc0e0cbe7dde4e2d2`.
+- `/private/tmp/cmg-paired-norm-path`:
+  `a45cafbaf1f1391cef9643e4fb7ffd6c7f9792c6883a88bc41128024127127b2`.
+- `/private/tmp/cmg-paired-norm-final`:
+  `b2f80079eda70bee0bd2656a012f3b09aabf904202d19231a312d4ee7aa162cb`.
+- `/private/tmp/cmg-paired-norm-large`:
+  `44169dc07df842330d1505e69dca6aa8ca3458f2bcd8c973d2dc56e120b0b8ab`.
+- `/private/tmp/cmg-paired-norm-holdout`:
+  `2d0defe765fe5ac55489469d3c2b33c649957c687a9113ff3884ff1b83a4d08b`.
+- `/private/tmp/cmg-paired-norm-worker-controls`:
+  `13d665535af6a98ae7d7f937e35f47d28ca3ee2c7a9f0707e8fab0e26f328c2b`.
+- `/private/tmp/cmg-paired-norm-profiles`:
+  `082ffebaabba0a542a13df3d5d927908f9d956b21ef0c28132e1b1083bab38ba`.
+- `/private/tmp/cmg-paired-norm-allocations`:
+  `8ca548d18fd736eb0074cbe96b7c73156765c3654df1d21668fddaea0f945d81`.
+
+The compact-metadata timing binary SHA-256 is
+`fe866a548b182dc02190a37e7895c2a43f434f043ae6d64bf95be68f02af1c38`.
+The paired-norm timing binary SHA-256 is
+`f4b2ce9a3594fce1fbdee8dd1d64766483e301e031b51ed3fae7b9aca4c3bdb2`;
+its separate allocation binary SHA-256 is
+`5071e78e9789ee304540110a2a66760c0e2729e602a83a5ceb42ffaf898c3fcf`.
