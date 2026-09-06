@@ -109,8 +109,18 @@ impl CmgMemoryEstimate {
             )?,
             checked_mul(level_vertices, usize_bytes * 4, "parallel plan row scratch")?,
         ])?;
+        #[cfg(feature = "experimental-components")]
+        let traversal_bytes = checked_mul(problem.vertices, 4, "component traversal indices")?;
+        #[cfg(not(feature = "experimental-components"))]
+        let traversal_bytes = 0;
+        #[cfg(feature = "experimental-components")]
+        let traversal_scratch =
+            checked_mul(problem.vertices, usize_bytes, "component traversal offsets")?;
+        #[cfg(not(feature = "experimental-components"))]
+        let traversal_scratch = 0;
         let workspace_bytes_each = checked_sum(&[
             checked_mul(problem.vertices, 64, "PCG finest vectors")?,
+            traversal_bytes,
             checked_mul(level_vertices, 80, "recursive CMG workspace")?,
             checked_mul(direct, 24, "terminal workspace")?,
         ])?;
@@ -145,6 +155,7 @@ impl CmgMemoryEstimate {
             retained_solver_bytes,
             plan_bytes,
             plan_build_scratch_bytes,
+            traversal_scratch,
             workspace_pool_bytes,
         ])?;
         Ok(Self {

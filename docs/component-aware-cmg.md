@@ -1003,3 +1003,21 @@ controls; unresolved controls remain unqualified. Profile and allocation runs
 are separate. Portfolio arithmetic may differ, but original-system tolerances,
 validation and final certification remain mandatory. No automatic dispatch or
 main-branch promotion is part of this campaign.
+
+The phase instrumentation is gated separately by `cycle-profiling`, which
+implies `profiling`. Adding a no-op recorder to ordinary recursion changed
+path timings despite unchanged arithmetic. Restoring the original recursive
+bodies fixed those paths but left a caller-layout effect on a weighted control.
+Ordinary benchmark builds therefore exclude the deep instrumentation completely;
+trace builds enable it explicitly. The production and traced cycle bodies are
+cross-checked for complete output bits and exact recursive operation counts.
+
+The stable-traversal prototype caches only vertex indices (four bytes per
+finest vertex) in eligible PCG workspaces. Component identity is retained by an
+`Arc`, so a compatible workspace used with different component metadata takes
+the reference path without rebuilding or allocating. Index construction uses
+one temporary component-offset array. Memory estimates include both the retained
+indices and the temporary offsets. Connected/contiguous layouts allocate no
+indices. Solver entry selects the indexed loop once; subtraction and the global
+compensated dot retain original vertex order. A nonfinite input still reports
+the first offending original vertex and leaves the centered input unchanged.
