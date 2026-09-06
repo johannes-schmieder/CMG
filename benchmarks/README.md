@@ -113,9 +113,10 @@ plus a fresh original-system residual. It emits `profile` records after two
 warm-ups and `profile_structure` records for direct terminals. The latter report
 nonzero factors and the full column-scan slots within grounded components.
 With `experimental-components`, centering the preconditioned vector and its
-residual dot product are measured together under `centering`; the environment
-record marks this with `centering_includes_rho_dot`. Compare the sum of centering
-and dot-product time across builds that use different fusion strategies.
+residual dot product are measured together under `centering`. Compare the sum
+of centering and dot-product time across source revisions with different fusion
+strategies. Keep timing-harness source identical across numerical comparisons;
+even an extra profiling metadata field can change the caller's compiled layout.
 The fusion itself is limited to multiple components; connected inputs retain
 separate subtraction and dot-product loops, and multithreaded plans retain
 their original reduction trees. Solver entry selects a separately compiled PCG
