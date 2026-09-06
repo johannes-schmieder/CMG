@@ -58,14 +58,21 @@ impl TerminalReason {
     }
 }
 
+// A level owns exactly one transfer representation. Keeping mutually exclusive
+// formats in one enum avoids inflating every connected level with unused state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LevelTransfer {
+    Full(Aggregation),
+    #[cfg(feature = "experimental-components")]
+    Pruned(crate::PrunedTransfer),
+}
+
 /// One immutable hierarchy level.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HierarchyLevel {
     graph: Laplacian,
     inverse_diagonal: Vec<f64>,
-    aggregation: Option<Aggregation>,
-    #[cfg(feature = "experimental-components")]
-    pruned_transfer: Option<crate::PrunedTransfer>,
+    transfer: Option<LevelTransfer>,
     repeat: usize,
     terminal_reason: Option<TerminalReason>,
 }
@@ -90,79 +97,74 @@ impl HierarchyLevel {
     /// not pretend that every fine row has a surviving coarse degree of freedom.
     #[must_use]
     pub const fn aggregation(&self) -> Option<&Aggregation> {
-        self.aggregation.as_ref()
+        match &self.transfer {
+            Some(LevelTransfer::Full(aggregation)) => Some(aggregation),
+            _ => None,
+        }
     }
 
     /// Return the experimental partial transfer, if coarse isolates were retired.
     #[cfg(feature = "experimental-components")]
     #[must_use]
     pub const fn pruned_transfer(&self) -> Option<&crate::PrunedTransfer> {
-        self.pruned_transfer.as_ref()
+        match &self.transfer {
+            Some(LevelTransfer::Pruned(transfer)) => Some(transfer),
+            _ => None,
+        }
     }
 
     fn transfer_retained_bytes(&self) -> usize {
-        let bytes = self
-            .aggregation
-            .as_ref()
-            .map_or(0, Aggregation::retained_bytes);
-        #[cfg(feature = "experimental-components")]
-        let bytes = bytes.saturating_add(
-            self.pruned_transfer
-                .as_ref()
-                .map_or(0, crate::PrunedTransfer::retained_bytes),
-        );
-        bytes
-    }
-
-    pub(crate) fn restrict_into(&self, fine: &[f64], coarse: &mut [f64]) -> Result<(), CmgError> {
-        #[cfg(feature = "experimental-components")]
-        if let Some(transfer) = &self.pruned_transfer {
-            return transfer.restrict_into(fine, coarse);
+        match &self.transfer {
+            Some(LevelTransfer::Full(aggregation)) => aggregation.retained_bytes(),
+            #[cfg(feature = "experimental-components")]
+            Some(LevelTransfer::Pruned(transfer)) => transfer.retained_bytes(),
+            None => 0,
         }
-        self.aggregation
-            .as_ref()
-            .ok_or(CmgError::InvalidHierarchy {
-                context: "nonterminal level has no transfer",
-            })?
-            .restrict_into(fine, coarse)
     }
 
+    #[inline]
+    pub(crate) fn restrict_into(&self, fine: &[f64], coarse: &mut [f64]) -> Result<(), CmgError> {
+        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
+            context: "nonterminal level has no transfer",
+        })? {
+            LevelTransfer::Full(aggregation) => aggregation.restrict_into(fine, coarse),
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => transfer.restrict_into(fine, coarse),
+        }
+    }
+
+    #[inline]
     pub(crate) fn prolong_add_into(
         &self,
         coarse: &[f64],
         fine: &mut [f64],
     ) -> Result<(), CmgError> {
-        #[cfg(feature = "experimental-components")]
-        if let Some(transfer) = &self.pruned_transfer {
-            return transfer.prolong_add_into(coarse, fine);
+        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
+            context: "nonterminal level has no transfer",
+        })? {
+            LevelTransfer::Full(aggregation) => aggregation.prolong_add_into(coarse, fine),
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => transfer.prolong_add_into(coarse, fine),
         }
-        self.aggregation
-            .as_ref()
-            .ok_or(CmgError::InvalidHierarchy {
-                context: "nonterminal level has no transfer",
-            })?
-            .prolong_add_into(coarse, fine)
     }
 
     #[cfg(feature = "parallel")]
+    #[inline]
     pub(crate) fn prolong_add_into_with_executor(
         &self,
         coarse: &[f64],
         fine: &mut [f64],
         executor: &ParallelExecutor,
     ) -> Result<(), CmgError> {
-        #[cfg(feature = "experimental-components")]
-        if let Some(transfer) = &self.pruned_transfer {
-            // A serial scatter preserves the original addition order without
-            // another full fine-level mapping or a nested executor.
-            return transfer.prolong_add_into(coarse, fine);
+        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
+            context: "nonterminal level has no transfer",
+        })? {
+            LevelTransfer::Full(aggregation) => {
+                aggregation.prolong_add_into_with_executor(coarse, fine, executor)
+            }
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => transfer.prolong_add_into(coarse, fine),
         }
-        self.aggregation
-            .as_ref()
-            .ok_or(CmgError::InvalidHierarchy {
-                context: "nonterminal level has no transfer",
-            })?
-            .prolong_add_into_with_executor(coarse, fine, executor)
     }
 
     /// Return the recursive repeat count.
@@ -507,8 +509,7 @@ impl CmgHierarchy {
             #[cfg(feature = "experimental-components")]
             let level = if let Some(transfer) = pruned_transfer {
                 let mut level = level;
-                level.aggregation = None;
-                level.pruned_transfer = Some(transfer);
+                level.transfer = Some(LevelTransfer::Pruned(transfer));
                 level
             } else {
                 level
@@ -580,9 +581,7 @@ fn make_level(
     HierarchyLevel {
         graph,
         inverse_diagonal,
-        aggregation,
-        #[cfg(feature = "experimental-components")]
-        pruned_transfer: None,
+        transfer: aggregation.map(LevelTransfer::Full),
         repeat,
         terminal_reason,
     }
