@@ -23,8 +23,6 @@ Start with two independent changes that retain one global PCG recurrence:
 Both switches are under `experimental-components` and are off by default:
 
 ```rust
-# #[cfg(feature = "experimental-components")]
-# fn example(graph: &cmg::Laplacian) -> Result<(), cmg::CmgError> {
 use cmg::{CmgOptions, CmgPreconditioner, ComponentBuildOptions};
 let preconditioner = CmgPreconditioner::build_component_experiment(
     graph,
@@ -35,8 +33,6 @@ let preconditioner = CmgPreconditioner::build_component_experiment(
     },
 )?;
 // Use the existing certified solve_pcg / caller-workspace / planned interfaces.
-# Ok(())
-# }
 ```
 
 Keep baseline, pruning-only, block-LDL-only, and combined builds available. These
@@ -135,6 +131,56 @@ been qualified by this harness.
 
 See `benchmarks/README.md` for the exact command. Small local results are
 development evidence, not production thresholds or cross-platform speed claims.
+
+## Recorded local screen: September 6, 2026
+
+Numerical and harness source: `5c42b911ca6a59a6467f96341263d873ea1c40c9`, clean
+at build time. Compiler: Rust 1.97.1, LLVM 22.1.6; release profile, macOS aarch64,
+serial execution. Both runs used the same binary, two warm-up rounds, nine
+recorded paired rounds, ten fixtures, and all four arms. Four RHSs reuse one
+preconditioner and one workspace sequentially; this is not a parallel scaling
+comparison. There were 720 recorded samples and 1,800 successful original-system
+certificates, plus independent recomputation for every result.
+
+The following are ratios of median total times (baseline / combined candidate),
+including setup and workspace allocation:
+
+| Fixture | 1 RHS baseline / candidate, ms | 1 RHS speedup | 4 RHS speedup |
+|---|---:|---:|---:|
+| Connected path | 4.712 / 4.740 | 0.99x | 0.99x |
+| Path + 1,000 pairs | 52.273 / 6.085 | 8.59x | 12.84x |
+| Path + 1,000 isolates | 43.100 / 5.763 | 7.48x | 11.51x |
+| Two paths + 1,000 pairs | 60.812 / 4.286 | 14.19x | 16.37x |
+| 1,000 pairs | 0.106 / 0.089 | 1.19x | 1.14x |
+| 349 pairs, below direct threshold | 6.431 / 0.035 | 185.94x | 72.31x |
+| 350 pairs, at direct threshold | 0.037 / 0.033 | 1.15x | 1.13x |
+| Connected grid | 4.085 / 4.082 | 1.00x | 1.00x |
+| Grid + 1,000 pairs | 29.204 / 4.946 | 5.90x | 9.63x |
+| 1,000 weighted triangles | 0.308 / 0.269 | 1.14x | 1.16x |
+
+The separate arms show that pruning supplies the mixed-component gain, while
+block LDL supplies the direct-threshold gain and improves the two-material-block
+terminal. These results support continuing the narrow combined approach before
+building a general component portfolio. They do not establish an automatic
+route or a guarantee over arbitrary graphs. The connected path's median paired
+candidate/baseline ratios were 1.007 and 1.011; individual noisy rounds reached
+1.085 and 1.053. This screen does not establish a strict tail-regression bound.
+
+Raw local evidence (not committed benchmark data):
+
+- `/private/tmp/cmg-components-rhs1.jsonl`, SHA-256
+  `e312896258763d60aad169e785d3555022de69a3bc598205023c699e12ed3540`.
+- `/private/tmp/cmg-components-rhs4.jsonl`, SHA-256
+  `035631251fcfe6d70aca7cb93757c40fb601ef6a4dd08496f707565ae5b439a5`.
+- `benchmarks/target/release/component-bench`, SHA-256
+  `bc2ca6c27fa8f909247888b30767ff923efd2d565501c5d310de813a08edd02d`.
+
+Validation at this source: 91 default-feature tests and 129 all-feature tests
+passed in both debug and release profiles, including ten component experiment
+tests. Library and benchmark Clippy passed with warnings denied; formatting,
+private rustdoc with warnings denied, all benchmark release targets, and a Rust
+1.85.0 all-feature compatibility check passed. Linux/Windows, process-memory
+qualification, fresh holdout graphs, and SCC execution have not been run.
 
 ## Remaining design work
 
