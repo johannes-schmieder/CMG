@@ -28,20 +28,6 @@ pub(crate) trait CycleRecorder {
     fn iteration(&mut self, level: usize);
 }
 
-pub(crate) struct NoCycleProfile;
-
-impl CycleRecorder for NoCycleProfile {
-    type Stamp = ();
-    #[inline]
-    fn start() {}
-    #[inline]
-    fn finish(&mut self, _: usize, _: CmgApplyPhase, _: ()) {}
-    #[inline]
-    fn enter(&mut self, _: usize) {}
-    #[inline]
-    fn iteration(&mut self, _: usize) {}
-}
-
 #[cfg(feature = "profiling")]
 mod timed {
     use super::{CmgApplyPhase, CycleRecorder};

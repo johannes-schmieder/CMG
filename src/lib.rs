@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "profiling")]
 mod cmg_profile;
 mod coarsen;
 #[cfg(feature = "experimental-components")]

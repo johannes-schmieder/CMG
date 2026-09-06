@@ -1,6 +1,7 @@
 //! Stationary recursive CMG preconditioner application.
 
-use crate::cmg_profile::{CmgApplyPhase, CycleRecorder, NoCycleProfile};
+#[cfg(feature = "profiling")]
+use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
 use crate::components::CenteringPlan;
 use crate::{
     CmgError, CmgHierarchy, CmgOptions, CmgWorkspace, Components, GroundedLdl, Laplacian,
@@ -941,20 +942,153 @@ impl CmgPreconditioner {
         plan: &ParallelCmgPlan,
         executor: &ParallelExecutor,
     ) -> Result<(), CmgError> {
-        self.apply_level_with_plan_recorded(
-            level_index,
-            rhs,
-            output,
-            workspace,
-            iterations,
-            plan,
-            executor,
-            &mut NoCycleProfile,
-        )
+        let level = &self.hierarchy.levels()[level_index];
+        let dimension = level.graph().vertex_count();
+        if rhs.len() != dimension || output.len() != dimension {
+            return Err(CmgError::InvalidHierarchy {
+                context: "parallel recursive vector dimension does not match hierarchy level",
+            });
+        }
+
+        if let Some(reason) = level.terminal_reason() {
+            if reason == TerminalReason::Direct {
+                let factor = self
+                    .direct_terminal
+                    .as_ref()
+                    .ok_or(CmgError::InvalidHierarchy {
+                        context: "direct terminal is missing its LDL factor",
+                    })?;
+                let mut local = workspace.take_level(level_index);
+                let result = factor.solve_into_compatible(
+                    rhs,
+                    output,
+                    &mut local.factor_forward,
+                    &mut local.factor_solution,
+                );
+                workspace.put_level(level_index, local);
+                return result;
+            }
+            assign_scaled_planned(output, level.inverse_diagonal(), rhs, executor, false);
+            return Ok(());
+        }
+
+        if iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero stationary iterations",
+            });
+        }
+        let child_iterations = self.repeat_counts[level_index];
+        if child_iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero child recursive repeats",
+            });
+        }
+        let parallel_level = plan.level_operator(level_index).is_some();
+
+        let mut local = workspace.take_level(level_index);
+        // With a zero-dimensional child, restriction and correction have no
+        // output. Keep both smoothing sweeps, but avoid forming the unused
+        // middle residual and making an empty recursive call.
+        #[cfg(feature = "experimental-components")]
+        let has_coarse_work = !local.coarse_rhs.is_empty();
+        #[cfg(not(feature = "experimental-components"))]
+        let has_coarse_work = true;
+        let result = (|| {
+            for iteration in 0..iterations {
+                if iteration == 0 {
+                    assign_scaled_planned(
+                        output,
+                        level.inverse_diagonal(),
+                        rhs,
+                        executor,
+                        parallel_level,
+                    );
+                } else {
+                    plan.matvec_into(
+                        level_index,
+                        level.graph(),
+                        output,
+                        &mut local.residual,
+                        executor,
+                    )?;
+                    jacobi_add_planned(
+                        output,
+                        level.inverse_diagonal(),
+                        rhs,
+                        &local.residual,
+                        executor,
+                        parallel_level,
+                    );
+                }
+
+                if has_coarse_work {
+                    plan.matvec_into(
+                        level_index,
+                        level.graph(),
+                        output,
+                        &mut local.residual,
+                        executor,
+                    )?;
+                    residual_from_matvec_planned(
+                        &mut local.residual,
+                        rhs,
+                        executor,
+                        parallel_level,
+                    );
+                    level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    let centering = &self.coarse_centering[level_index];
+                    let mut centering_workspace = workspace.take_centering(level_index);
+                    let centering_result = centering.center_in_place_with_workspace_and_executor(
+                        &mut local.coarse_rhs,
+                        &mut centering_workspace,
+                        executor,
+                    );
+                    workspace.put_centering(level_index, centering_workspace);
+                    centering_result?;
+                    self.apply_level_with_plan(
+                        level_index + 1,
+                        &local.coarse_rhs,
+                        &mut local.coarse_correction,
+                        workspace,
+                        child_iterations,
+                        plan,
+                        executor,
+                    )?;
+                    if parallel_level {
+                        level.prolong_add_into_with_executor(
+                            &local.coarse_correction,
+                            output,
+                            executor,
+                        )?;
+                    } else {
+                        level.prolong_add_into(&local.coarse_correction, output)?;
+                    }
+                }
+
+                plan.matvec_into(
+                    level_index,
+                    level.graph(),
+                    output,
+                    &mut local.residual,
+                    executor,
+                )?;
+                jacobi_add_planned(
+                    output,
+                    level.inverse_diagonal(),
+                    rhs,
+                    &local.residual,
+                    executor,
+                    parallel_level,
+                );
+            }
+            Ok(())
+        })();
+        workspace.put_level(level_index, local);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "parallel")]
+    #[cfg(feature = "profiling")]
     fn apply_level_with_plan_recorded<R: CycleRecorder>(
         &self,
         level_index: usize,
@@ -1146,17 +1280,126 @@ impl CmgPreconditioner {
         workspace: &mut CmgWorkspace,
         iterations: usize,
     ) -> Result<(), CmgError> {
-        self.apply_level_recorded(
-            level_index,
-            rhs,
-            output,
-            workspace,
-            iterations,
-            &mut NoCycleProfile,
-        )
+        let level = &self.hierarchy.levels()[level_index];
+        let dimension = level.graph().vertex_count();
+        if rhs.len() != dimension || output.len() != dimension {
+            return Err(CmgError::InvalidHierarchy {
+                context: "recursive vector dimension does not match hierarchy level",
+            });
+        }
+
+        if let Some(reason) = level.terminal_reason() {
+            if reason == TerminalReason::Direct {
+                let factor = self
+                    .direct_terminal
+                    .as_ref()
+                    .ok_or(CmgError::InvalidHierarchy {
+                        context: "direct terminal is missing its LDL factor",
+                    })?;
+                let mut local = workspace.take_level(level_index);
+                let result = factor.solve_into_compatible(
+                    rhs,
+                    output,
+                    &mut local.factor_forward,
+                    &mut local.factor_solution,
+                );
+                workspace.put_level(level_index, local);
+                return result;
+            }
+            for ((value, inverse_diagonal), rhs_value) in
+                output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
+            {
+                *value = *inverse_diagonal * *rhs_value;
+            }
+            return Ok(());
+        }
+
+        if iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero stationary iterations",
+            });
+        }
+        let child_iterations = self.repeat_counts[level_index];
+        if child_iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero child recursive repeats",
+            });
+        }
+
+        let mut local = workspace.take_level(level_index);
+        // With a zero-dimensional child, restriction and correction have no
+        // output. Keep both smoothing sweeps, but avoid forming the unused
+        // middle residual and making an empty recursive call.
+        #[cfg(feature = "experimental-components")]
+        let has_coarse_work = !local.coarse_rhs.is_empty();
+        #[cfg(not(feature = "experimental-components"))]
+        let has_coarse_work = true;
+        let result = (|| {
+            for iteration in 0..iterations {
+                if iteration == 0 {
+                    for ((value, inverse_diagonal), rhs_value) in
+                        output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
+                    {
+                        *value = *inverse_diagonal * *rhs_value;
+                    }
+                } else {
+                    level.graph().matvec_into(output, &mut local.residual)?;
+                    for (((value, inverse_diagonal), rhs_value), matrix_value) in output
+                        .iter_mut()
+                        .zip(level.inverse_diagonal())
+                        .zip(rhs)
+                        .zip(&local.residual)
+                    {
+                        *value += *inverse_diagonal * (*rhs_value - *matrix_value);
+                    }
+                }
+
+                if has_coarse_work {
+                    level.graph().matvec_into(output, &mut local.residual)?;
+                    for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
+                        *residual = *rhs_value - *residual;
+                    }
+                    level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    let centering = &self.coarse_centering[level_index];
+                    let mut centering_workspace = workspace.take_centering(level_index);
+                    // Restricted residuals are component-compatible in exact
+                    // arithmetic. Remove only floating-point null-space drift before
+                    // the recursive solve instead of repeating full public-boundary
+                    // compatibility validation and exact correction passes.
+                    let centering_result = centering.center_in_place_with_workspace(
+                        &mut local.coarse_rhs,
+                        &mut centering_workspace,
+                    );
+                    workspace.put_centering(level_index, centering_workspace);
+                    centering_result?;
+                    self.apply_level(
+                        level_index + 1,
+                        &local.coarse_rhs,
+                        &mut local.coarse_correction,
+                        workspace,
+                        child_iterations,
+                    )?;
+                    level.prolong_add_into(&local.coarse_correction, output)?;
+                }
+
+                level.graph().matvec_into(output, &mut local.residual)?;
+                for (((value, inverse_diagonal), rhs_value), matrix_value) in output
+                    .iter_mut()
+                    .zip(level.inverse_diagonal())
+                    .zip(rhs)
+                    .zip(&local.residual)
+                {
+                    *value += *inverse_diagonal * (*rhs_value - *matrix_value);
+                }
+            }
+            Ok(())
+        })();
+        workspace.put_level(level_index, local);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "profiling")]
     fn apply_level_recorded<R: CycleRecorder>(
         &self,
         level_index: usize,
