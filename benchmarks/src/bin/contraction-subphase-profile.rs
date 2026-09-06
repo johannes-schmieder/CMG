@@ -338,11 +338,20 @@ fn main() {
     let mut total_finalize = 0u128;
     let mut total_production = 0u128;
     let mut profiled_levels = 0usize;
+    let mut skipped_levels = 0usize;
 
     for (index, pair) in hierarchy.levels().windows(2).enumerate() {
         let fine = &pair[0];
         let coarse = &pair[1];
         let Some(aggregation) = fine.aggregation() else {
+            // This profiler reconstructs a full contraction from an Aggregation.
+            // A compact transfer no longer retains the removed coarse rows.
+            skipped_levels += 1;
+            println!(
+                "{{\"record\":\"level_skipped\",\"case\":\"{case}\",\"level\":{index},\"reason\":\"partial_transfer_not_reconstructed\",\"fine_vertices\":{},\"coarse_vertices\":{}}}",
+                fine.graph().vertex_count(),
+                coarse.graph().vertex_count(),
+            );
             continue;
         };
         let (mut timings, mapped_count, merged_count, used_radix) =
@@ -375,8 +384,9 @@ fn main() {
     } else {
         manual_total as f64 / total_production as f64
     };
+    let complete = skipped_levels == 0;
     println!(
-        "{{\"record\":\"case\",\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"edges\":{},\"levels\":{},\"profiled_levels\":{profiled_levels},\"mapping_ns\":{total_mapping},\"sorting_ns\":{total_sorting},\"merging_ns\":{total_merging},\"diagonal_ns\":{total_diagonal},\"finalize_ns\":{total_finalize},\"manual_total_ns\":{manual_total},\"production_total_ns\":{total_production},\"manual_over_production\":{ratio}}}",
+        "{{\"record\":\"case\",\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"edges\":{},\"levels\":{},\"profiled_levels\":{profiled_levels},\"skipped_levels\":{skipped_levels},\"complete\":{complete},\"totals_scope\":\"profiled_levels_only\",\"mapping_ns\":{total_mapping},\"sorting_ns\":{total_sorting},\"merging_ns\":{total_merging},\"diagonal_ns\":{total_diagonal},\"finalize_ns\":{total_finalize},\"manual_total_ns\":{manual_total},\"production_total_ns\":{total_production},\"manual_over_production\":{ratio}}}",
         bench.vertices,
         bench.edges,
         hierarchy.levels().len(),

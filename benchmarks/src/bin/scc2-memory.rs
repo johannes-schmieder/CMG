@@ -364,22 +364,13 @@ fn checkpoint(stage: &str, started: Instant, owned_bytes: usize) -> String {
 fn hierarchy_bytes(preconditioner: &CmgPreconditioner) -> usize {
     preconditioner
         .hierarchy()
-        .levels()
-        .iter()
-        .map(|level| {
-            level.graph().edge_count() * std::mem::size_of::<cmg::Edge>()
-                + std::mem::size_of_val(level.graph().diagonal())
-                + std::mem::size_of_val(level.inverse_diagonal())
-                + level.aggregation().map_or(0, |aggregation| {
-                    std::mem::size_of_val(aggregation.labels())
-                        + std::mem::size_of_val(aggregation.sizes())
-                })
-        })
-        .sum::<usize>()
-        + preconditioner.component_metadata_bytes()
-        + preconditioner
-            .terminal_factor()
-            .map_or(0, |factor| factor.byte_len())
+        .retained_bytes()
+        .saturating_add(preconditioner.component_metadata_bytes())
+        .saturating_add(
+            preconditioner
+                .terminal_factor()
+                .map_or(0, |factor| factor.byte_len()),
+        )
 }
 
 fn peak_rss_kb() -> u64 {

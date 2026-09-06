@@ -169,7 +169,6 @@ fn print_structure(case: &Case, route: usize) -> Result<(), Failure> {
             .aggregation()
             .map(|a| a.coarse_dimension())
             .unwrap_or(0);
-        #[cfg(feature = "experimental-components")]
         let represented = level
             .pruned_transfer()
             .map(|t| t.represented_coarse_dimension())

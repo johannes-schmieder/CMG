@@ -1053,18 +1053,8 @@ fn phases_json(phases: &[(usize, Option<usize>, &'static str, u128, usize)]) -> 
 fn hierarchy_bytes(preconditioner: &CmgPreconditioner) -> usize {
     preconditioner
         .hierarchy()
-        .levels()
-        .iter()
-        .map(|level| {
-            graph_bytes(level.graph())
-                + std::mem::size_of_val(level.inverse_diagonal())
-                + level.aggregation().map_or(0, |aggregation| {
-                    std::mem::size_of_val(aggregation.labels())
-                        + std::mem::size_of_val(aggregation.sizes())
-                })
-        })
-        .sum::<usize>()
-        + preconditioner.component_metadata_bytes()
+        .retained_bytes()
+        .saturating_add(preconditioner.component_metadata_bytes())
 }
 
 fn graph_bytes(graph: &Laplacian) -> usize {

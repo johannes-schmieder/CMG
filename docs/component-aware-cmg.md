@@ -1215,7 +1215,7 @@ PR #5 merged as `90d06d58edf7de43e6e78855b1b14c4b6311b808`, retaining opt-in
 experiments. The following work is on a separate study branch; it does not
 promote defaults on main. Candidate A makes the retained ordered kernels
 available to ordinary builds without changing hierarchy or factor selection.
-Candidate B will additionally use preserved-stopping pruning and component
+Candidate B additionally uses preserved-stopping pruning and component
 terminal factors consistently across ordinary builders. Cargo defaults stay
 empty and the tiny-component portfolio remains explicitly selected.
 
@@ -1233,6 +1233,19 @@ results remain unqualified. Allocation and profile runs are separate. No source
 is tuned to fresh qualification data. Default promotion on main and SCC are
 outside this study.
 
+The original full local matrix was amended for runtime after six complete
+configurations and four complete rounds of the first large configuration. The
+legacy mixed path/grid solves made the 16-RHS repetitions project to roughly a
+day of local computation. The interrupted round is excluded and its raw files
+are preserved. All 46 graphs remain in the serial screen, but
+`large-path-plus-pairs`, `large-grid-plus-pairs`, and
+`large-weighted-path-plus-pairs` are measured only at one RHS. Those three cases
+are omitted from the parallel performance matrix. Remaining primary cells use
+the previous main, checkpoint default, checkpoint preserved-stopping, A, and B
+arms; completed original cells retain all seven arms. Numerical source, margins,
+seeds, and the maximum control extension are unchanged. This is a bounded local
+screen, not completion of the original full qualification matrix.
+
 Candidate B uses preserved-stopping pruning in serial, executor and profiled
 hierarchy builders and component terminal factors in CMG finalization. The
 standalone `GroundedLdl::factor` remains the original reference factor builder.
@@ -1240,3 +1253,11 @@ The explicit experiment's disabled/prune-only/block-only routes remain independe
 of ordinary defaults. `PrunedTransfer` and its read-only hierarchy accessor are
 available without a feature; callers inspecting `aggregation()` must use
 `is_terminal()` to distinguish terminals from compact partial transfers.
+
+The study also updates local hierarchy consumers. Teaching CSV exports retain
+surviving partial-transfer rows; component diagnostics report represented coarse
+counts without requiring the experiment feature. SCC memory reporters use the
+hierarchy's retained-byte accounting, including partial transfers and avoiding
+lazy native-label materialization. The contraction subphase profiler explicitly
+reports skipped partial-transfer levels and marks its totals incomplete. No SCC
+launcher or remote evidence is changed.
