@@ -1045,3 +1045,12 @@ matvec completion, pre/post smoothing, transfers, centering, child visits and
 repeat counts retain their existing order. The default-feature cycle is
 unchanged. Both ordinary and separately traced experimental cycles use the same
 fused transfer helper.
+
+The terminal scaling prototype retains unscaled forward values for subsequent
+forward dependencies while writing their scaled values into the existing second
+scratch vector. Back substitution overwrites that second vector in reverse row
+order. It removes the separate diagonal pass without adding storage or changing
+factor arithmetic. Packed and sparse factors, empty/isolated graphs, extreme
+weight scales, repeated scratch use and independent old-loop output bits are
+covered by differential tests. This prototype is still subject to total-time
+qualification; a high terminal share alone does not establish a benefit.
