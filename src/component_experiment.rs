@@ -16,7 +16,7 @@ pub struct ComponentBuildOptions {
     /// factorization. Retired representatives carry no edges, vectors or work.
     /// An empty compact child always terminates directly. Ignored without pruning.
     pub preserve_unpruned_stopping: bool,
-    /// Factor disconnected direct terminals one block at a time.
+    /// Use ordered sparse factors for direct terminals, one component at a time.
     pub factor_terminal_components: bool,
 }
 

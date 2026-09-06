@@ -511,8 +511,9 @@ impl CmgPreconditioner {
     /// Build an opt-in component experiment with independent setup changes.
     ///
     /// Uses the ordinary certified PCG, workspace, and fixed cycle application
-    /// paths. Pruning changes hierarchy termination and repeat counts; this is
-    /// an experimental algorithm, not an assertion of bit identity to CMG.
+    /// paths. Active-count pruning can change termination and repeat counts;
+    /// preserving unpruned stopping separates storage pruning from that change.
+    /// Terminal component factors use ordered sparse numerical updates.
     #[cfg(feature = "experimental-components")]
     pub fn build_component_experiment(
         graph: &Laplacian,

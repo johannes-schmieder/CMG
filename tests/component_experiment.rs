@@ -336,6 +336,43 @@ fn block_factors_match_grounded_reference_with_interleaved_components() {
 }
 
 #[test]
+fn sparse_terminal_factors_match_dense_arithmetic_across_fill_and_scale() {
+    for n in [5, 83, 173] {
+        for density in [0, 5, 1] {
+            for scale in [1e-150, 1.0, 1e150] {
+                let mut edges = Vec::new();
+                for u in 0..n {
+                    for v in u + 1..n {
+                        if v == u + 1 || (density > 0 && (u * 17 + v * 11) % density == 0) {
+                            edges.push((
+                                (u * 37 + 3) % n,
+                                (v * 37 + 3) % n,
+                                scale * 10.0_f64.powi(((u * 7 + v * 13) % 7) as i32 - 3),
+                            ));
+                        }
+                    }
+                }
+                let graph = Laplacian::from_edges(n, edges).unwrap();
+                let dense = GroundedLdl::factor(&graph).unwrap();
+                let sparse = GroundedLdl::factor_by_component(&graph).unwrap();
+                assert_eq!(dense, sparse, "n={n}, density={density}, scale={scale}");
+                let rhs = graph.matvec(&vector(&graph, density)).unwrap();
+                assert_eq!(dense.solve(&rhs).unwrap(), sparse.solve(&rhs).unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn sparse_terminal_rejects_a_pivot_lost_to_roundoff() {
+    let graph = Laplacian::from_edges(3, [(0, 1, 1e100), (1, 2, 1.0)]).unwrap();
+    let dense = GroundedLdl::factor(&graph).unwrap_err();
+    let sparse = GroundedLdl::factor_by_component(&graph).unwrap_err();
+    assert!(matches!(sparse, CmgError::NonPositivePivot { .. }));
+    assert_eq!(dense, sparse);
+}
+
+#[test]
 fn certified_solutions_match_known_component_centered_solutions() {
     for graph in [mixed(128, 40), mixed(0, 349), mixed(0, 350)] {
         let known = vector(&graph, 3);

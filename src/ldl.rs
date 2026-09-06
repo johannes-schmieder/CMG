@@ -189,8 +189,9 @@ impl GroundedLdl {
     /// highest-index anchor and static degree order.
     ///
     /// This experimental builder groups the exposed permutation by component.
-    /// Dense scratch is bounded by one block; retained factors use shared
-    /// packed or sparse buffers, without one solver allocation per component.
+    /// Ordered sparse updates skip zero factor entries, including for a single
+    /// connected block. Retained factors use shared packed or sparse buffers,
+    /// without one solver allocation per component.
     #[cfg(feature = "experimental-components")]
     pub fn factor_by_component(graph: &Laplacian) -> Result<Self, CmgError> {
         Self::factor_impl::<true>(graph)
@@ -225,9 +226,8 @@ impl GroundedLdl {
         }
 
         let mut permutation = active_vertices;
-        permutation.sort_by_key(|&vertex| (pattern_nonzeros[vertex], vertex));
         #[cfg(feature = "experimental-components")]
-        if BLOCKS && components.count() > 1 {
+        if BLOCKS {
             permutation.sort_by_key(|&vertex| {
                 (
                     components.labels()[vertex],
@@ -235,6 +235,8 @@ impl GroundedLdl {
                     vertex,
                 )
             });
+            drop(is_anchor);
+            drop(pattern_nonzeros);
             let (lower, diagonal, factor_nonzeros) =
                 factor_components(graph, &components, &permutation)?;
             return Ok(Self {
@@ -247,6 +249,7 @@ impl GroundedLdl {
                 factor_nonzeros,
             });
         }
+        permutation.sort_by_key(|&vertex| (pattern_nonzeros[vertex], vertex));
         let dimension = permutation.len();
 
         // Assemble the ordered grounded matrix directly. The previous path
@@ -474,6 +477,25 @@ fn factor_components(
     permutation: &[usize],
 ) -> Result<(LowerFactor, Vec<f64>, usize), CmgError> {
     let dimension = permutation.len();
+    if dimension <= 1 {
+        let diagonal = if let Some(&vertex) = permutation.first() {
+            let pivot = graph.diagonal()[vertex];
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(CmgError::NonPositivePivot {
+                    vertex,
+                    value: pivot,
+                });
+            }
+            vec![pivot]
+        } else {
+            Vec::new()
+        };
+        return Ok((
+            LowerFactor::Packed { values: Vec::new() },
+            diagonal,
+            dimension,
+        ));
+    }
     let count = components.count();
     let mut offsets = Vec::with_capacity(count + 1);
     offsets.push(0);
@@ -504,11 +526,13 @@ fn factor_components(
             next[c] += 1;
         }
     }
-    let mut diagonal = Vec::with_capacity(dimension);
-    let mut row_offsets = Vec::with_capacity(dimension + 1);
-    let mut columns = Vec::new();
-    let mut values = Vec::new();
-    row_offsets.push(0);
+    let mut factors = ComponentFactorRows {
+        diagonal: Vec::with_capacity(dimension),
+        row_offsets: Vec::with_capacity(dimension + 1),
+        columns: Vec::new(),
+        values: Vec::new(),
+    };
+    factors.row_offsets.push(0);
     for component in 0..count {
         let start = offsets[component];
         let end = offsets[component + 1];
@@ -525,33 +549,24 @@ fn factor_components(
                     value: pivot,
                 });
             }
-            diagonal.push(pivot);
-            row_offsets.push(columns.len());
+            factors.diagonal.push(pivot);
+            factors.row_offsets.push(factors.columns.len());
             continue;
         }
-        let mut matrix = vec![vec![0.0; size]; size];
-        for (row, &vertex) in permutation[start..end].iter().enumerate() {
-            matrix[row][row] = graph.diagonal()[vertex];
-        }
-        for &edge_index in &edge_indices[edge_offsets[component]..edge_offsets[component + 1]] {
-            let edge = &graph.edges()[edge_index];
-            let u = factor_index[edge.u()] - start;
-            let v = factor_index[edge.v()] - start;
-            matrix[u][v] -= edge.weight();
-            matrix[v][u] -= edge.weight();
-        }
-        let (lower, pivots) = factor_dense(&matrix, &permutation[start..end])?;
-        diagonal.extend(pivots);
-        for (row, dense) in lower.iter().enumerate() {
-            for (column, &value) in dense[..row].iter().enumerate() {
-                if value != 0.0 {
-                    columns.push((start + column) as u32);
-                    values.push(value);
-                }
-            }
-            row_offsets.push(columns.len());
-        }
+        factors.append_block(
+            graph,
+            &permutation[start..end],
+            &factor_index,
+            &edge_indices[edge_offsets[component]..edge_offsets[component + 1]],
+            start,
+        )?;
     }
+    let ComponentFactorRows {
+        diagonal,
+        row_offsets,
+        mut columns,
+        mut values,
+    } = factors;
     let factor_nonzeros = dimension + values.len();
     // byte_len reports principal factor storage; discard growth slack before
     // these buffers become retained state (the legacy dense path sizes exactly).
@@ -575,4 +590,131 @@ fn factor_components(
         LowerFactor::from_sparse_rows(row_offsets, columns, values)
     };
     Ok((lower, diagonal, factor_nonzeros))
+}
+
+// Nonzero columns support ordered left-looking updates; row links visit prior
+// columns in exactly the dense reference's increasing-column arithmetic order.
+#[cfg(feature = "experimental-components")]
+#[derive(Clone, Copy)]
+struct ColumnEntry {
+    row: u32,
+    column: u32,
+    value: f64,
+    next_in_row: usize,
+}
+
+#[cfg(feature = "experimental-components")]
+struct ComponentFactorRows {
+    diagonal: Vec<f64>,
+    row_offsets: Vec<usize>,
+    columns: Vec<u32>,
+    values: Vec<f64>,
+}
+
+#[cfg(feature = "experimental-components")]
+impl ComponentFactorRows {
+    fn append_block(
+        &mut self,
+        graph: &Laplacian,
+        permutation: &[usize],
+        factor_index: &[usize],
+        edge_indices: &[usize],
+        base: usize,
+    ) -> Result<(), CmgError> {
+        let dimension = permutation.len();
+        let mut input_offsets = vec![0usize; dimension + 1];
+        for &index in edge_indices {
+            let edge = graph.edges()[index];
+            let column = factor_index[edge.u()].min(factor_index[edge.v()]) - base;
+            input_offsets[column + 1] += 1;
+        }
+        for column in 0..dimension {
+            input_offsets[column + 1] += input_offsets[column];
+        }
+        let mut input_edges = vec![0usize; edge_indices.len()];
+        {
+            let mut next = input_offsets[..dimension].to_vec();
+            for &index in edge_indices {
+                let edge = graph.edges()[index];
+                let column = factor_index[edge.u()].min(factor_index[edge.v()]) - base;
+                input_edges[next[column]] = index;
+                next[column] += 1;
+            }
+        }
+        let mut entries: Vec<ColumnEntry> = Vec::with_capacity(edge_indices.len());
+        let mut column_offsets = Vec::with_capacity(dimension + 1);
+        column_offsets.push(0);
+        let mut first = vec![usize::MAX; dimension];
+        let mut last = vec![usize::MAX; dimension];
+        let mut work = vec![0.0; dimension];
+        let mut diagonal = vec![0.0; dimension];
+        for column in 0..dimension {
+            work[column + 1..].fill(0.0);
+            for &index in &input_edges[input_offsets[column]..input_offsets[column + 1]] {
+                let edge = graph.edges()[index];
+                let row = factor_index[edge.u()].max(factor_index[edge.v()]) - base;
+                work[row] -= edge.weight();
+            }
+            let mut pivot = graph.diagonal()[permutation[column]];
+            let mut link = first[column];
+            while link != usize::MAX {
+                let previous = entries[link];
+                let k = previous.column as usize;
+                pivot -= previous.value * previous.value * diagonal[k];
+                // Column rows are increasing, so the suffix after this link
+                // contains precisely the rows below the current pivot.
+                for entry in &entries[link + 1..column_offsets[k + 1]] {
+                    work[entry.row as usize] -= entry.value * previous.value * diagonal[k];
+                }
+                link = previous.next_in_row;
+            }
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(CmgError::NonPositivePivot {
+                    vertex: permutation[column],
+                    value: pivot,
+                });
+            }
+            diagonal[column] = pivot;
+            for row in column + 1..dimension {
+                if work[row] == 0.0 {
+                    continue;
+                }
+                let value = work[row] / pivot;
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: permutation[row],
+                        column: permutation[column],
+                        value,
+                    });
+                }
+                if value != 0.0 {
+                    let index = entries.len();
+                    entries.push(ColumnEntry {
+                        row: row as u32,
+                        column: column as u32,
+                        value,
+                        next_in_row: usize::MAX,
+                    });
+                    if last[row] == usize::MAX {
+                        first[row] = index;
+                    } else {
+                        entries[last[row]].next_in_row = index;
+                    }
+                    last[row] = index;
+                }
+            }
+            column_offsets.push(entries.len());
+        }
+        self.diagonal.extend(diagonal);
+        for mut link in first {
+            while link != usize::MAX {
+                let entry = entries[link];
+                self.columns.push((base + entry.column as usize) as u32);
+                self.values.push(entry.value);
+                link = entry.next_in_row;
+            }
+            self.row_offsets.push(self.columns.len());
+        }
+        Ok(())
+    }
 }

@@ -103,7 +103,9 @@ certification remain authoritative.
 
 The block factor's exposed permutation is grouped by deterministic component
 order. Its local degree order and highest-index anchors match the baseline.
-One-component builds retain the ordinary factor path. New sparse factor buffers
+The component builder now also uses ordered sparse factorization for connected
+terminals; the ordinary builder retains its reference dense factorization.
+New sparse factor buffers
 discard spare capacity before retention. Pruned-transfer retained storage is
 included in hierarchy reports; ordinary workspace sizing follows actual compact
 child dimensions. The workspace budget still has its documented meaning: it
@@ -398,3 +400,25 @@ Root and benchmark Clippy with warnings denied, formatting, private rustdoc,
 all benchmark release targets, fixture determinism/component-count tests, and
 Rust 1.85.0 all-feature compatibility checks pass. Linux, Windows, SCC, larger
 production workloads and automatic integration remain outside this checkpoint.
+
+## Further kernel optimization protocol
+
+The next local screen keeps the graph and solver contracts fixed and isolates
+three implementation changes: a single transfer enum instead of two mutually
+exclusive optional fields; monotone graph compaction that preserves existing
+diagonals and shares unchanged canonical edges; and ordered sparse terminal
+factorization behind the existing experimental component-factor option.
+
+The new terminal kernel stores nonzero columns and links each row's entries in
+increasing prior-column order. It applies the same left-looking products and
+subtractions as the dense reference, skipping zero factor entries. It preserves
+static degree ordering, component anchors, factor nonzero counts and final
+packed/sparse solve storage. Nonpositive pivots and nonfinite factor entries
+remain errors. No fill entry is dropped based on a numerical tolerance.
+
+Exact factor/solve comparisons cover paths, intermediate and complete fill,
+permuted vertices and scales from 1e-150 to 1e150. A roundoff-destroyed pivot must
+still fail. Performance and allocation comparisons use separate committed
+binaries and the frozen fixtures; old evidence remains intact. The sparse
+kernel's linked-column scratch can cost more than dense scratch for sufficiently
+filled factors, so requested peak memory is a separate acceptance measurement.
