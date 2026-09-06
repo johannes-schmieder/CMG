@@ -155,7 +155,7 @@ pub(crate) struct CenteringPlan {
 
 impl CenteringPlan {
     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
-        let Components { labels, sizes } = Components::from_laplacian(graph);
+        let Components { labels, sizes, .. } = Components::from_laplacian(graph);
         let vertex_count = labels.len();
         let component_count = sizes.len();
         let labels = if component_count <= 1 {
@@ -332,6 +332,8 @@ impl CenteringPlan {
 pub struct Components {
     labels: Vec<usize>,
     sizes: Vec<usize>,
+    #[cfg(feature = "experimental-components")]
+    contiguous: bool,
 }
 
 impl Components {
@@ -367,7 +369,12 @@ impl Components {
             labels[vertex] = label;
             sizes[label] += 1;
         }
-        Self { labels, sizes }
+        Self {
+            #[cfg(feature = "experimental-components")]
+            contiguous: labels.is_sorted(),
+            labels,
+            sizes,
+        }
     }
 
     pub(crate) fn try_from_endpoints<I>(vertex_count: usize, endpoints: I) -> Result<Self, CmgError>
@@ -409,7 +416,12 @@ impl Components {
         for &label in &labels {
             sizes[label] += 1;
         }
-        Ok(Self { labels, sizes })
+        Ok(Self {
+            #[cfg(feature = "experimental-components")]
+            contiguous: labels.is_sorted(),
+            labels,
+            sizes,
+        })
     }
 
     /// Return the number of connected components.
@@ -582,6 +594,43 @@ impl Components {
             ));
         }
         workspace.validate(self.count())?;
+        #[cfg(feature = "experimental-components")]
+        if self.contiguous && self.count() > 1 {
+            // Every component occupies one slice in label order. Accumulate in
+            // registers and subtract one constant per slice, preserving the
+            // existing vertex order within each compensated sum.
+            let mut start = 0;
+            for (component, &size) in self.sizes.iter().enumerate() {
+                let end = start + size;
+                let mut sum = 0.0;
+                let mut correction = 0.0;
+                for (offset, &value) in values[start..end].iter().enumerate() {
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: start + offset,
+                            column: 0,
+                            value,
+                        });
+                    }
+                    neumaier_add(&mut sum, &mut correction, value);
+                }
+                workspace.sums[component] = sum + correction;
+                workspace.corrections[component] = correction;
+                workspace.means[component] = workspace.sums[component] / size as f64;
+                start = end;
+            }
+            // Complete all finite-value checks before mutating the input, as
+            // the general labeled path does on an error.
+            let mut remaining = values;
+            for (&size, &mean) in self.sizes.iter().zip(&workspace.means) {
+                let (component, tail) = remaining.split_at_mut(size);
+                for value in component {
+                    *value -= mean;
+                }
+                remaining = tail;
+            }
+            return Ok(());
+        }
         self.compensated_sums_into(
             values,
             "Components::center_in_place",
@@ -876,6 +925,97 @@ fn union_min_root(parent: &mut [usize], left: usize, right: usize) {
         (right_root, left_root)
     };
     parent[child] = root;
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod contiguous_tests {
+    use super::{Components, Laplacian};
+
+    fn bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    #[test]
+    fn contiguous_centering_matches_labeled_path_with_reused_workspace() {
+        for graph in [
+            Laplacian::from_edges(0, []).unwrap(),
+            Laplacian::from_edges(9, []).unwrap(),
+            Laplacian::from_edges(9, (0..8).map(|v| (v, v + 1, 1.0))).unwrap(),
+            Laplacian::from_edges(15, [(0, 1, 1.0), (1, 2, 1.0), (4, 5, 1.0), (7, 8, 1.0)])
+                .unwrap(),
+        ] {
+            let components = Components::from_laplacian(&graph);
+            assert!(components.contiguous);
+            let prepared = Components::try_from_endpoints(
+                graph.vertex_count(),
+                graph.edges().iter().map(|e| (e.u(), e.v())),
+            )
+            .unwrap();
+            assert_eq!(components, prepared);
+            let mut labeled = components.clone();
+            labeled.contiguous = false;
+            let mut workspace = components.workspace();
+            let mut reference_workspace = labeled.workspace();
+            let values = [1e150, 1.0, -1e150, -0.0, 0.0, 1e-150, -1e-150];
+            for offset in 0..values.len() {
+                let mut actual: Vec<_> = (0..graph.vertex_count())
+                    .map(|v| values[(v + offset) % values.len()])
+                    .collect();
+                let mut expected = actual.clone();
+                workspace.sums.fill(f64::NAN);
+                workspace.corrections.fill(f64::NAN);
+                workspace.means.fill(f64::NAN);
+                components
+                    .center_in_place_with_workspace(&mut actual, &mut workspace)
+                    .unwrap();
+                labeled
+                    .center_in_place_with_workspace(&mut expected, &mut reference_workspace)
+                    .unwrap();
+                assert_eq!(bits(&actual), bits(&expected));
+                assert_eq!(bits(&workspace.sums), bits(&reference_workspace.sums));
+                assert_eq!(
+                    bits(&workspace.corrections),
+                    bits(&reference_workspace.corrections)
+                );
+                assert_eq!(bits(&workspace.means), bits(&reference_workspace.means));
+            }
+        }
+        let scattered = Laplacian::from_edges(4, [(0, 2, 1.0), (1, 3, 1.0)]).unwrap();
+        assert!(!Components::from_laplacian(&scattered).contiguous);
+        assert!(
+            !Components::try_from_endpoints(4, [(0, 2), (1, 3)])
+                .unwrap()
+                .contiguous
+        );
+    }
+
+    #[test]
+    fn contiguous_centering_preserves_input_on_nonfinite_failure() {
+        let graph = Laplacian::from_edges(6, [(0, 1, 1.0), (2, 3, 1.0)]).unwrap();
+        let components = Components::from_laplacian(&graph);
+        let mut workspace = components.workspace();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut input = vec![1.0, 3.0, 5.0, bad, bad, 0.0];
+            let before = bits(&input);
+            let error = components
+                .center_in_place_with_workspace(&mut input, &mut workspace)
+                .unwrap_err();
+            match error {
+                crate::CmgError::NonFiniteMatrixValue { row, column, value } => {
+                    assert_eq!((row, column), (3, 0));
+                    assert_eq!(value.to_bits(), bad.to_bits());
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(bits(&input), before);
+            input[3] = 7.0;
+            input[4] = 0.0;
+            components
+                .center_in_place_with_workspace(&mut input, &mut workspace)
+                .unwrap();
+            assert_eq!(input, [-1.0, 1.0, -1.0, 1.0, 0.0, 0.0]);
+        }
+    }
 }
 
 #[cfg(all(test, feature = "parallel"))]

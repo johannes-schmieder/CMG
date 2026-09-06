@@ -579,3 +579,40 @@ The candidate timing binary SHA-256 is
 the allocation binary SHA-256 is
 `d4f9c243e46d00b31edfe3a1101e821e924d2c7fc161add9ce69437e47670600`.
 Raw results and one-off comparison/audit scripts remain outside the repository.
+
+## Follow-up investigation after merge
+
+PR [#4](https://github.com/johannes-schmieder/CMG/pull/4) merged as
+`1921d66f86455540336a73b76f7619deec0b75bb` after Ubuntu quality checks and
+Linux/macOS/Windows tests passed. Its source commits remain in the merge history.
+The follow-up branch starts at that exact merge and keeps the feature opt-in.
+
+The `e0d21ae` harness adds a separate `--profile` mode using the existing PCG
+phase profiler with one executor thread. Every profiled vector and diagnostic
+must match scalar and planned PCG, followed by a fresh residual check. Nine
+recorded rounds and four RHSs cover the 32 frozen cases and 12 held-out stress
+wirings. Profiles allocate their own workspaces and add timers; use their phase
+shares for attribution, not as an end-to-end speedup measurement.
+
+Profiles identify finest-component centering as a substantial cost on mixed
+paths: approximately 26% on the large path mixture, 33% on the large weighted
+mixture, and 38% on the smaller weighted mixture. CMG application occupies
+approximately 79% on the large connected grid and 88% on the large dense
+connected worker-firm graph. These are separate optimization targets.
+
+The first isolated prototype specializes finest-component centering when labels
+are nondecreasing, so each component occupies one contiguous slice. It retains
+the same compensated additions in vertex order, validates all inputs before
+modifying any values, and subtracts one mean per slice. Constructors record one
+feature-gated boolean; no new heap buffer is retained. Interleaved and single
+components use the existing path. This experiment is compiled only with
+`experimental-components`; within that build it also applies to ordinary
+builders and prepared component metadata.
+
+Compare the prototype to `e0d21ae` with the same compiler and harness, preserved
+stopping, frozen seeds and identical RHSs. Start with one paired round across
+all 32 cases. If correctness passes, use nine rotated external rounds for the
+22 original cases and three for the ten larger cases, with one and four RHSs.
+Check exact diagnostics and solution-bit fingerprints before interpreting
+total times, and separately check warmed allocations and setup estimates.
+The `20260907` stress wiring remains the held-out correctness/performance check.
