@@ -47,42 +47,48 @@ impl LowerFactor {
                 row_offsets.push(columns.len());
             }
 
-            let mut column_counts = vec![0_usize; dimension];
-            for &column in &columns {
-                column_counts[column as usize] += 1;
-            }
-            let mut column_offsets = Vec::with_capacity(dimension + 1);
-            column_offsets.push(0);
-            for count in column_counts {
-                column_offsets.push(column_offsets.last().copied().unwrap_or(0) + count);
-            }
-            let mut next = column_offsets[..dimension].to_vec();
-            let mut rows = vec![0_u32; strict_nonzeros];
-            let mut column_values = vec![0.0; strict_nonzeros];
-            for row in 0..dimension {
-                for index in row_offsets[row]..row_offsets[row + 1] {
-                    let column = columns[index] as usize;
-                    let destination = next[column];
-                    rows[destination] = row as u32;
-                    column_values[destination] = row_values[index];
-                    next[column] += 1;
-                }
-            }
-
-            Self::Sparse {
-                row_offsets,
-                columns,
-                row_values,
-                column_offsets,
-                rows,
-                column_values,
-            }
+            Self::from_sparse_rows(row_offsets, columns, row_values)
         } else {
             let mut values = Vec::with_capacity(packed_slots);
             for (row, dense_row) in lower.iter().enumerate() {
                 values.extend_from_slice(&dense_row[..row]);
             }
             Self::Packed { values }
+        }
+    }
+
+    fn from_sparse_rows(row_offsets: Vec<usize>, columns: Vec<u32>, row_values: Vec<f64>) -> Self {
+        let dimension = row_offsets.len() - 1;
+        let strict_nonzeros = columns.len();
+        let mut column_counts = vec![0_usize; dimension];
+        for &column in &columns {
+            column_counts[column as usize] += 1;
+        }
+        let mut column_offsets = Vec::with_capacity(dimension + 1);
+        column_offsets.push(0);
+        for count in column_counts {
+            column_offsets.push(column_offsets.last().copied().unwrap_or(0) + count);
+        }
+        let mut next = column_offsets[..dimension].to_vec();
+        let mut rows = vec![0_u32; strict_nonzeros];
+        let mut column_values = vec![0.0; strict_nonzeros];
+        for row in 0..dimension {
+            for index in row_offsets[row]..row_offsets[row + 1] {
+                let column = columns[index] as usize;
+                let destination = next[column];
+                rows[destination] = row as u32;
+                column_values[destination] = row_values[index];
+                next[column] += 1;
+            }
+        }
+
+        Self::Sparse {
+            row_offsets,
+            columns,
+            row_values,
+            column_offsets,
+            rows,
+            column_values,
         }
     }
 
@@ -176,6 +182,21 @@ pub struct GroundedLdl {
 impl GroundedLdl {
     /// Factor the graph Laplacian after grounding one vertex per component.
     pub fn factor(graph: &Laplacian) -> Result<Self, CmgError> {
+        Self::factor_impl::<false>(graph)
+    }
+
+    /// Factor disconnected blocks independently, preserving each block's
+    /// highest-index anchor and static degree order.
+    ///
+    /// This experimental builder groups the exposed permutation by component.
+    /// Dense scratch is bounded by one block; retained factors use shared
+    /// packed or sparse buffers, without one solver allocation per component.
+    #[cfg(feature = "experimental-components")]
+    pub fn factor_by_component(graph: &Laplacian) -> Result<Self, CmgError> {
+        Self::factor_impl::<true>(graph)
+    }
+
+    fn factor_impl<const BLOCKS: bool>(graph: &Laplacian) -> Result<Self, CmgError> {
         let vertex_count = graph.vertex_count();
         let components = Components::from_laplacian(graph);
 
@@ -205,6 +226,27 @@ impl GroundedLdl {
 
         let mut permutation = active_vertices;
         permutation.sort_by_key(|&vertex| (pattern_nonzeros[vertex], vertex));
+        #[cfg(feature = "experimental-components")]
+        if BLOCKS && components.count() > 1 {
+            permutation.sort_by_key(|&vertex| {
+                (
+                    components.labels()[vertex],
+                    pattern_nonzeros[vertex],
+                    vertex,
+                )
+            });
+            let (lower, diagonal, factor_nonzeros) =
+                factor_components(graph, &components, &permutation)?;
+            return Ok(Self {
+                vertex_count,
+                components,
+                anchors,
+                permutation,
+                lower,
+                diagonal,
+                factor_nonzeros,
+            });
+        }
         let dimension = permutation.len();
 
         // Assemble the ordered grounded matrix directly. The previous path
@@ -227,36 +269,7 @@ impl GroundedLdl {
             matrix[factor_v][factor_u] -= edge.weight();
         }
 
-        let mut dense_lower = vec![vec![0.0; dimension]; dimension];
-        let mut diagonal = vec![0.0; dimension];
-        for (row, values) in dense_lower.iter_mut().enumerate() {
-            values[row] = 1.0;
-        }
-
-        for column in 0..dimension {
-            let mut pivot = matrix[column][column];
-            for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
-                let value = dense_lower[column][previous];
-                pivot -= value * value * diagonal_value;
-            }
-            if !pivot.is_finite() || pivot <= 0.0 {
-                return Err(CmgError::NonPositivePivot {
-                    vertex: permutation[column],
-                    value: pivot,
-                });
-            }
-            diagonal[column] = pivot;
-
-            for row in (column + 1)..dimension {
-                let mut value = matrix[row][column];
-                for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column)
-                {
-                    value -=
-                        dense_lower[row][previous] * dense_lower[column][previous] * diagonal_value;
-                }
-                dense_lower[row][column] = value / pivot;
-            }
-        }
+        let (dense_lower, diagonal) = factor_dense(&matrix, &permutation)?;
 
         let strict_nonzeros = dense_lower
             .iter()
@@ -414,4 +427,152 @@ impl GroundedLdl {
         }
         Ok(())
     }
+}
+
+fn factor_dense(
+    matrix: &[Vec<f64>],
+    permutation: &[usize],
+) -> Result<(Vec<Vec<f64>>, Vec<f64>), CmgError> {
+    let dimension = permutation.len();
+    let mut dense_lower = vec![vec![0.0; dimension]; dimension];
+    let mut diagonal = vec![0.0; dimension];
+    for (row, values) in dense_lower.iter_mut().enumerate() {
+        values[row] = 1.0;
+    }
+
+    for column in 0..dimension {
+        let mut pivot = matrix[column][column];
+        for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
+            let value = dense_lower[column][previous];
+            pivot -= value * value * diagonal_value;
+        }
+        if !pivot.is_finite() || pivot <= 0.0 {
+            return Err(CmgError::NonPositivePivot {
+                vertex: permutation[column],
+                value: pivot,
+            });
+        }
+        diagonal[column] = pivot;
+
+        for row in (column + 1)..dimension {
+            let mut value = matrix[row][column];
+            for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
+                value -=
+                    dense_lower[row][previous] * dense_lower[column][previous] * diagonal_value;
+            }
+            dense_lower[row][column] = value / pivot;
+        }
+    }
+
+    Ok((dense_lower, diagonal))
+}
+
+#[cfg(feature = "experimental-components")]
+fn factor_components(
+    graph: &Laplacian,
+    components: &Components,
+    permutation: &[usize],
+) -> Result<(LowerFactor, Vec<f64>, usize), CmgError> {
+    let dimension = permutation.len();
+    let count = components.count();
+    let mut offsets = Vec::with_capacity(count + 1);
+    offsets.push(0);
+    for &size in components.sizes() {
+        offsets.push(offsets.last().unwrap() + size.saturating_sub(1));
+    }
+    let mut factor_index = vec![usize::MAX; graph.vertex_count()];
+    for (index, &vertex) in permutation.iter().enumerate() {
+        factor_index[vertex] = index;
+    }
+    // Group only grounded edges with flat counting-sort storage. Do not scan
+    // every edge again for every component, or allocate a graph per block.
+    let mut edge_offsets = vec![0usize; count + 1];
+    for edge in graph.edges() {
+        if factor_index[edge.u()] != usize::MAX && factor_index[edge.v()] != usize::MAX {
+            edge_offsets[components.labels()[edge.u()] + 1] += 1;
+        }
+    }
+    for c in 0..count {
+        edge_offsets[c + 1] += edge_offsets[c];
+    }
+    let mut next = edge_offsets[..count].to_vec();
+    let mut edge_indices = vec![0usize; edge_offsets[count]];
+    for (index, edge) in graph.edges().iter().enumerate() {
+        if factor_index[edge.u()] != usize::MAX && factor_index[edge.v()] != usize::MAX {
+            let c = components.labels()[edge.u()];
+            edge_indices[next[c]] = index;
+            next[c] += 1;
+        }
+    }
+    let mut diagonal = Vec::with_capacity(dimension);
+    let mut row_offsets = Vec::with_capacity(dimension + 1);
+    let mut columns = Vec::new();
+    let mut values = Vec::new();
+    row_offsets.push(0);
+    for component in 0..count {
+        let start = offsets[component];
+        let end = offsets[component + 1];
+        let size = end - start;
+        if size == 0 {
+            continue;
+        }
+        if size == 1 {
+            let vertex = permutation[start];
+            let pivot = graph.diagonal()[vertex];
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(CmgError::NonPositivePivot {
+                    vertex,
+                    value: pivot,
+                });
+            }
+            diagonal.push(pivot);
+            row_offsets.push(columns.len());
+            continue;
+        }
+        let mut matrix = vec![vec![0.0; size]; size];
+        for (row, &vertex) in permutation[start..end].iter().enumerate() {
+            matrix[row][row] = graph.diagonal()[vertex];
+        }
+        for &edge_index in &edge_indices[edge_offsets[component]..edge_offsets[component + 1]] {
+            let edge = &graph.edges()[edge_index];
+            let u = factor_index[edge.u()] - start;
+            let v = factor_index[edge.v()] - start;
+            matrix[u][v] -= edge.weight();
+            matrix[v][u] -= edge.weight();
+        }
+        let (lower, pivots) = factor_dense(&matrix, &permutation[start..end])?;
+        diagonal.extend(pivots);
+        for (row, dense) in lower.iter().enumerate() {
+            for (column, &value) in dense[..row].iter().enumerate() {
+                if value != 0.0 {
+                    columns.push((start + column) as u32);
+                    values.push(value);
+                }
+            }
+            row_offsets.push(columns.len());
+        }
+    }
+    let factor_nonzeros = dimension + values.len();
+    // byte_len reports principal factor storage; discard growth slack before
+    // these buffers become retained state (the legacy dense path sizes exactly).
+    columns.shrink_to_fit();
+    values.shrink_to_fit();
+    let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
+    let sparse_bytes = values
+        .len()
+        .saturating_mul(24)
+        .saturating_add((dimension + 1).saturating_mul(2 * core::mem::size_of::<usize>()));
+    let lower = if packed_slots.saturating_mul(8) <= sparse_bytes {
+        let mut packed = vec![0.0; packed_slots];
+        for row in 0..dimension {
+            let start = row.saturating_mul(row.saturating_sub(1)) / 2;
+            for index in row_offsets[row]..row_offsets[row + 1] {
+                packed[start + columns[index] as usize] = values[index];
+            }
+        }
+        LowerFactor::Packed { values: packed }
+    } else {
+        LowerFactor::from_sparse_rows(row_offsets, columns, values)
+    };
+    Ok((lower, diagonal, factor_nonzeros))
 }
