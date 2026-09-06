@@ -47,7 +47,6 @@ fn reference_apply(
     }
 
     let graph = level.graph();
-    let aggregation = level.aggregation().unwrap();
     let mut solution = vec![0.0; rhs.len()];
     for _ in 0..iterations {
         let mut residual = graph.matvec(&solution).unwrap();
@@ -67,16 +66,30 @@ fn reference_apply(
             *value = *rhs_value - *value;
         }
         let coarse_graph = preconditioner.hierarchy().levels()[level_index + 1].graph();
-        let coarse_rhs = center_rhs(coarse_graph, &aggregation.restrict(&residual).unwrap());
+        let mut restricted = vec![0.0; coarse_graph.vertex_count()];
+        if let Some(aggregation) = level.aggregation() {
+            restricted = aggregation.restrict(&residual).unwrap();
+        } else {
+            for &(fine, coarse) in level.pruned_transfer().unwrap().entries() {
+                restricted[coarse as usize] += residual[fine as usize];
+            }
+        }
+        let coarse_rhs = center_rhs(coarse_graph, &restricted);
         let coarse_solution = reference_apply(
             preconditioner,
             level_index + 1,
             &coarse_rhs,
             preconditioner.repeat_counts()[level_index],
         );
-        aggregation
-            .prolong_add_into(&coarse_solution, &mut solution)
-            .unwrap();
+        if let Some(aggregation) = level.aggregation() {
+            aggregation
+                .prolong_add_into(&coarse_solution, &mut solution)
+                .unwrap();
+        } else {
+            for &(fine, coarse) in level.pruned_transfer().unwrap().entries() {
+                solution[fine as usize] += coarse_solution[coarse as usize];
+            }
+        }
 
         residual = graph.matvec(&solution).unwrap();
         for (value, rhs_value) in residual.iter_mut().zip(rhs) {
@@ -163,4 +176,13 @@ fn stationary_cycle_matches_independent_allocating_reference() {
     }
     barbell_edges.push((5, 6, 1.0e-4));
     compare(Laplacian::from_edges(12, barbell_edges).unwrap());
+}
+
+#[test]
+fn compact_cycle_matches_independent_partial_transfer_reference() {
+    let edges = (0..59)
+        .map(|v| (v, v + 1, 0.5 + (v % 7) as f64))
+        .chain((0..10).map(|p| (60 + 2 * p, 61 + 2 * p, 1.0)));
+    compare(Laplacian::from_edges(83, edges).unwrap());
+    compare(Laplacian::from_edges(24, (0..12).map(|p| (2 * p, 2 * p + 1, 1.0))).unwrap());
 }

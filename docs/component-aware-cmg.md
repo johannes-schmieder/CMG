@@ -1,4 +1,9 @@
-# Component-aware CMG: opt-in experiments
+# Component-aware CMG: experiments and default study
+
+Current status: PR #5 is merged as an opt-in checkpoint. The separate default
+study branch evaluates ordinary builders; main has not adopted those defaults.
+The historical sections below describe their recorded checkpoints. See the
+default-promotion study at the end for the current candidate scope.
 
 This opt-in study addresses [issue #2](https://github.com/johannes-schmieder/CMG/issues/2).
 The branch starts from `main` at `90e1fe0b0c14065155532711246ede6678bb4935`.
@@ -1227,3 +1232,11 @@ One extension to 21 rounds is allowed for inconclusive controls; unresolved
 results remain unqualified. Allocation and profile runs are separate. No source
 is tuned to fresh qualification data. Default promotion on main and SCC are
 outside this study.
+
+Candidate B uses preserved-stopping pruning in serial, executor and profiled
+hierarchy builders and component terminal factors in CMG finalization. The
+standalone `GroundedLdl::factor` remains the original reference factor builder.
+The explicit experiment's disabled/prune-only/block-only routes remain independent
+of ordinary defaults. `PrunedTransfer` and its read-only hierarchy accessor are
+available without a feature; callers inspecting `aggregation()` must use
+`is_terminal()` to distinguish terminals from compact partial transfers.

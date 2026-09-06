@@ -505,7 +505,7 @@ impl CmgPreconditioner {
             )
     }
 
-    /// Build the complete hierarchy and any direct terminal factorization.
+    /// Build a compact hierarchy with preserved stopping and component terminal factors.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
         Self::from_hierarchy(CmgHierarchy::build(graph, options)?)
     }
@@ -525,12 +525,12 @@ impl CmgPreconditioner {
         let hierarchy = if experiment.prune_coarse_isolates {
             CmgHierarchy::build_pruned(graph, options, experiment.preserve_unpruned_stopping)?
         } else {
-            CmgHierarchy::build(graph, options)?
+            CmgHierarchy::build_reference(graph, options)?
         };
         if experiment.factor_terminal_components {
             Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor_by_component)
         } else {
-            Self::from_hierarchy(hierarchy)
+            Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor)
         }
     }
 
@@ -579,7 +579,7 @@ impl CmgPreconditioner {
     }
 
     fn from_hierarchy(hierarchy: CmgHierarchy) -> Result<Self, CmgError> {
-        Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor)
+        Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor_component_terminal)
     }
 
     fn from_hierarchy_with_factor(

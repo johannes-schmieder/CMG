@@ -204,6 +204,10 @@ impl GroundedLdl {
     /// without one solver allocation per component.
     #[cfg(feature = "experimental-components")]
     pub fn factor_by_component(graph: &Laplacian) -> Result<Self, CmgError> {
+        Self::factor_component_terminal(graph)
+    }
+
+    pub(crate) fn factor_component_terminal(graph: &Laplacian) -> Result<Self, CmgError> {
         Self::factor_impl::<true>(graph)
     }
 
@@ -236,7 +240,6 @@ impl GroundedLdl {
         }
 
         let mut permutation = active_vertices;
-        #[cfg(feature = "experimental-components")]
         if BLOCKS {
             permutation.sort_by_key(|&vertex| {
                 (
@@ -482,8 +485,6 @@ fn factor_dense(
 
     Ok((dense_lower, diagonal))
 }
-
-#[cfg(feature = "experimental-components")]
 fn factor_components(
     graph: &Laplacian,
     components: &Components,
@@ -607,15 +608,12 @@ fn factor_components(
 
 // Nonzero columns support ordered left-looking updates; row links visit prior
 // columns in exactly the dense reference's increasing-column arithmetic order.
-#[cfg(feature = "experimental-components")]
 struct ComponentFactorRows {
     diagonal: Vec<f64>,
     row_offsets: Vec<usize>,
     columns: Vec<u32>,
     values: Vec<f64>,
 }
-
-#[cfg(feature = "experimental-components")]
 impl ComponentFactorRows {
     fn append_block(
         &mut self,
@@ -771,8 +769,7 @@ mod scaled_forward_tests {
                     let graph = Laplacian::from_edges(n + 3, edges).unwrap();
                     for factor in [
                         GroundedLdl::factor(&graph).unwrap(),
-                        #[cfg(feature = "experimental-components")]
-                        GroundedLdl::factor_by_component(&graph).unwrap(),
+                        GroundedLdl::factor_component_terminal(&graph).unwrap(),
                     ] {
                         saw_packed |= matches!(factor.lower, LowerFactor::Packed { .. });
                         saw_sparse |= matches!(factor.lower, LowerFactor::Sparse { .. });

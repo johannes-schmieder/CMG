@@ -63,7 +63,6 @@ impl TerminalReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LevelTransfer {
     Full(Aggregation),
-    #[cfg(feature = "experimental-components")]
     Pruned(crate::PrunedTransfer),
 }
 
@@ -93,7 +92,7 @@ impl HierarchyLevel {
 
     /// Return the full fine-to-coarse aggregation, when present.
     ///
-    /// Experimental pruned levels instead expose `pruned_transfer`; they do
+    /// Pruned levels instead expose `pruned_transfer`; they do
     /// not pretend that every fine row has a surviving coarse degree of freedom.
     #[must_use]
     pub const fn aggregation(&self) -> Option<&Aggregation> {
@@ -103,8 +102,7 @@ impl HierarchyLevel {
         }
     }
 
-    /// Return the experimental partial transfer, if coarse isolates were retired.
-    #[cfg(feature = "experimental-components")]
+    /// Return the partial transfer, if coarse isolates were retired.
     #[must_use]
     pub const fn pruned_transfer(&self) -> Option<&crate::PrunedTransfer> {
         match &self.transfer {
@@ -116,7 +114,6 @@ impl HierarchyLevel {
     fn transfer_retained_bytes(&self) -> usize {
         match &self.transfer {
             Some(LevelTransfer::Full(aggregation)) => aggregation.retained_bytes(),
-            #[cfg(feature = "experimental-components")]
             Some(LevelTransfer::Pruned(transfer)) => transfer.retained_bytes(),
             None => 0,
         }
@@ -135,7 +132,6 @@ impl HierarchyLevel {
             LevelTransfer::Full(aggregation) => {
                 aggregation.restrict_residual_into(rhs, matrix_value, coarse)
             }
-            #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => {
                 transfer.restrict_residual_into(rhs, matrix_value, coarse)
             }
@@ -152,7 +148,6 @@ impl HierarchyLevel {
             context: "nonterminal level has no transfer",
         })? {
             LevelTransfer::Full(aggregation) => aggregation.prolong_add_into(coarse, fine),
-            #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => transfer.prolong_add_into(coarse, fine),
         }
     }
@@ -171,7 +166,6 @@ impl HierarchyLevel {
             LevelTransfer::Full(aggregation) => {
                 aggregation.prolong_add_into_with_executor(coarse, fine, executor)
             }
-            #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => transfer.prolong_add_into(coarse, fine),
         }
     }
@@ -273,7 +267,11 @@ impl CmgHierarchy {
             })
     }
 
-    /// Build a hierarchy from a weighted graph Laplacian.
+    /// Build a hierarchy with compact coarse components and preserved stopping.
+    ///
+    /// Isolated coarse representatives are retired from storage but still count
+    /// in the original vertex-based stopping decisions. Stored vertex counts
+    /// describe compact levels; use `pruned_transfer` to inspect partial transfers.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
         Self::build_with_kernels::<false, _, _>(
             graph,
@@ -281,6 +279,20 @@ impl CmgHierarchy {
             build_forest_aggregation_labels,
             |aggregation, current| aggregation.contract(current),
         )
+    }
+    /// Explicit unpruned control, independent of the ordinary construction policy.
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn build_reference(
+        graph: &Laplacian,
+        options: CmgOptions,
+    ) -> Result<Self, CmgError> {
+        Self::build_with_kernels_impl::<false, false, false, _, _>(
+            graph,
+            options,
+            build_forest_aggregation_labels,
+            |aggregation, current| aggregation.contract(current),
+        )
+        .map(|(hierarchy, _)| hierarchy)
     }
 
     #[cfg(feature = "experimental-components")]
@@ -350,10 +362,8 @@ impl CmgHierarchy {
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        Self::build_with_kernels_impl::<PROFILE, false, false, _, _>(
-            graph, options, group, contract,
-        )
-        .map(|(hierarchy, _)| hierarchy)
+        Self::build_with_kernels_impl::<PROFILE, true, true, _, _>(graph, options, group, contract)
+            .map(|(hierarchy, _)| hierarchy)
     }
 
     #[cfg(feature = "profiling")]
@@ -367,7 +377,7 @@ impl CmgHierarchy {
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        Self::build_with_kernels_impl::<true, false, false, _, _>(graph, options, group, contract)
+        Self::build_with_kernels_impl::<true, true, true, _, _>(graph, options, group, contract)
     }
 
     fn build_with_kernels_impl<
@@ -402,16 +412,13 @@ impl CmgHierarchy {
             || graph.clone(),
         );
         let mut levels = Vec::new();
-        #[cfg(feature = "experimental-components")]
         let mut retired_vertices = 0usize;
         let terminal_reason;
 
         loop {
             let level_index = levels.len();
             let n = current.vertex_count();
-            let decision_n = n;
-            #[cfg(feature = "experimental-components")]
-            let decision_n = decision_n + retired_vertices;
+            let decision_n = n + retired_vertices;
             let direct = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
@@ -443,9 +450,7 @@ impl CmgHierarchy {
                 || Aggregation::from_forest_labels(labels, aggregate_count),
             );
             let coarse_count = aggregation.coarse_dimension();
-            let decision_coarse_count = coarse_count;
-            #[cfg(feature = "experimental-components")]
-            let decision_coarse_count = decision_coarse_count + retired_vertices;
+            let decision_coarse_count = coarse_count + retired_vertices;
             let terminal = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
@@ -486,9 +491,8 @@ impl CmgHierarchy {
                 "coarse_edge_map_sort_merge_and_graph_finalization",
                 || contract(&aggregation, &current),
             )?;
-            #[cfg(feature = "experimental-components")]
             let (coarse, pruned_transfer) = if PRUNE {
-                match crate::component_experiment::prune(&aggregation, &coarse) {
+                match crate::component_transfer::prune(&aggregation, &coarse) {
                     Some((transfer, compact)) => {
                         // Isolates contribute zero matrix nonzeros. Keep just
                         // their count for the ordinary vertex stopping checks;
@@ -515,7 +519,6 @@ impl CmgHierarchy {
                 "inverse_diagonal_and_level_finalization",
                 || make_level(current, Some(aggregation), repeat, None),
             );
-            #[cfg(feature = "experimental-components")]
             let level = if let Some(transfer) = pruned_transfer {
                 let mut level = level;
                 level.transfer = Some(LevelTransfer::Pruned(transfer));
