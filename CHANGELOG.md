@@ -22,6 +22,9 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 - Conservative and exact repeated-solve memory accounting that separates
   prepared topology, current numeric state, stale hierarchy/plan, assembly
   scratch, workspace pools, and caller buffers.
+- Opt-in `experimental-components` builders for compact coarse graphs and
+  ordered sparse terminal factors, with an option to preserve the original
+  hierarchy stopping rules; component benchmark fixtures and allocation checks.
 
 ### Changed
 

@@ -62,6 +62,12 @@ jobs:
       - name: Benchmark Clippy
         run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
 
+      - name: Benchmark Clippy (all features)
+        run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Component benchmark fixture tests
+        run: cargo test --manifest-path benchmarks/Cargo.toml --features experimental-components --bin component-bench
+
       - name: Benchmark release build
         run: cargo build --manifest-path benchmarks/Cargo.toml --all-targets --release
 
