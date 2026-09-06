@@ -76,6 +76,23 @@ solves, including their normal certification and result allocation. The extra
 independent residual check and isolated application measurements are outside
 that total. See [the component design note](../docs/component-aware-cmg.md).
 
+Add `--suite stress --seed 20260906` for the frozen weighted, bridge-heavy,
+bipartite, heterogeneous and material-threshold cases. An optional third
+positional argument filters case names by substring. Use `--route baseline`,
+`prune`, `block-ldl`, or `combined` for a single arm. Without the
+`experimental-components` feature this same harness builds against ordinary
+CMG and runs only the baseline, permitting a separately compiled comparison.
+Set `CMG_BENCH_COMMIT` at build time to record the numerical source identity.
+Failures are emitted as JSONL records; the harness finishes the remaining cases
+and returns a nonzero exit status. Successful samples include known-solution
+relative errors in addition to residual certificates.
+
+For a separate requested-allocation run, enable `component-allocations` and
+use one repetition. The allocator counters affect timings, so do not use those
+timings for performance comparisons. Allocation records include setup peak/live
+requested bytes and counts for warmed caller-buffer application and PCG loops.
+These are requested layout sizes, not process RSS or allocator arena sizes.
+
 ## Comparison discipline
 
 1. Build baseline and candidate with the same compiler, features, and CPU settings.

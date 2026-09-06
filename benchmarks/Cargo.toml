@@ -10,11 +10,11 @@ cmg = { path = "..", features = ["parallel", "profiling"] }
 
 [features]
 experimental-components = ["cmg/experimental-components"]
+component-allocations = []
 
 [[bin]]
 name = "component-bench"
 path = "src/bin/component-bench.rs"
-required-features = ["experimental-components"]
 
 [[bin]]
 name = "graph-build"

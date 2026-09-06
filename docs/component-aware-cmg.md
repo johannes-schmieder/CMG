@@ -212,3 +212,33 @@ qualification, fresh holdout graphs, and SCC execution have not been run.
   allocation, global certification, iteration-budget semantics, and fail-closed
   error aggregation. Fixed component cycles under global PCG avoid that redesign
   in this checkpoint.
+
+## Frozen local stress protocol
+
+Before observing stress timings, freeze `component_fixtures::stress` at seed
+`20260906`: shuffled weighted paths (weights from 0.001 to 1,000), 32 cliques
+joined by weight-0.000001 bridges, sparse/dense connected bipartite graphs, and
+eight heterogeneous material components. Each family has a counterpart with
+997 independent pairs. Two material path cases straddle the global direct
+threshold. Dimensions, weights and wiring remain unchanged if a solve fails.
+The generated known solutions are centered within each connected component.
+
+Run all four arms with one and four RHSs, preserving every failure and checking
+each successful solve against the original operator. Record forward solution
+error as well as residuals: weak bridges can admit large forward error despite
+a small residual, so residual acceptance is not a claim of forward accuracy.
+Use two warm-up rounds and nine recorded rounds. No production dispatch gate
+or numerical tolerance changes are implied by the screen.
+
+Compile a separate baseline from `main` at
+`90e1fe0b0c14065155532711246ede6678bb4935` using the exact same harness files and
+compiler. Alternate external process order, and retain the branch's baseline
+arm as a control for common implementation changes. Compare graph structures,
+iterations and residuals before interpreting timing differences.
+
+Requested-allocation measurements use a separate `component-allocations` build.
+Report setup peak/live requested bytes, workspace live bytes, library accounting
+and conservative estimates. Require zero allocations in warmed caller-buffer
+CMG application and PCG loops. These counters exclude allocator arena overhead,
+RSS, preexisting inputs and transient internal storage used by a system realloc;
+they do not qualify allocation-failure recovery or a process-memory limit.
