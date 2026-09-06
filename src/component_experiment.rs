@@ -76,6 +76,27 @@ impl PrunedTransfer {
         Ok(())
     }
 
+    pub(crate) fn restrict_residual_into(
+        &self,
+        rhs: &[f64],
+        matrix_value: &[f64],
+        coarse: &mut [f64],
+    ) -> Result<(), CmgError> {
+        self.validate(rhs.len(), coarse.len())?;
+        self.validate(matrix_value.len(), coarse.len())?;
+        coarse.fill(0.0);
+        if self.has_fine_prefix() {
+            for ((&b, &ax), &(_, coarse_index)) in rhs.iter().zip(matrix_value).zip(&self.entries) {
+                coarse[coarse_index as usize] += b - ax;
+            }
+        } else {
+            for &(fine, coarse_index) in &self.entries {
+                coarse[coarse_index as usize] += rhs[fine as usize] - matrix_value[fine as usize];
+            }
+        }
+        Ok(())
+    }
+
     /// Add the transpose action; fine rows without an entry remain unchanged.
     pub fn prolong_add_into(&self, coarse: &[f64], fine: &mut [f64]) -> Result<(), CmgError> {
         self.validate(fine.len(), coarse.len())?;
@@ -141,4 +162,46 @@ pub(crate) fn prune(
         },
         graph,
     ))
+}
+
+#[cfg(test)]
+mod residual_restriction_tests {
+    use super::*;
+
+    #[test]
+    fn pruned_residual_restriction_preserves_order_and_ignores_retired_rows() {
+        let rhs = [1e100, 1.0, -1e100, 3.0, -0.0, 5.0, f64::NAN, f64::NAN];
+        let ax = [0.0, 0.5, 0.0, -0.0, 0.0, 1.0, f64::NAN, f64::NAN];
+        for entries in [
+            vec![(0, 0), (1, 0), (2, 0), (3, 0)],
+            vec![(0, 0), (2, 0), (4, 1), (5, 1)],
+            vec![],
+        ] {
+            let transfer = PrunedTransfer {
+                fine_dimension: 8,
+                coarse_dimension: 2,
+                represented_coarse_dimension: 4,
+                entries,
+            };
+            let residual: Vec<_> = rhs.iter().zip(ax).map(|(b, a)| b - a).collect();
+            let mut expected = [f64::NAN; 2];
+            transfer.restrict_into(&residual, &mut expected).unwrap();
+            let mut actual = [f64::NAN; 2];
+            transfer
+                .restrict_residual_into(&rhs, &ax, &mut actual)
+                .unwrap();
+            assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
+            assert!(
+                transfer
+                    .restrict_residual_into(&rhs[..7], &ax, &mut actual)
+                    .is_err()
+            );
+            assert!(
+                transfer
+                    .restrict_residual_into(&rhs, &ax[..7], &mut actual)
+                    .is_err()
+            );
+            assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
+        }
+    }
 }

@@ -1021,3 +1021,27 @@ indices and the temporary offsets. Connected/contiguous layouts allocate no
 indices. Solver entry selects the indexed loop once; subtraction and the global
 compensated dot retain original vertex order. A nonfinite input still reports
 the first offending original vertex and leaves the centered input unchanged.
+
+Exclusive tracing (three repetitions, four RHSs, 384 complete solves) identifies
+restriction at about 31% of the large connected-path solve and 27% of the path
+mixture. Direct terminal solves occupy about 30% on the large grid and sparse
+worker-firm controls, and 68–71% on several small connected controls. These
+fractions qualify the proposed terminal experiment under its 10% gate. Dense
+large worker-firm solves instead spend about 87% in smoothing and residual
+matvecs. Traces preserve full planned-PCG output bits and diagnostics; exclusive
+phase totals exclude child recursion. Profiling fractions are not speedup claims.
+
+The separately gated trace baseline (`5cb1f14`) passes all connected one-shot
+controls against `b6c6e61`. The initially wide small path/grid and four large
+control intervals were extended once to 21 rotated rounds. All lower bounds
+for reference/candidate total time exceed `1/1.02`. Small controls have intervals
+[0.987, 1.004] (grid) and [0.993, 1.015] (path); large controls range from
+[0.993, 1.028] to [0.999, 1.005]. The timing entry point remains byte-identical.
+
+The residual/restriction prototype removes the materialized residual pass at
+nonterminal levels. Full aggregation and pruned transfers perform `b[v]-Ax[v]`
+immediately before the same ordered coarse addition. Pruned rows are skipped;
+matvec completion, pre/post smoothing, transfers, centering, child visits and
+repeat counts retain their existing order. The default-feature cycle is
+unchanged. Both ordinary and separately traced experimental cycles use the same
+fused transfer helper.
