@@ -112,6 +112,10 @@ every returned solution bit and diagnostic against both scalar and planned PCG,
 plus a fresh original-system residual. It emits `profile` records after two
 warm-ups and `profile_structure` records for direct terminals. The latter report
 nonzero factors and the full column-scan slots within grounded components.
+With `experimental-components`, centering the preconditioned vector and its
+residual dot product are measured together under `centering`; the environment
+record marks this with `centering_includes_rho_dot`. Compare the sum of centering
+and dot-product time across builds that use different fusion strategies.
 Run it separately from allocation instrumentation. Profile timers and fresh
 workspaces change overhead; use ordinary paired measurements to accept speedups.
 

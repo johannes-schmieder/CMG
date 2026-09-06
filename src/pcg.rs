@@ -862,9 +862,20 @@ fn solve_pcg_core(
         &mut workspace.preconditioned,
         &mut workspace.cmg,
     )?;
-    components
-        .center_in_place_with_workspace(&mut workspace.preconditioned, &mut workspace.component)?;
-    let mut rho = dot(&workspace.residual, &workspace.preconditioned);
+    #[cfg(feature = "experimental-components")]
+    let mut rho = components.center_and_dot_with_workspace(
+        &mut workspace.preconditioned,
+        &workspace.residual,
+        &mut workspace.component,
+    )?;
+    #[cfg(not(feature = "experimental-components"))]
+    let mut rho = {
+        components.center_in_place_with_workspace(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+        )?;
+        dot(&workspace.residual, &workspace.preconditioned)
+    };
     validate_positive_pcg(0, "r^T M r", rho)?;
     workspace
         .direction
@@ -961,11 +972,20 @@ fn solve_pcg_core(
             &mut workspace.preconditioned,
             &mut workspace.cmg,
         )?;
-        components.center_in_place_with_workspace(
+        #[cfg(feature = "experimental-components")]
+        let new_rho = components.center_and_dot_with_workspace(
             &mut workspace.preconditioned,
+            &workspace.residual,
             &mut workspace.component,
         )?;
-        let new_rho = dot(&workspace.residual, &workspace.preconditioned);
+        #[cfg(not(feature = "experimental-components"))]
+        let new_rho = {
+            components.center_in_place_with_workspace(
+                &mut workspace.preconditioned,
+                &mut workspace.component,
+            )?;
+            dot(&workspace.residual, &workspace.preconditioned)
+        };
         validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
 
         if restarted {
@@ -1251,12 +1271,23 @@ fn solve_pcg_with_plan_core(
         options.validation,
         executor,
     )?;
-    components.center_in_place_with_workspace_and_executor(
+    #[cfg(feature = "experimental-components")]
+    let mut rho = center_and_dot_with_executor(
+        components,
         &mut workspace.preconditioned,
+        &workspace.residual,
         &mut workspace.component,
         executor,
     )?;
-    let mut rho = dot_with_executor(&workspace.residual, &workspace.preconditioned, executor);
+    #[cfg(not(feature = "experimental-components"))]
+    let mut rho = {
+        components.center_in_place_with_workspace_and_executor(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+            executor,
+        )?;
+        dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
+    };
     validate_positive_pcg(0, "r^T M r", rho)?;
     workspace
         .direction
@@ -1373,12 +1404,23 @@ fn solve_pcg_with_plan_core(
             options.validation,
             executor,
         )?;
-        components.center_in_place_with_workspace_and_executor(
+        #[cfg(feature = "experimental-components")]
+        let new_rho = center_and_dot_with_executor(
+            components,
             &mut workspace.preconditioned,
+            &workspace.residual,
             &mut workspace.component,
             executor,
         )?;
-        let new_rho = dot_with_executor(&workspace.residual, &workspace.preconditioned, executor);
+        #[cfg(not(feature = "experimental-components"))]
+        let new_rho = {
+            components.center_in_place_with_workspace_and_executor(
+                &mut workspace.preconditioned,
+                &mut workspace.component,
+                executor,
+            )?;
+            dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
+        };
         validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
 
         if restarted {
@@ -2451,6 +2493,23 @@ pub(crate) fn paired_norms_with_executor(
     }
 }
 
+#[cfg(all(feature = "parallel", feature = "experimental-components"))]
+pub(crate) fn center_and_dot_with_executor(
+    components: &crate::Components,
+    values: &mut [f64],
+    left: &[f64],
+    workspace: &mut ComponentWorkspace,
+    executor: &ParallelExecutor,
+) -> Result<f64, CmgError> {
+    if executor.thread_count() == 1 {
+        components.center_and_dot_with_workspace(values, left, workspace)
+    } else {
+        // Both centering and the dot product retain their fixed reduction trees.
+        components.center_in_place_with_workspace_and_executor(values, workspace, executor)?;
+        Ok(dot_with_executor(left, values, executor))
+    }
+}
+
 #[cfg(all(test, feature = "experimental-components"))]
 mod paired_norm_tests {
     use super::{euclidean_norm, paired_euclidean_norms};
@@ -2482,6 +2541,57 @@ mod paired_norm_tests {
             let pair = paired_euclidean_norms(&left, &right);
             assert_eq!(pair.0.to_bits(), euclidean_norm(&left).to_bits());
             assert_eq!(pair.1.to_bits(), euclidean_norm(&right).to_bits());
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn centered_dot_adapter_preserves_each_executor_reduction_tree() {
+        use super::{center_and_dot_with_executor, dot_with_executor};
+        use crate::{Components, Laplacian, ParallelExecutor, ParallelOptions};
+
+        for edges in [
+            (0..512).map(|v| (v, v + 1, 1.0)).collect::<Vec<_>>(),
+            (0..511).map(|v| (v, v + 2, 1.0)).collect(),
+        ] {
+            let components =
+                Components::from_laplacian(&Laplacian::from_edges(513, edges).unwrap());
+            let left: Vec<_> = (0..513).map(|i| ((i * 7) % 23) as f64 - 11.0).collect();
+            let values: Vec<_> = (0..513).map(|i| ((i * 13) % 31) as f64 - 15.0).collect();
+            for threads in [1, 2, 4] {
+                let executor = ParallelExecutor::new(ParallelOptions {
+                    threads,
+                    min_parallel_len: 1,
+                    reduction_chunk_size: 16,
+                    ..ParallelOptions::default()
+                })
+                .unwrap();
+                let mut actual = values.clone();
+                let mut expected = values.clone();
+                components
+                    .center_in_place_with_workspace_and_executor(
+                        &mut expected,
+                        &mut components.workspace(),
+                        &executor,
+                    )
+                    .unwrap();
+                let reference = dot_with_executor(&left, &expected, &executor);
+                let fused = center_and_dot_with_executor(
+                    &components,
+                    &mut actual,
+                    &left,
+                    &mut components.workspace(),
+                    &executor,
+                )
+                .unwrap();
+                assert!(
+                    actual
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+                assert_eq!(fused.to_bits(), reference.to_bits());
+            }
         }
     }
 

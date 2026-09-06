@@ -5,7 +5,7 @@ use std::time::Instant;
 use crate::components::ComponentWorkspace;
 use crate::graph::compensated_sum;
 #[cfg(feature = "experimental-components")]
-use crate::pcg::paired_norms_with_executor;
+use crate::pcg::{center_and_dot_with_executor, paired_norms_with_executor};
 use crate::pcg::{dot_with_executor, euclidean_norm_with_executor};
 use crate::{
     CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, ParallelCmgPlan, ParallelExecutor,
@@ -78,7 +78,7 @@ impl PcgPhaseProfile {
         self.matvec
     }
 
-    /// Return compensated dot-product timing.
+    /// Return compensated dot-product timing outside experimental centering fusion.
     #[must_use]
     pub const fn dot_products(&self) -> PcgPhaseSample {
         self.dot_products
@@ -91,6 +91,8 @@ impl PcgPhaseProfile {
     }
 
     /// Return finest-component centering timing.
+    /// With `experimental-components`, includes the paired preconditioned-vector
+    /// centering and residual dot product, measured together even on the parallel fallback.
     #[must_use]
     pub const fn centering(&self) -> PcgPhaseSample {
         self.centering
@@ -334,16 +336,29 @@ pub fn profile_pcg_with_plan(
             executor,
         )
     })?;
-    measure(&mut profile.centering, || {
-        components.center_in_place_with_workspace_and_executor(
+    #[cfg(feature = "experimental-components")]
+    let mut rho = measure(&mut profile.centering, || {
+        center_and_dot_with_executor(
+            components,
             &mut workspace.preconditioned,
+            &workspace.residual,
             &mut workspace.component,
             executor,
         )
     })?;
-    let mut rho = measure(&mut profile.dot_products, || {
-        dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
-    });
+    #[cfg(not(feature = "experimental-components"))]
+    let mut rho = {
+        measure(&mut profile.centering, || {
+            components.center_in_place_with_workspace_and_executor(
+                &mut workspace.preconditioned,
+                &mut workspace.component,
+                executor,
+            )
+        })?;
+        measure(&mut profile.dot_products, || {
+            dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
+        })
+    };
     validate_positive_pcg(0, "r^T M r", rho)?;
     measure(&mut profile.vector_updates, || {
         workspace
@@ -484,16 +499,29 @@ pub fn profile_pcg_with_plan(
                 executor,
             )
         })?;
-        measure(&mut profile.centering, || {
-            components.center_in_place_with_workspace_and_executor(
+        #[cfg(feature = "experimental-components")]
+        let new_rho = measure(&mut profile.centering, || {
+            center_and_dot_with_executor(
+                components,
                 &mut workspace.preconditioned,
+                &workspace.residual,
                 &mut workspace.component,
                 executor,
             )
         })?;
-        let new_rho = measure(&mut profile.dot_products, || {
-            dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
-        });
+        #[cfg(not(feature = "experimental-components"))]
+        let new_rho = {
+            measure(&mut profile.centering, || {
+                components.center_in_place_with_workspace_and_executor(
+                    &mut workspace.preconditioned,
+                    &mut workspace.component,
+                    executor,
+                )
+            })?;
+            measure(&mut profile.dot_products, || {
+                dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
+            })
+        };
         validate_positive_pcg(iteration, "new r^T M r", new_rho)?;
 
         if restarted {

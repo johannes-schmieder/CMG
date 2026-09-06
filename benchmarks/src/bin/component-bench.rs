@@ -299,11 +299,12 @@ fn main() {
         "baseline-only build"
     );
     println!(
-        "{{\"type\":\"environment\",\"source\":{},\"os\":{},\"arch\":{},\"suite\":{},\"seed\":{seed},\"repetitions\":{repetitions},\"rhs_count\":{rhs_count},\"warmups\":2,\"parallel_execution\":false,\"phase_profiling\":{profile},\"allocation_tracking\":{}}}",
+        "{{\"type\":\"environment\",\"source\":{},\"os\":{},\"arch\":{},\"suite\":{},\"seed\":{seed},\"repetitions\":{repetitions},\"rhs_count\":{rhs_count},\"warmups\":2,\"parallel_execution\":false,\"phase_profiling\":{profile},\"centering_includes_rho_dot\":{},\"allocation_tracking\":{}}}",
         json_string(option_env!("CMG_BENCH_COMMIT").unwrap_or("unrecorded")),
         json_string(std::env::consts::OS),
         json_string(std::env::consts::ARCH),
         json_string(&suite),
+        profile && cfg!(feature = "experimental-components"),
         cfg!(feature = "component-allocations")
     );
     let cases = match suite.as_str() {
