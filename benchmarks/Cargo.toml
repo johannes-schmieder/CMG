@@ -8,6 +8,14 @@ publish = false
 [dependencies]
 cmg = { path = "..", features = ["parallel", "profiling"] }
 
+[features]
+experimental-components = ["cmg/experimental-components"]
+component-allocations = []
+
+[[bin]]
+name = "component-bench"
+path = "src/bin/component-bench.rs"
+
 [[bin]]
 name = "graph-build"
 path = "src/bin/graph-build.rs"

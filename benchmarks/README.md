@@ -22,6 +22,7 @@ dependency path. The command-line tools emit machine-readable JSON.
 | `pcg-phase-profile` | certified outer-PCG phase attribution |
 | `plan-phase-profile` | parallel-plan construction attribution |
 | `fixed-topology-sequence` | changing-weight assembly, caller buffers, retained preconditioners, warm starts, routing, profiles, and allocations |
+| `component-bench` | opt-in disconnected-graph sentinels, independent pruning/block-LDL switches, paired setup/solve timings, and recursive work counts |
 
 The `cmg-bench` and `cmg-parallel-bench` binaries support the durable GitHub
 Actions comparisons. `scc-benchmark`, `scc2-diagnostics`, and `scc2-memory`
@@ -56,6 +57,53 @@ cargo run --release --manifest-path benchmarks/Cargo.toml \
 ```
 
 For process RSS on Linux, wrap a release binary with `/usr/bin/time -v`.
+
+The component experiment requires an explicit feature. Its positional arguments
+are measured repetitions, RHS count, and an optional case-name substring:
+
+```bash
+CMG_BENCH_COMMIT=$(git rev-parse HEAD) cargo run --release \
+  --manifest-path benchmarks/Cargo.toml --features experimental-components \
+  --bin component-bench -- 9 1
+```
+
+Run from a clean committed snapshot when recording evidence. Each case has two
+warm-up rounds and rotates the four arms in every round. JSONL includes all raw
+samples, original-system residuals/tolerances, retained/workspace bytes, and
+level dimensions/visits. Graph/RHS construction is common untimed preparation.
+Total time includes preconditioner setup, PCG workspace allocation, and all RHS
+solves, including their normal certification and result allocation. The extra
+independent residual check and isolated application measurements are outside
+that total. See [the component design note](../docs/component-aware-cmg.md).
+
+Add `--suite stress --seed 20260906` for the frozen weighted, bridge-heavy,
+bipartite, heterogeneous and material-threshold cases. An optional third
+positional argument filters case names by substring. Use `--route baseline`,
+`prune`, `block-ldl`, `combined`, or `preserve-stopping` for a single arm. The
+last arm combines block LDL with compact storage and the original vertex-based
+stopping decisions. The experimental build now rotates all five arms. Without the
+`experimental-components` feature this same harness builds against ordinary
+CMG and runs only the baseline, permitting a separately compiled comparison.
+Set `CMG_BENCH_COMMIT` at build time to record the numerical source identity.
+Failures are emitted as JSONL records; the harness finishes the remaining cases
+and returns a nonzero exit status. Successful samples include known-solution
+relative errors in addition to residual certificates.
+Complete solution vectors also receive deterministic fingerprints of their
+floating-point bits outside the timed region, for cross-binary comparisons.
+These fingerprints are noncryptographic. Cycle visit counts describe the
+hierarchy model; execution may omit a zero-dimensional recursive correction.
+
+For a separate requested-allocation run, enable `component-allocations` and
+use one repetition. The allocator counters affect timings, so do not use those
+timings for performance comparisons. Allocation records include setup peak/live
+requested bytes and counts for warmed caller-buffer application and PCG loops.
+These are requested layout sizes, not process RSS or allocator arena sizes.
+
+Use `--suite large --seed 20260908` for ten fixed local cases up to 97,536
+vertices: connected/mixed paths and grids, sparse/dense bipartite graphs, a
+weighted mixed path and 40,000 independent pairs. The ordinary sentinels and
+stress fixtures retain their original dimensions and seeds. Start the large
+suite with one repetition; preserve any failed cases before increasing repeats.
 
 ## Comparison discipline
 

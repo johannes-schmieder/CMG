@@ -308,6 +308,60 @@ impl Laplacian {
         }
     }
 
+    /// Remove only zero-degree rows, preserving canonical edge and addition order.
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn without_isolated_vertices(&self) -> Option<(Vec<usize>, Self)> {
+        if self.diagonal.iter().all(|&degree| degree > 0.0) {
+            return None;
+        }
+        let mut map = vec![usize::MAX; self.vertex_count];
+        let mut dimension = 0;
+        let mut endpoints_unchanged = true;
+        for (vertex, &degree) in self.diagonal.iter().enumerate() {
+            if degree > 0.0 {
+                map[vertex] = dimension;
+                endpoints_unchanged &= vertex == dimension;
+                dimension += 1;
+            }
+        }
+        // A monotone relabeling cannot change canonical ordering or introduce
+        // duplicates. If all removed rows form a suffix, even the endpoint
+        // indices are unchanged and the canonical edge storage can be shared.
+        let edges = if endpoints_unchanged {
+            Arc::clone(&self.edges)
+        } else {
+            Arc::new(
+                self.edges
+                    .iter()
+                    .map(|edge| {
+                        debug_assert!(map[edge.u()] < map[edge.v()]);
+                        debug_assert!(map[edge.v()] < dimension);
+                        Edge::from_compact_parts(
+                            map[edge.u()] as u32,
+                            map[edge.v()] as u32,
+                            edge.weight(),
+                        )
+                    })
+                    .collect(),
+            )
+        };
+        let mut diagonal = Vec::with_capacity(dimension);
+        diagonal.extend(self.diagonal.iter().copied().filter(|&degree| degree > 0.0));
+        Some((
+            map,
+            Self {
+                vertex_count: dimension,
+                edges,
+                diagonal: Arc::new(diagonal),
+                matrix_nnz: self.matrix_nnz,
+                operator_norm_bound: self.operator_norm_bound,
+                lineage: Arc::new(()),
+                prepared_topology_lineage: None,
+                prepared_components: None,
+            },
+        ))
+    }
+
     /// Return the number of vertices, including isolated vertices.
     #[must_use]
     pub const fn vertex_count(&self) -> usize {
@@ -584,6 +638,55 @@ pub(crate) fn close(left: f64, right: f64, tolerance: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Laplacian;
+
+    #[cfg(feature = "experimental-components")]
+    #[test]
+    fn compact_isolates_preserves_canonical_values_and_drops_lineage() {
+        for edges in [
+            vec![],
+            vec![(0, 1, 0.25), (1, 2, 4.0)],
+            vec![(2, 5, 0.125), (5, 11, 1e3), (2, 11, 1e-3), (2, 5, 0.5)],
+        ] {
+            let graph = Laplacian::from_edges(12, edges).unwrap();
+            let (map, compact) = graph.without_isolated_vertices().unwrap();
+            let reference = Laplacian::from_edges(
+                compact.vertex_count(),
+                graph
+                    .edges()
+                    .iter()
+                    .map(|e| (map[e.u()], map[e.v()], e.weight())),
+            )
+            .unwrap();
+            assert_eq!(compact, reference);
+            assert_eq!(compact.matrix_nnz(), graph.matrix_nnz());
+            assert_eq!(compact.operator_norm_bound(), graph.operator_norm_bound());
+            assert!(!compact.shares_lineage(&graph));
+            assert!(compact.prepared_topology_lineage.is_none());
+            let vector: Vec<_> = (0..12).map(|i| i as f64 / 7.0).collect();
+            let active: Vec<_> = vector
+                .iter()
+                .zip(&map)
+                .filter_map(|(&x, &m)| (m != usize::MAX).then_some(x))
+                .collect();
+            let expected: Vec<_> = graph
+                .matvec(&vector)
+                .unwrap()
+                .into_iter()
+                .zip(&map)
+                .filter_map(|(x, &m)| (m != usize::MAX).then_some(x))
+                .collect();
+            assert_eq!(compact.matvec(&active).unwrap(), expected);
+            if graph
+                .edges()
+                .iter()
+                .all(|e| map[e.u()] == e.u() && map[e.v()] == e.v())
+            {
+                assert!(std::sync::Arc::ptr_eq(&graph.edges, &compact.edges));
+            }
+        }
+        let connected = Laplacian::from_edges(2, [(0, 1, 1.0)]).unwrap();
+        assert!(connected.without_isolated_vertices().is_none());
+    }
 
     #[test]
     fn clones_share_lineage_but_independent_equal_graphs_do_not() {

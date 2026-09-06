@@ -9,6 +9,8 @@
 #![deny(missing_docs)]
 
 mod coarsen;
+#[cfg(feature = "experimental-components")]
+mod component_experiment;
 mod components;
 mod csr;
 mod error;
@@ -31,6 +33,8 @@ mod sddm_solver;
 mod workspace;
 
 pub use coarsen::Aggregation;
+#[cfg(feature = "experimental-components")]
+pub use component_experiment::{ComponentBuildOptions, PrunedTransfer};
 pub use components::Components;
 pub use csr::CsrLaplacian;
 pub use error::CmgError;

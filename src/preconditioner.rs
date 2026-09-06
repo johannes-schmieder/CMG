@@ -508,6 +508,30 @@ impl CmgPreconditioner {
         Self::from_hierarchy(CmgHierarchy::build(graph, options)?)
     }
 
+    /// Build an opt-in component experiment with independent setup changes.
+    ///
+    /// Uses the ordinary certified PCG, workspace, and fixed cycle application
+    /// paths. Active-count pruning can change termination and repeat counts;
+    /// preserving unpruned stopping separates storage pruning from that change.
+    /// Terminal component factors use ordered sparse numerical updates.
+    #[cfg(feature = "experimental-components")]
+    pub fn build_component_experiment(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+    ) -> Result<Self, CmgError> {
+        let hierarchy = if experiment.prune_coarse_isolates {
+            CmgHierarchy::build_pruned(graph, options, experiment.preserve_unpruned_stopping)?
+        } else {
+            CmgHierarchy::build(graph, options)?
+        };
+        if experiment.factor_terminal_components {
+            Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor_by_component)
+        } else {
+            Self::from_hierarchy(hierarchy)
+        }
+    }
+
     /// Build with deterministic parallel hierarchy contraction and sorting.
     ///
     /// The resulting hierarchy, terminal factor, and repeat counts are exactly
@@ -552,7 +576,14 @@ impl CmgPreconditioner {
         Ok((preconditioner, profile))
     }
 
-    fn from_hierarchy(mut hierarchy: CmgHierarchy) -> Result<Self, CmgError> {
+    fn from_hierarchy(hierarchy: CmgHierarchy) -> Result<Self, CmgError> {
+        Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor)
+    }
+
+    fn from_hierarchy_with_factor(
+        mut hierarchy: CmgHierarchy,
+        factor: impl FnOnce(&Laplacian) -> Result<GroundedLdl, CmgError>,
+    ) -> Result<Self, CmgError> {
         let finest = hierarchy
             .levels()
             .first()
@@ -576,7 +607,7 @@ impl CmgPreconditioner {
                 .ok_or(CmgError::InvalidHierarchy {
                     context: "hierarchy contains no terminal level",
                 })?;
-            Some(GroundedLdl::factor(terminal.graph())?)
+            Some(factor(terminal.graph())?)
         } else {
             None
         };
@@ -899,9 +930,6 @@ impl CmgPreconditioner {
             return Ok(());
         }
 
-        let aggregation = level.aggregation().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no aggregation",
-        })?;
         if iterations == 0 {
             return Err(CmgError::InvalidHierarchy {
                 context: "nonterminal level has zero stationary iterations",
@@ -916,6 +944,13 @@ impl CmgPreconditioner {
         let parallel_level = plan.level_operator(level_index).is_some();
 
         let mut local = workspace.take_level(level_index);
+        // With a zero-dimensional child, restriction and correction have no
+        // output. Keep both smoothing sweeps, but avoid forming the unused
+        // middle residual and making an empty recursive call.
+        #[cfg(feature = "experimental-components")]
+        let has_coarse_work = !local.coarse_rhs.is_empty();
+        #[cfg(not(feature = "experimental-components"))]
+        let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
                 if iteration == 0 {
@@ -944,41 +979,48 @@ impl CmgPreconditioner {
                     );
                 }
 
-                plan.matvec_into(
-                    level_index,
-                    level.graph(),
-                    output,
-                    &mut local.residual,
-                    executor,
-                )?;
-                residual_from_matvec_planned(&mut local.residual, rhs, executor, parallel_level);
-                aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                let centering = &self.coarse_centering[level_index];
-                let mut centering_workspace = workspace.take_centering(level_index);
-                let centering_result = centering.center_in_place_with_workspace_and_executor(
-                    &mut local.coarse_rhs,
-                    &mut centering_workspace,
-                    executor,
-                );
-                workspace.put_centering(level_index, centering_workspace);
-                centering_result?;
-                self.apply_level_with_plan(
-                    level_index + 1,
-                    &local.coarse_rhs,
-                    &mut local.coarse_correction,
-                    workspace,
-                    child_iterations,
-                    plan,
-                    executor,
-                )?;
-                if parallel_level {
-                    aggregation.prolong_add_into_with_executor(
-                        &local.coarse_correction,
+                if has_coarse_work {
+                    plan.matvec_into(
+                        level_index,
+                        level.graph(),
                         output,
+                        &mut local.residual,
                         executor,
                     )?;
-                } else {
-                    aggregation.prolong_add_into(&local.coarse_correction, output)?;
+                    residual_from_matvec_planned(
+                        &mut local.residual,
+                        rhs,
+                        executor,
+                        parallel_level,
+                    );
+                    level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    let centering = &self.coarse_centering[level_index];
+                    let mut centering_workspace = workspace.take_centering(level_index);
+                    let centering_result = centering.center_in_place_with_workspace_and_executor(
+                        &mut local.coarse_rhs,
+                        &mut centering_workspace,
+                        executor,
+                    );
+                    workspace.put_centering(level_index, centering_workspace);
+                    centering_result?;
+                    self.apply_level_with_plan(
+                        level_index + 1,
+                        &local.coarse_rhs,
+                        &mut local.coarse_correction,
+                        workspace,
+                        child_iterations,
+                        plan,
+                        executor,
+                    )?;
+                    if parallel_level {
+                        level.prolong_add_into_with_executor(
+                            &local.coarse_correction,
+                            output,
+                            executor,
+                        )?;
+                    } else {
+                        level.prolong_add_into(&local.coarse_correction, output)?;
+                    }
                 }
 
                 plan.matvec_into(
@@ -1045,9 +1087,6 @@ impl CmgPreconditioner {
             return Ok(());
         }
 
-        let aggregation = level.aggregation().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no aggregation",
-        })?;
         if iterations == 0 {
             return Err(CmgError::InvalidHierarchy {
                 context: "nonterminal level has zero stationary iterations",
@@ -1061,6 +1100,13 @@ impl CmgPreconditioner {
         }
 
         let mut local = workspace.take_level(level_index);
+        // With a zero-dimensional child, restriction and correction have no
+        // output. Keep both smoothing sweeps, but avoid forming the unused
+        // middle residual and making an empty recursive call.
+        #[cfg(feature = "experimental-components")]
+        let has_coarse_work = !local.coarse_rhs.is_empty();
+        #[cfg(not(feature = "experimental-components"))]
+        let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
                 if iteration == 0 {
@@ -1081,31 +1127,33 @@ impl CmgPreconditioner {
                     }
                 }
 
-                level.graph().matvec_into(output, &mut local.residual)?;
-                for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
-                    *residual = *rhs_value - *residual;
+                if has_coarse_work {
+                    level.graph().matvec_into(output, &mut local.residual)?;
+                    for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
+                        *residual = *rhs_value - *residual;
+                    }
+                    level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    let centering = &self.coarse_centering[level_index];
+                    let mut centering_workspace = workspace.take_centering(level_index);
+                    // Restricted residuals are component-compatible in exact
+                    // arithmetic. Remove only floating-point null-space drift before
+                    // the recursive solve instead of repeating full public-boundary
+                    // compatibility validation and exact correction passes.
+                    let centering_result = centering.center_in_place_with_workspace(
+                        &mut local.coarse_rhs,
+                        &mut centering_workspace,
+                    );
+                    workspace.put_centering(level_index, centering_workspace);
+                    centering_result?;
+                    self.apply_level(
+                        level_index + 1,
+                        &local.coarse_rhs,
+                        &mut local.coarse_correction,
+                        workspace,
+                        child_iterations,
+                    )?;
+                    level.prolong_add_into(&local.coarse_correction, output)?;
                 }
-                aggregation.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                let centering = &self.coarse_centering[level_index];
-                let mut centering_workspace = workspace.take_centering(level_index);
-                // Restricted residuals are component-compatible in exact
-                // arithmetic. Remove only floating-point null-space drift before
-                // the recursive solve instead of repeating full public-boundary
-                // compatibility validation and exact correction passes.
-                let centering_result = centering.center_in_place_with_workspace(
-                    &mut local.coarse_rhs,
-                    &mut centering_workspace,
-                );
-                workspace.put_centering(level_index, centering_workspace);
-                centering_result?;
-                self.apply_level(
-                    level_index + 1,
-                    &local.coarse_rhs,
-                    &mut local.coarse_correction,
-                    workspace,
-                    child_iterations,
-                )?;
-                aggregation.prolong_add_into(&local.coarse_correction, output)?;
 
                 level.graph().matvec_into(output, &mut local.residual)?;
                 for (((value, inverse_diagonal), rhs_value), matrix_value) in output
