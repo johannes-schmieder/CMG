@@ -68,6 +68,12 @@ jobs:
       - name: Component benchmark fixture tests
         run: cargo test --manifest-path benchmarks/Cargo.toml --features experimental-components --bin component-bench
 
+      - name: Component portfolio fixture tests
+        run: cargo test --manifest-path benchmarks/Cargo.toml --features experimental-components --bin component-portfolio-bench
+
+      - name: Component portfolio caller-buffer smoke
+        run: cargo run --release --manifest-path benchmarks/Cargo.toml --features experimental-components --bin component-portfolio-bench -- 1 1 pairs-below-threshold
+
       - name: Benchmark release build
         run: cargo build --manifest-path benchmarks/Cargo.toml --all-targets --release
 
