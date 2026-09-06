@@ -2,8 +2,6 @@
 
 use std::time::Instant;
 
-#[cfg(feature = "experimental-components")]
-use crate::components::ComponentTraversal;
 use crate::components::ComponentWorkspace;
 use crate::graph::compensated_sum;
 #[cfg(feature = "experimental-components")]
@@ -239,8 +237,6 @@ struct ProfileWorkspace {
     direction: Vec<f64>,
     matrix_direction: Vec<f64>,
     component: ComponentWorkspace,
-    #[cfg(feature = "experimental-components")]
-    traversal: Option<ComponentTraversal>,
     cmg: CmgWorkspace,
 }
 
@@ -258,9 +254,6 @@ impl ProfileWorkspace {
             matrix_direction: vec![0.0; dimension],
             component: preconditioner.finest_components().workspace(),
             cmg: preconditioner.workspace(),
-            #[cfg(feature = "experimental-components")]
-            traversal: ComponentTraversal::try_new(preconditioner.finest_components_arc())
-                .expect("profile component traversal allocation"),
         }
     }
 }
@@ -372,25 +365,13 @@ pub fn profile_pcg_with_plan(
     })?;
     #[cfg(feature = "experimental-components")]
     let mut rho = measure(&mut profile.centering, || {
-        if let Some(traversal) = workspace
-            .traversal
-            .as_ref()
-            .filter(|_| executor.thread_count() == 1)
-        {
-            traversal.center_and_dot(
-                &mut workspace.preconditioned,
-                &workspace.residual,
-                &mut workspace.component,
-            )
-        } else {
-            center_and_dot_with_executor(
-                components,
-                &mut workspace.preconditioned,
-                &workspace.residual,
-                &mut workspace.component,
-                executor,
-            )
-        }
+        center_and_dot_with_executor(
+            components,
+            &mut workspace.preconditioned,
+            &workspace.residual,
+            &mut workspace.component,
+            executor,
+        )
     })?;
     #[cfg(not(feature = "experimental-components"))]
     let mut rho = {
@@ -444,14 +425,6 @@ pub fn profile_pcg_with_plan(
             }
         });
         measure(&mut profile.centering, || {
-            #[cfg(feature = "experimental-components")]
-            if let Some(traversal) = workspace
-                .traversal
-                .as_ref()
-                .filter(|_| executor.thread_count() == 1)
-            {
-                return traversal.center(&mut workspace.solution, &mut workspace.component);
-            }
             components.center_in_place_with_workspace_and_executor(
                 &mut workspace.solution,
                 &mut workspace.component,
@@ -537,14 +510,6 @@ pub fn profile_pcg_with_plan(
         }
 
         measure(&mut profile.centering, || {
-            #[cfg(feature = "experimental-components")]
-            if let Some(traversal) = workspace
-                .traversal
-                .as_ref()
-                .filter(|_| executor.thread_count() == 1)
-            {
-                return traversal.center(&mut workspace.residual, &mut workspace.component);
-            }
             components.center_in_place_with_workspace_and_executor(
                 &mut workspace.residual,
                 &mut workspace.component,
@@ -577,25 +542,13 @@ pub fn profile_pcg_with_plan(
         })?;
         #[cfg(feature = "experimental-components")]
         let new_rho = measure(&mut profile.centering, || {
-            if let Some(traversal) = workspace
-                .traversal
-                .as_ref()
-                .filter(|_| executor.thread_count() == 1)
-            {
-                traversal.center_and_dot(
-                    &mut workspace.preconditioned,
-                    &workspace.residual,
-                    &mut workspace.component,
-                )
-            } else {
-                center_and_dot_with_executor(
-                    components,
-                    &mut workspace.preconditioned,
-                    &workspace.residual,
-                    &mut workspace.component,
-                    executor,
-                )
-            }
+            center_and_dot_with_executor(
+                components,
+                &mut workspace.preconditioned,
+                &workspace.residual,
+                &mut workspace.component,
+                executor,
+            )
         })?;
         #[cfg(not(feature = "experimental-components"))]
         let new_rho = {

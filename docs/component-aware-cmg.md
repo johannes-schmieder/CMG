@@ -1012,15 +1012,16 @@ Ordinary benchmark builds therefore exclude the deep instrumentation completely;
 trace builds enable it explicitly. The production and traced cycle bodies are
 cross-checked for complete output bits and exact recursive operation counts.
 
-The stable-traversal prototype caches only vertex indices (four bytes per
-finest vertex) in eligible PCG workspaces. Component identity is retained by an
-`Arc`, so a compatible workspace used with different component metadata takes
-the reference path without rebuilding or allocating. Index construction uses
-one temporary component-offset array. Memory estimates include both the retained
-indices and the temporary offsets. Connected/contiguous layouts allocate no
-indices. Solver entry selects the indexed loop once; subtraction and the global
-compensated dot retain original vertex order. A nonfinite input still reports
-the first offending original vertex and leaves the centered input unchanged.
+The stable-traversal trial (`92639f9`) cached four-byte vertex indices per
+eligible finest-level workspace, retained component identity and preserved all
+per-component summation and global subtraction/dot ordering. It improved the
+interleaved weighted mixtures by roughly 11–17% locally, but the final combined
+21-round connected-clique control was 0.9813 [0.9738, 0.9853] against `b6c6e61`.
+That interval does not establish the required 2% noninferiority margin. Small
+heterogeneous mixtures also regressed. The cache is therefore removed from the
+retained implementation; its source, tests and immutable timing evidence remain
+in the trial commit. Restriction and terminal fusion are qualified separately
+without the cache. The qualification holdout has not been used for this decision.
 
 Exclusive tracing (three repetitions, four RHSs, 384 complete solves) identifies
 restriction at about 31% of the large connected-path solve and 27% of the path

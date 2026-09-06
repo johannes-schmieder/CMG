@@ -673,11 +673,6 @@ impl CmgPreconditioner {
         &self.finest_components
     }
 
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn finest_components_arc(&self) -> &Arc<Components> {
-        &self.finest_components
-    }
-
     pub(crate) fn finest_component_bytes(&self) -> usize {
         self.finest_components.byte_len()
     }

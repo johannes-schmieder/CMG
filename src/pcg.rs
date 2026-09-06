@@ -1,7 +1,5 @@
 //! Certified quotient-space preconditioned conjugate gradients.
 
-#[cfg(feature = "experimental-components")]
-use crate::components::ComponentTraversal;
 use crate::components::ComponentWorkspace;
 #[cfg(feature = "experimental-components")]
 use crate::graph::compensated_add;
@@ -25,8 +23,6 @@ pub struct PcgWorkspace {
     matrix_direction: Vec<f64>,
     component: ComponentWorkspace,
     cmg: CmgWorkspace,
-    #[cfg(feature = "experimental-components")]
-    traversal: Option<ComponentTraversal>,
 }
 
 /// Solution-free diagnostics returned by caller-buffer PCG entry points.
@@ -473,16 +469,11 @@ impl PcgWorkspace {
         let dimension = preconditioner.hierarchy().levels()[0]
             .graph()
             .vertex_count();
-        let bytes = dimension
+        dimension
             .saturating_mul(core::mem::size_of::<f64>())
             .saturating_mul(6)
             .saturating_add(preconditioner.finest_components().workspace_bytes())
-            .saturating_add(preconditioner.workspace_bytes());
-        #[cfg(feature = "experimental-components")]
-        let bytes = bytes.saturating_add(ComponentTraversal::required_bytes(
-            preconditioner.finest_components(),
-        ));
-        bytes
+            .saturating_add(preconditioner.workspace_bytes())
     }
 
     /// Allocate a solver workspace for a fixed preconditioner.
@@ -500,9 +491,6 @@ impl PcgWorkspace {
             matrix_direction: vec![0.0; dimension],
             component: preconditioner.finest_components().workspace(),
             cmg: preconditioner.workspace(),
-            #[cfg(feature = "experimental-components")]
-            traversal: ComponentTraversal::try_new(preconditioner.finest_components_arc())
-                .expect("component traversal allocation"),
         }
     }
 
@@ -520,8 +508,6 @@ impl PcgWorkspace {
             matrix_direction: try_zeroed(dimension, "PCG matrix direction")?,
             component: preconditioner.finest_components().try_workspace()?,
             cmg: preconditioner.try_workspace()?,
-            #[cfg(feature = "experimental-components")]
-            traversal: ComponentTraversal::try_new(preconditioner.finest_components_arc())?,
         })
     }
 
@@ -534,19 +520,11 @@ impl PcgWorkspace {
     /// Return the number of heap bytes reserved by the principal work arrays.
     #[must_use]
     pub fn byte_len(&self) -> usize {
-        let bytes = self
-            .dimension()
+        self.dimension()
             .saturating_mul(8)
             .saturating_mul(6)
             .saturating_add(self.component.byte_len())
-            .saturating_add(self.cmg.byte_len());
-        #[cfg(feature = "experimental-components")]
-        let bytes = bytes.saturating_add(
-            self.traversal
-                .as_ref()
-                .map_or(0, ComponentTraversal::byte_len),
-        );
-        bytes
+            .saturating_add(self.cmg.byte_len())
     }
 
     fn validate(&self, preconditioner: &CmgPreconditioner) -> Result<(), CmgError> {
@@ -785,27 +763,11 @@ fn solve_pcg_core(
     workspace: &mut PcgWorkspace,
     compatibility: GraphCompatibility,
 ) -> Result<PcgDiagnostics, CmgError> {
-    #[cfg(feature = "experimental-components")]
-    if workspace
-        .traversal
-        .as_ref()
-        .is_some_and(|p| p.matches(preconditioner.finest_components()))
-    {
-        return solve_pcg_core_kernel::<true, true>(
-            graph,
-            preconditioner,
-            rhs,
-            initial_guess,
-            options,
-            workspace,
-            compatibility,
-        );
-    }
     // Choose one monomorphized loop at entry; connected solves keep the original
     // centering and dot-product call sequence throughout their iterations.
     #[cfg(feature = "experimental-components")]
     if preconditioner.finest_components().count() > 1 {
-        return solve_pcg_core_kernel::<true, false>(
+        return solve_pcg_core_kernel::<true>(
             graph,
             preconditioner,
             rhs,
@@ -815,7 +777,7 @@ fn solve_pcg_core(
             compatibility,
         );
     }
-    solve_pcg_core_kernel::<false, false>(
+    solve_pcg_core_kernel::<false>(
         graph,
         preconditioner,
         rhs,
@@ -826,7 +788,7 @@ fn solve_pcg_core(
     )
 }
 
-fn solve_pcg_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: bool>(
+fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
     graph: &Laplacian,
     preconditioner: &CmgPreconditioner,
     rhs: &[f64],
@@ -876,20 +838,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: b
     )?;
     if let Some(guess) = initial_guess {
         workspace.solution.copy_from_slice(guess);
-        #[cfg(feature = "experimental-components")]
-        if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center(&mut workspace.solution, &mut workspace.component)?;
-        } else {
-            components.center_in_place_with_workspace(
-                &mut workspace.solution,
-                &mut workspace.component,
-            )?;
-        }
-        #[cfg(not(feature = "experimental-components"))]
         components
             .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
         recompute_residual(
@@ -949,17 +897,7 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: b
         &mut workspace.cmg,
     )?;
     #[cfg(feature = "experimental-components")]
-    let mut rho = if INDEXED_CENTERING {
-        workspace
-            .traversal
-            .as_ref()
-            .expect("indexed traversal selected at entry")
-            .center_and_dot(
-                &mut workspace.preconditioned,
-                &workspace.residual,
-                &mut workspace.component,
-            )?
-    } else if FUSED_CENTERING {
+    let mut rho = if FUSED_CENTERING {
         components.center_and_dot_with_workspace(
             &mut workspace.preconditioned,
             &workspace.residual,
@@ -1005,20 +943,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: b
             *solution += alpha * *direction;
             *residual -= alpha * *matrix_direction;
         }
-        #[cfg(feature = "experimental-components")]
-        if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center(&mut workspace.solution, &mut workspace.component)?;
-        } else {
-            components.center_in_place_with_workspace(
-                &mut workspace.solution,
-                &mut workspace.component,
-            )?;
-        }
-        #[cfg(not(feature = "experimental-components"))]
         components
             .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
 
@@ -1083,20 +1007,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: b
         // The public solver projected the submitted RHS once. Remove only the
         // component-nullspace roundoff accumulated by Krylov updates before
         // reusing the compatible stationary core.
-        #[cfg(feature = "experimental-components")]
-        if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center(&mut workspace.residual, &mut workspace.component)?;
-        } else {
-            components.center_in_place_with_workspace(
-                &mut workspace.residual,
-                &mut workspace.component,
-            )?;
-        }
-        #[cfg(not(feature = "experimental-components"))]
         components
             .center_in_place_with_workspace(&mut workspace.residual, &mut workspace.component)?;
         preconditioner.apply_compatible_into_prevalidated(
@@ -1105,17 +1015,7 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: b
             &mut workspace.cmg,
         )?;
         #[cfg(feature = "experimental-components")]
-        let new_rho = if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center_and_dot(
-                    &mut workspace.preconditioned,
-                    &workspace.residual,
-                    &mut workspace.component,
-                )?
-        } else if FUSED_CENTERING {
+        let new_rho = if FUSED_CENTERING {
             components.center_and_dot_with_workspace(
                 &mut workspace.preconditioned,
                 &workspace.residual,
@@ -1312,30 +1212,11 @@ fn solve_pcg_with_plan_core(
     executor: &ParallelExecutor,
     compatibility: GraphCompatibility,
 ) -> Result<PcgDiagnostics, CmgError> {
-    #[cfg(feature = "experimental-components")]
-    if workspace
-        .traversal
-        .as_ref()
-        .is_some_and(|p| p.matches(preconditioner.finest_components()))
-        && executor.thread_count() == 1
-    {
-        return solve_pcg_with_plan_core_kernel::<true, true>(
-            graph,
-            preconditioner,
-            plan,
-            rhs,
-            initial_guess,
-            options,
-            workspace,
-            executor,
-            compatibility,
-        );
-    }
     // Choose one monomorphized loop at entry; connected solves keep the original
     // centering and dot-product call sequence throughout their iterations.
     #[cfg(feature = "experimental-components")]
     if preconditioner.finest_components().count() > 1 && executor.thread_count() == 1 {
-        return solve_pcg_with_plan_core_kernel::<true, false>(
+        return solve_pcg_with_plan_core_kernel::<true>(
             graph,
             preconditioner,
             plan,
@@ -1347,7 +1228,7 @@ fn solve_pcg_with_plan_core(
             compatibility,
         );
     }
-    solve_pcg_with_plan_core_kernel::<false, false>(
+    solve_pcg_with_plan_core_kernel::<false>(
         graph,
         preconditioner,
         plan,
@@ -1362,7 +1243,7 @@ fn solve_pcg_with_plan_core(
 
 #[cfg(feature = "parallel")]
 #[allow(clippy::too_many_arguments)]
-fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CENTERING: bool>(
+fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
     graph: &Laplacian,
     preconditioner: &CmgPreconditioner,
     plan: &ParallelCmgPlan,
@@ -1415,21 +1296,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CE
     )?;
     if let Some(guess) = initial_guess {
         workspace.solution.copy_from_slice(guess);
-        #[cfg(feature = "experimental-components")]
-        if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center(&mut workspace.solution, &mut workspace.component)?;
-        } else {
-            components.center_in_place_with_workspace_and_executor(
-                &mut workspace.solution,
-                &mut workspace.component,
-                executor,
-            )?;
-        }
-        #[cfg(not(feature = "experimental-components"))]
         components.center_in_place_with_workspace_and_executor(
             &mut workspace.solution,
             &mut workspace.component,
@@ -1498,17 +1364,7 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CE
         executor,
     )?;
     #[cfg(feature = "experimental-components")]
-    let mut rho = if INDEXED_CENTERING {
-        workspace
-            .traversal
-            .as_ref()
-            .expect("indexed traversal selected at entry")
-            .center_and_dot(
-                &mut workspace.preconditioned,
-                &workspace.residual,
-                &mut workspace.component,
-            )?
-    } else if FUSED_CENTERING {
+    let mut rho = if FUSED_CENTERING {
         components.center_and_dot_with_workspace(
             &mut workspace.preconditioned,
             &workspace.residual,
@@ -1564,21 +1420,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CE
             *solution += alpha * *direction;
             *residual -= alpha * *matrix_direction;
         }
-        #[cfg(feature = "experimental-components")]
-        if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center(&mut workspace.solution, &mut workspace.component)?;
-        } else {
-            components.center_in_place_with_workspace_and_executor(
-                &mut workspace.solution,
-                &mut workspace.component,
-                executor,
-            )?;
-        }
-        #[cfg(not(feature = "experimental-components"))]
         components.center_in_place_with_workspace_and_executor(
             &mut workspace.solution,
             &mut workspace.component,
@@ -1649,21 +1490,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CE
         // The public solver projected the submitted RHS once. Remove only the
         // component-nullspace roundoff accumulated by Krylov updates before
         // reusing the compatible stationary core.
-        #[cfg(feature = "experimental-components")]
-        if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center(&mut workspace.residual, &mut workspace.component)?;
-        } else {
-            components.center_in_place_with_workspace_and_executor(
-                &mut workspace.residual,
-                &mut workspace.component,
-                executor,
-            )?;
-        }
-        #[cfg(not(feature = "experimental-components"))]
         components.center_in_place_with_workspace_and_executor(
             &mut workspace.residual,
             &mut workspace.component,
@@ -1678,17 +1504,7 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool, const INDEXED_CE
             executor,
         )?;
         #[cfg(feature = "experimental-components")]
-        let new_rho = if INDEXED_CENTERING {
-            workspace
-                .traversal
-                .as_ref()
-                .expect("indexed traversal selected at entry")
-                .center_and_dot(
-                    &mut workspace.preconditioned,
-                    &workspace.residual,
-                    &mut workspace.component,
-                )?
-        } else if FUSED_CENTERING {
+        let new_rho = if FUSED_CENTERING {
             components.center_and_dot_with_workspace(
                 &mut workspace.preconditioned,
                 &workspace.residual,
@@ -2841,7 +2657,7 @@ mod paired_norm_tests {
                     residual_recompute_interval: 3,
                     ..PcgOptions::default()
                 };
-                let reference = solve_pcg_core_kernel::<false, false>(
+                let reference = solve_pcg_core_kernel::<false>(
                     &graph,
                     &preconditioner,
                     &rhs,
@@ -2851,7 +2667,7 @@ mod paired_norm_tests {
                     GraphCompatibility::Exact,
                 )
                 .unwrap();
-                let fused = solve_pcg_core_kernel::<true, false>(
+                let fused = solve_pcg_core_kernel::<true>(
                     &graph,
                     &preconditioner,
                     &rhs,
@@ -3012,124 +2828,6 @@ fn validate_finite_pcg(
             quantity,
             value,
         })
-    }
-}
-
-#[cfg(all(test, feature = "experimental-components"))]
-mod traversal_workspace_tests {
-    use super::*;
-    use crate::CmgOptions;
-
-    #[test]
-    fn cached_and_reference_loops_match_with_warm_starts_and_replacements() {
-        let graph =
-            Laplacian::from_edges(513, (0..510).map(|i| (i, i + 3, 1.0 + (i % 7) as f64))).unwrap();
-        let pre = CmgPreconditioner::build(
-            &graph,
-            CmgOptions {
-                direct_threshold: 4,
-                ..CmgOptions::default()
-            },
-        )
-        .unwrap();
-        let known: Vec<_> = (0..513).map(|i| ((i * 7) % 31) as f64 / 17.0).collect();
-        let rhs = graph.matvec(&known).unwrap();
-        let guess: Vec<_> = known.iter().map(|x| 0.37 * x).collect();
-        let mut indexed = PcgWorkspace::try_new(&pre).unwrap();
-        let mut reference = indexed.clone();
-        assert!(
-            indexed
-                .traversal
-                .as_ref()
-                .unwrap()
-                .matches(pre.finest_components())
-        );
-        reference.traversal = None;
-        #[cfg(feature = "parallel")]
-        assert_eq!(PcgWorkspace::required_bytes(&pre), indexed.byte_len());
-        assert_eq!(indexed.byte_len() - reference.byte_len(), 4 * 513);
-        let options = PcgOptions {
-            residual_recompute_interval: 3,
-            ..PcgOptions::default()
-        };
-        let mut a = vec![0.0; 513];
-        let mut b = a.clone();
-        for guess in [None, Some(guess.as_slice()), None] {
-            let da = solve_pcg_into_with_workspace(
-                &graph,
-                &pre,
-                &rhs,
-                guess,
-                &mut a,
-                options,
-                &mut indexed,
-            )
-            .unwrap();
-            let db = solve_pcg_into_with_workspace(
-                &graph,
-                &pre,
-                &rhs,
-                guess,
-                &mut b,
-                options,
-                &mut reference,
-            )
-            .unwrap();
-            assert_eq!(da, db);
-            assert!(a.iter().zip(&b).all(|(a, b)| a.to_bits() == b.to_bits()));
-            assert!(da.restarts() > 0);
-        }
-    }
-
-    #[test]
-    fn a_different_component_identity_uses_the_uncached_path() {
-        let graph = Laplacian::from_edges(129, (0..126).map(|i| (i, i + 3, 1.0))).unwrap();
-        let swap = |v| match v {
-            0 => 1,
-            1 => 0,
-            v => v,
-        };
-        let other =
-            Laplacian::from_edges(129, (0..126).map(|i| (swap(i), swap(i + 3), 1.0))).unwrap();
-        let pre = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
-        let other_pre = CmgPreconditioner::build(&other, CmgOptions::default()).unwrap();
-        let mut reused = PcgWorkspace::new(&pre);
-        assert!(
-            !reused
-                .traversal
-                .as_ref()
-                .unwrap()
-                .matches(other_pre.finest_components())
-        );
-        let mut fresh = PcgWorkspace::new(&other_pre);
-        let rhs = other
-            .matvec(&(0..129).map(|i| ((i * 13) % 29) as f64).collect::<Vec<_>>())
-            .unwrap();
-        for _ in 0..2 {
-            let a = solve_pcg_with_workspace(
-                &other,
-                &other_pre,
-                &rhs,
-                PcgOptions::default(),
-                &mut reused,
-            )
-            .unwrap();
-            let b = solve_pcg_with_workspace(
-                &other,
-                &other_pre,
-                &rhs,
-                PcgOptions::default(),
-                &mut fresh,
-            )
-            .unwrap();
-            assert_eq!(a, b);
-            assert!(
-                a.solution()
-                    .iter()
-                    .zip(b.solution())
-                    .all(|(a, b)| a.to_bits() == b.to_bits())
-            );
-        }
     }
 }
 
