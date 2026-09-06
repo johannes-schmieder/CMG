@@ -156,6 +156,8 @@ pub(crate) struct CenteringPlan {
 impl CenteringPlan {
     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
         let Components { labels, sizes, .. } = Components::from_laplacian(graph);
+        #[cfg(feature = "experimental-components")]
+        let labels = labels.into_vec();
         let vertex_count = labels.len();
         let component_count = sizes.len();
         let labels = if component_count <= 1 {
@@ -330,7 +332,13 @@ impl CenteringPlan {
 /// Connected-component metadata for a weighted graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Components {
+    #[cfg(not(feature = "experimental-components"))]
     labels: Vec<usize>,
+    // Labels never change length after construction. A boxed slice leaves room
+    // for the experimental layout flag without growing the metadata embedded
+    // in every terminal factor (and its containing preconditioner).
+    #[cfg(feature = "experimental-components")]
+    labels: Box<[usize]>,
     sizes: Vec<usize>,
     #[cfg(feature = "experimental-components")]
     contiguous: bool,
@@ -372,7 +380,10 @@ impl Components {
         Self {
             #[cfg(feature = "experimental-components")]
             contiguous: labels.is_sorted(),
+            #[cfg(not(feature = "experimental-components"))]
             labels,
+            #[cfg(feature = "experimental-components")]
+            labels: labels.into_boxed_slice(),
             sizes,
         }
     }
@@ -419,7 +430,10 @@ impl Components {
         Ok(Self {
             #[cfg(feature = "experimental-components")]
             contiguous: labels.is_sorted(),
+            #[cfg(not(feature = "experimental-components"))]
             labels,
+            #[cfg(feature = "experimental-components")]
+            labels: labels.into_boxed_slice(),
             sizes,
         })
     }
