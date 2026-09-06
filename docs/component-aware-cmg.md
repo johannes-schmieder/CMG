@@ -7,9 +7,10 @@ their existing behavior. This is a local development prototype, not a promoted
 algorithm or a platform qualification.
 
 The current development recommendation is compact coarse storage with
-`preserve_unpruned_stopping: true`, plus per-component terminal factors. The
-original active-count stopping experiment remains available for comparison:
-the stress screen below found substantial setup regressions in that route.
+`preserve_unpruned_stopping: true`, plus ordered sparse terminal factors. The
+latest kernel checkpoint below improves both connected terminal setup and
+mixed-component cycles. The original active-count stopping experiment remains
+available for comparison; it still regresses on some worker-firm cases.
 
 ## Current approach
 
@@ -19,11 +20,11 @@ Start with two independent changes that retain one global PCG recurrence:
    parent row and its pre/post smoothing. A collapsed component's coarse range
    has dimension zero; removing that coarse degree of freedom does not mean the
    original component has been solved exactly.
-2. Factor disconnected direct terminals one component at a time. Keep the same
-   anchor and relative degree ordering within each block, and store the final
-   factors in shared buffers. One-vertex grounded blocks use their scalar pivot
-   without a dense allocation. No heavy solver or executor is constructed per
-   component.
+2. Factor direct terminals with ordered sparse updates, one component at a time,
+   including connected terminals. Keep the same anchor and relative degree
+   ordering within each block, and store the final factors in shared buffers.
+   One-vertex grounded blocks use their scalar pivot without a dense allocation.
+   No heavy solver or executor is constructed per component.
 
 All experimental options are under `experimental-components` and are off by default:
 
@@ -438,3 +439,143 @@ not RHS-dependent skipping. Tests compare that cycle with two explicit Jacobi
 sweeps and cover workspace reuse and 1/2/4-thread plans. The harness now records
 noncryptographic fingerprints of full solution bits outside timings, in
 addition to residuals and known-solution errors.
+
+## Kernel checkpoint results
+
+Numerical source: `0f2f9c54ff70765c680221b5290eff72bc912e55`. The final screen
+uses Rust 1.97.1 release builds on macOS aarch64, serial execution, and identical
+current harness sources for all arms. The 22 original fixtures use seed
+`20260906`, one and four RHSs, and nine rotated external rounds against both
+pinned `main` (`90e1fe0b`) and the previous recommended candidate (`297a4a3`).
+The 12 held-out stress cases use seed `20260907` and nine rounds against the
+previous candidate. The ten larger cases use the preselected seed `20260908`
+and three rounds against that candidate. Each invocation still has two warm-up
+rounds and one recorded round.
+
+Selected median paired `main / candidate` total-time ratios follow. Total time
+includes setup, workspace allocation, solves and normal certification; fixture
+generation, additional residual recomputation and fingerprints are outside it.
+
+| Fixture | 1 RHS | 4 RHS |
+|---|---:|---:|
+| Connected path | 2.07x | 1.30x |
+| Connected grid | 2.18x | 1.40x |
+| Weighted connected path | 8.31x | 3.19x |
+| Bridged connected cliques | 17.69x | 7.07x |
+| Sparse connected worker-firm | 2.59x | 1.60x |
+| Dense connected worker-firm | 2.33x | 1.87x |
+| Path + pairs | 10.04x | 10.17x |
+| Path + isolates | 9.02x | 9.05x |
+| Two paths + pairs | 10.68x | 10.68x |
+| Grid + pairs | 12.94x | 12.80x |
+| Weighted path + pairs | 3.99x | 4.24x |
+| Bridged cliques + pairs | 7.82x | 9.09x |
+| Sparse worker-firm + pairs | 1.32x | 1.34x |
+| Dense worker-firm + pairs | 2.00x | 2.23x |
+| Heterogeneous material | 4.39x | 2.29x |
+| Heterogeneous material + pairs | 1.15x | 1.15x |
+
+The previous connected-path total regression is removed principally by faster
+setup, rather than evidence that every application cost has improved. Median
+one-RHS setup falls from 2.46 to 0.14 ms for that path, from 12.94 to 0.33 ms
+for the weighted connected path, and from 18.55 to 0.44 ms for bridged connected
+cliques. The deliberately sparse material fixture just below the direct
+threshold improves 297.66x/192.37x in total; this is a dense-factorization edge
+case, not a representative workload gain.
+
+Relative to `297a4a3`, original path/grid mixtures improve another 5–8%, while
+most stress mixtures improve 0–4%. Held-out connected weighted paths improve
+8.20x/3.10x, bridged cliques 17.16x/7.00x and sparse worker-firm graphs
+3.29x/1.86x. Their held-out mixtures retain the prior gains with smaller
+additional improvements of about 0–7%.
+
+The larger cases show why setup gains should not be extrapolated to all graph
+sizes. This table uses `297a4a3 / candidate`, not `main / candidate`:
+
+| Larger fixture | 1 RHS | 4 RHS |
+|---|---:|---:|
+| Connected path | 1.009x | 0.989x |
+| Path + pairs | 0.982x | 1.030x |
+| Connected grid | 1.116x | 1.053x |
+| Grid + pairs | 1.048x | 1.031x |
+| Sparse connected worker-firm | 2.096x | 1.436x |
+| Sparse worker-firm + pairs | 1.030x | 1.024x |
+| Dense connected worker-firm | 1.004x | 1.004x |
+| Dense worker-firm + pairs | 1.013x | 0.995x |
+| Weighted path + pairs | 0.999x | 0.984x |
+| All pairs | 1.015x | 1.032x |
+
+Most larger cases have modest additional gains or approximately 1–2% timing
+regressions. Three rounds do not establish confidence intervals or a universal
+regression bound. Their remaining costs are predominantly outside the improved
+small-terminal setup. Keep the feature opt-in; no automatic routing threshold,
+per-component Krylov portfolio or production promotion is selected here.
+
+An earlier all-route pilot with the same sparse terminal arithmetic still found
+active-count stopping slower than preserved stopping for worker-firm mixtures:
+2.61 versus 1.48 ms on the sparse case and 19.99 versus 5.87 ms on the dense
+case, with one RHS. Active stopping helped other families. Faster factorization
+therefore does not justify unconditionally changing the original stopping rule.
+
+### Correctness and memory
+
+All 156 final external invocations succeeded with empty stderr: 1,740 recorded
+samples and 4,350 original-system certificates, plus fresh residual checks.
+Every candidate's iterations, residuals, tolerances, known-solution errors and
+full-vector bit fingerprints match every corresponding control sample. The
+fingerprints are noncryptographic; these observations supplement exact unit
+comparisons, not a proof of universal bitwise equivalence. The earlier forward
+error limitations of the ill-conditioned weighted cases remain unchanged.
+
+Separate four-RHS allocation runs covered all 32 fixtures. Every warmed CMG
+application and caller-buffer PCG loop made zero allocations, and every measured
+additional setup peak stayed within the conservative build estimate. Selected
+requested peaks in KiB compare the previous recommended source to this one:
+
+| Fixture | `297a4a3` | `0f2f9c5` |
+|---|---:|---:|
+| Connected path | 1,175.7 | 189.0 |
+| Connected grid | 1,313.9 | 603.5 |
+| Weighted connected path | 3,335.9 | 218.8 |
+| Bridged connected cliques | 4,214.2 | 407.9 |
+| Sparse connected worker-firm | 1,796.1 | 774.6 |
+| Dense connected worker-firm | 8,675.1 | 7,849.3 |
+| Material below direct threshold | 7,645.3 | 108.0 |
+
+These retain the allocation-accounting boundaries described above; they are
+neither RSS nor allocation-failure qualification. Dense fill still limits the
+sparse factorizer's gains. No density-dependent factorizer dispatch is fitted.
+
+Validation at this numerical source: 135 all-feature tests and 91 default-feature
+tests pass in both debug and release, including 15 component tests with exact
+sparse/dense comparisons and serial/planned empty-child cycles. Both benchmark
+fixture tests pass. Root default/all-feature Clippy, benchmark all-feature
+Clippy, formatting, private rustdoc with warnings denied, benchmark release
+targets, and Rust 1.85.0 all-target/all-feature compatibility checks pass.
+Linux, Windows, SCC, process-memory limits and production integration remain
+unqualified by this local checkpoint.
+
+### Frozen local evidence
+
+The final directories contain manifests with commands, rotated order, return
+codes, source identities and binary hashes. Their `SHA256SUMS` files cover the
+manifests, JSONL and stderr records:
+
+- `/private/tmp/cmg-components-0f2f9c5-final/SHA256SUMS`:
+  `f46d6e888288214ec827d71f4ab39af1e9e8eb22e6756d03e42ed67e7de0a8c4`.
+- `/private/tmp/cmg-components-0f2f9c5-large/SHA256SUMS`:
+  `64b949067886e212492c7552bf5f1619be2517d2bf1b1a8e8b4a15edd4a3dcc0`.
+- `/private/tmp/cmg-components-0f2f9c5-holdout/SHA256SUMS`:
+  `f22339e714e032468b7fc519ec93a4b5b50c1eeb5394dcf0a3a389a80d5dfe5f`.
+
+Allocation JSONL files under `/private/tmp/cmg-components-0f2f9c5-alloc-`:
+
+- `sentinels.jsonl`: `3c93978682dc846a020eaf61178deae3c31a3c9b851689e25f7c05b8444bf7d7`.
+- `stress.jsonl`: `48a9f527bf9589a640b7082ae64b88eb421d1ae9d89ca96fa31a4b9b796895f1`.
+- `large.jsonl`: `a991a2f0efe62332a37ca26dd650c34cbf1a2d062f232af11b533d2407ac941f`.
+
+The candidate timing binary SHA-256 is
+`3715a9e98b9d29ad4f84c769a97d8c2885967f24407199c6d6464a9fe5de5040`;
+the allocation binary SHA-256 is
+`d4f9c243e46d00b31edfe3a1101e821e924d2c7fc161add9ce69437e47670600`.
+Raw results and one-off comparison/audit scripts remain outside the repository.
