@@ -4,13 +4,28 @@ This opt-in study addresses [issue #2](https://github.com/johannes-schmieder/CMG
 The branch starts from `main` at `90e1fe0b0c14065155532711246ede6678bb4935`.
 Existing builders, SDDM normalization, automatic routing, and SCC campaigns keep
 their existing behavior. This is a local development prototype, not a promoted
-algorithm or a platform qualification.
+algorithm. Timing evidence is local macOS ARM64; correctness CI covers Ubuntu,
+macOS and Windows.
 
 The current development recommendation is compact coarse storage with
 `preserve_unpruned_stopping: true`, plus ordered sparse terminal factors. The
 latest kernel checkpoint below improves both connected terminal setup and
 mixed-component cycles. The original active-count stopping experiment remains
 available for comparison; it still regresses on some worker-firm cases.
+
+## Latest result
+
+Numerical checkpoint `ab2b0a4` retains residual/restriction fusion and terminal
+scaling fusion, with identical PCG solutions and certificates. The original
+32 fixtures and held-out stress seed 20260913 pass the 2% connected one-shot
+control margin. One development clique wiring remains inconclusive at that
+margin; this is not a universal no-regression claim. The indexed traversal trial
+was removed. Deep recursive timers require the separate `cycle-profiling` feature.
+
+The new explicit `ComponentPcgExperiment` prepares direct isolate/pair blocks
+and stationary PCG on the remaining graph. It helps many path, clique and grid
+mixtures but can substantially regress worker-firm cases. It is not selected
+automatically. See the final qualification and reuse results below.
 
 ## Current approach
 
@@ -1072,3 +1087,119 @@ without modifying the caller's output. The report distinguishes active-PCG
 diagnostics from the full-system certificate. Workspaces require exact prepared
 identity; matrix-weight changes require a new preparation. Extra maps, factors,
 active/full vectors and certificate scratch are included in memory reports.
+
+Example of explicit fixed-matrix reuse (requires `experimental-components`):
+
+```rust
+use cmg::{CmgOptions, ComponentPcgExperiment, PcgOptions};
+let prepared = ComponentPcgExperiment::build(graph, CmgOptions::default())?;
+let mut workspace = prepared.workspace()?;
+let mut solution = vec![0.0; graph.vertex_count()];
+for rhs in right_hand_sides {
+    let report = prepared.solve_into(
+        rhs, None, &mut solution, PcgOptions::default(), &mut workspace,
+    )?;
+    assert!(report.original().residual_norm() <= report.original().tolerance());
+}
+```
+
+The initial portfolio development matrix (seed 20260912, nine external rounds,
+one/four RHSs) has 432 successful samples and 1,080 independent original-system
+certificates. Weighted path mixtures improve 1.786x [1.743, 1.809] / 1.959x
+[1.899, 2.083]; clique mixtures improve 1.310x [1.292, 1.344] / 1.666x
+[1.653, 1.781]. Dense worker-firm mixtures regress to 0.302x [0.300, 0.310] /
+0.599x [0.573, 0.608], and sparse worker-firm mixtures to 0.685x
+[0.664, 0.701] / 0.865x [0.854, 0.885]. These are scalar/portfolio ratios,
+including preparation and full certification, not kernel-only timings.
+
+Removing tiny components changes active-hierarchy stopping and direct-factor
+cost as well as the Krylov vectors. On the development dense mixture, retained
+storage grows from 983,124 to 2,333,136 bytes, while workspace falls from 359,504
+to 294,408 bytes. Iterations remain eight. The sparse mixture changes from
+13 to 14 iterations and also retains a larger factor. This explains why fewer
+Krylov vertices alone is insufficient to choose a route; it is not evidence for
+a production threshold. No automatic selection is implemented.
+
+### Final fusion and portfolio qualification
+
+The numerical source is `ab2b0a46dec957f4b7c3de0191c3406a0e34ac26`.
+Each final comparison covers the original 32 fixtures at 1/4/16 RHSs and the
+untouched 12-case stress seed 20260913 at 1/4 RHSs, with nine rotated external
+rounds. Each route comparison has 198 invocations, 2,160 recorded samples and
+13,176 original-system certificates. The kernel and portfolio comparisons
+therefore contribute 26,352 certificates, all passing. These counts exclude
+warmups, development runs, focused controls and traces.
+
+Ratios below are reference/candidate total time, including preparation,
+workspace creation, solves and internal certification; above one favors the
+candidate. Kernel reference is `b6c6e61`. Portfolio reference is the retained
+ordinary scalar solver in its own matched caller-buffer harness. Do not multiply
+ratios across the two harnesses. The confidence intervals are exploratory paired
+external-round bootstrap intervals, not multiplicity-adjusted universal bounds.
+
+| Comparison and fixture | 1 RHS | 4 RHS | 16 RHS |
+|---|---:|---:|---:|
+| Kernels: path + pairs | 1.073x | 1.089x | 1.081x |
+| Kernels: large connected path | 1.145x | 1.155x | 1.176x |
+| Kernels: large path + pairs | 1.106x | 1.109x | 1.119x |
+| Portfolio: path + pairs | 1.811x | 1.938x | 1.959x |
+| Portfolio: weighted path + pairs | 1.641x | 1.896x | 1.979x |
+| Portfolio: cliques + pairs | 1.359x | 1.778x | 1.967x |
+| Portfolio: large grid + pairs | 1.431x | 1.497x | 1.523x |
+| Portfolio: dense worker-firm + pairs | 0.292x | 0.580x | 0.868x |
+| Portfolio: sparse worker-firm + pairs | 0.607x | 0.794x | 0.866x |
+| Portfolio: large sparse worker-firm + pairs | 1.089x | 1.517x | 1.691x |
+
+For the large connected path, the 16-RHS kernel interval is [1.160, 1.185].
+The corresponding path-mixture interval is [1.114, 1.134]. At one RHS, all
+original connected controls pass after one 21-round extension; all held-out
+connected controls pass their initial nine rounds. The original connected
+clique is 0.9885 [0.9824, 0.9956], so it remains slightly slower within the
+allowed margin. The development clique is 0.9826 [0.9755, 0.9897] and remains
+inconclusive at 2%; it is not reported as qualified. Small effects on other
+controls are not generalized into a broad speedup claim.
+
+The portfolio's weighted mixture reaches 1.979x [1.973, 1.990] at 16 RHSs.
+Large sparse worker-firm mixtures reach 1.691x [1.601, 1.703]. All-pairs cases
+move from one-shot parity/loss to clear gains at four and sixteen RHSs. However,
+small sparse and dense worker-firm mixtures remain slower even at sixteen RHSs,
+and the large dense mixture remains slower throughout. There is no observed
+crossover through sixteen RHSs for those cases. The held-out dense mixture is
+0.265x [0.263, 0.268] at one RHS, about 3.8 times slower. The 4.48x result on
+`material-at-threshold` is a stopping-boundary case, not a general portfolio
+speedup; its below-threshold neighbor regresses. No dispatch threshold is inferred.
+
+All 155 all-feature and 91 default-feature tests pass in debug and release.
+Formatting, root and benchmark Clippy, private rustdoc, benchmark builds,
+fixture tests and Rust 1.85 compatibility checks pass. GitHub Rust CI passes
+quality and Ubuntu/macOS/Windows tests. Separate instrumentation verifies 384
+complete planned-PCG profiles and zero warmed caller-buffer allocations on all
+32 original cases, including both portfolio routes. Ordinary setup peaks remain
+within their conservative memory estimates. Portfolio reports include its extra
+maps, factors, original/active graph storage and certificate scratch.
+
+The remaining targets are dense smoothing/matvec traversal (about 87% of the
+large dense solve in the final trace), active-hierarchy preparation and terminal
+growth in the portfolio, and finest-component centering without the rejected
+cache or connected caller regressions. Any new hierarchy policy needs a fresh
+explicit experiment and independent qualification; none was tuned to the holdout.
+
+### Final campaign evidence
+
+The original timing entry point SHA-256 remains
+`c29e8543a17e2c0e26c59c269827ae01178ec103e09008f77b2254e90d60cc91`.
+The retained kernel timing binary is
+`6cd714a29f7f0139fdcde1f0976819c472894bc53845cf29d4ce6035738d4579`;
+the matched portfolio timing binary is
+`6a804cd24f170a85b0733c2d3fd6d8d4db92eabb4527d58901794ef4443bbd10`.
+
+The full local report is `/private/tmp/cmg-component-optimization-report.md`
+(SHA-256 `bf6863bf2cc773bd3485d98b6b66bb3e55e792fe7297ab13569a0f220a95f05e`).
+The evidence archive is
+`/private/tmp/cmg-component-optimization-evidence.tar.gz`
+(SHA-256 `593b5aab2918fb7b457b3ea33f53705dee07521193a782a4d43fe1b83f923fd4`).
+It contains all 37 audited directories, the excluded runs with missing compiled
+identity, source archives, frozen binaries, auditors and validation logs. Every
+archived audited file is rechecked against its recorded checksum. Failed or
+rejected raw evidence is preserved. No main merge, SCC deployment or new cluster
+campaign is part of this work.

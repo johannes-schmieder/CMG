@@ -274,6 +274,8 @@ cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
   behavioral constants, and implementation coverage.
 - [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — benchmark evidence, routing
   guidance, bottlenecks, and limitations.
+- [Component-aware experiments](docs/component-aware-cmg.md) — opt-in kernel
+  qualification and the explicit fixed-matrix tiny-component portfolio.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — code map, repository policy,
   and performance-change discipline.
 - [CMG teaching supplement](docs/teaching/README.md) — a visual, step-by-step
