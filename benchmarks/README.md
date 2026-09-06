@@ -116,6 +116,9 @@ With `experimental-components`, centering the preconditioned vector and its
 residual dot product are measured together under `centering`; the environment
 record marks this with `centering_includes_rho_dot`. Compare the sum of centering
 and dot-product time across builds that use different fusion strategies.
+The fusion itself is limited to multiple components; connected inputs retain
+separate subtraction and dot-product loops, and multithreaded plans retain
+their original reduction trees.
 Run it separately from allocation instrumentation. Profile timers and fresh
 workspaces change overhead; use ordinary paired measurements to accept speedups.
 

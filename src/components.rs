@@ -690,6 +690,16 @@ impl Components {
                 left.len(),
             ));
         }
+        if self.count() <= 1 {
+            // The connected case already has a constant-mean vectorized
+            // subtraction. Keep its separate dot-product pass.
+            self.center_in_place_with_workspace(values, workspace)?;
+            return Ok(crate::graph::compensated_sum(
+                left.iter()
+                    .zip(values.iter())
+                    .map(|(left, value)| left * value),
+            ));
+        }
         workspace.validate(self.count())?;
         if self.contiguous {
             let mut start = 0;
