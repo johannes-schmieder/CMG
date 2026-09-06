@@ -616,3 +616,100 @@ all 32 cases. If correctness passes, use nine rotated external rounds for the
 Check exact diagnostics and solution-bit fingerprints before interpreting
 total times, and separately check warmed allocations and setup estimates.
 The `20260907` stress wiring remains the held-out correctness/performance check.
+
+### Investigation results and remaining priorities
+
+The prototype numerical source is
+`ce0b02410fd0b4fb293941f929457d54cb949255`; its reference is
+`e0d21aed3f84268f46a27786051606e95a6dbfb5`, whose solver sources are identical
+to merged `1921d66`. Both use the new harness and Rust 1.97.1 release builds on
+the same local macOS aarch64 host. The table gives median paired
+`reference / prototype` total-time ratios, including setup and certification:
+
+| Fixture | 1 RHS | 4 RHS |
+|---|---:|---:|
+| Path + pairs | 1.231x | 1.256x |
+| Path + isolates | 1.235x | 1.242x |
+| Two paths + pairs | 1.178x | 1.190x |
+| Grid + pairs | 1.120x | 1.132x |
+| All triangles | 1.179x | 1.240x |
+| Material at direct threshold | 1.348x | 1.382x |
+| Large path + pairs | 1.170x | 1.210x |
+| Large grid + pairs | 1.120x | 1.133x |
+| Large all pairs | 1.037x | 1.079x |
+| Large connected path control | 0.983x | 0.982x |
+
+Contiguous mixed paths and grids improve consistently in the larger screen.
+Interleaved worker-firm and weighted mixtures remain approximately at parity;
+this specialization does not speed up arbitrary component layouts. The held-out
+material-at-threshold case improves 1.339x/1.389x, while other held-out cases
+mostly remain within approximately 1% of the reference. The large connected
+path's approximately 2% paired regression is unresolved. Individual external
+rounds also contain timing outliers, including regressions on some otherwise
+improved small cases. These are median local results without confidence bounds,
+not a universal no-regression qualification or a second merge recommendation.
+
+The baseline profiling run contains 1,584 recorded profiles, all matching both
+scalar and planned results bit for bit. Focused post-change profiles cover 108
+additional solves on large path, grid and weighted mixtures. They support the
+intended mechanism: median centering time on the large path mixture falls from
+23.61 to 9.64 ms, and on the large grid mixture from 9.35 to 5.02 ms. Centering
+shares fall from 26.1% to 12.5% and 22.3% to 13.5%, respectively. The interleaved
+weighted mixture stays at 33.2%. These separate instrumented runs explain the
+mechanism; the paired uninstrumented runs above establish the reported ratios.
+
+All 120 final comparison invocations succeeded with empty stderr: 1,344 samples
+and 3,360 original-system certificates. Iterations, residuals, tolerances,
+known-solution errors and full-vector bit fingerprints match in every pair.
+Allocation instrumentation passes on all 32 cases: zero warmed application and
+caller-buffer PCG allocations, and requested setup peaks within the conservative
+estimates. The two new centering tests cover exact fallback comparisons,
+prepared metadata, signed zero, cancellation, wide scales, nonfinite errors,
+unchanged input on failure, and workspace reuse. All 137 all-feature and 91
+default-feature tests pass in debug and release; root/benchmark Clippy,
+formatting, private rustdoc, fixture tests and Rust 1.85 compatibility checks
+also pass. The new kernel remains on the investigation branch and has not yet
+received its own cross-platform CI qualification.
+
+The next priorities follow from the measured costs:
+
+1. Investigate a retained traversal plan for interleaved components, preserving
+   ascending vertex order inside each compensated sum. Compare the cost of
+   extra indices and indirect reads with the existing labeled pass; account for
+   retained memory and setup before adopting it. The weighted mixtures still
+   spend roughly one third of solve time in finest-component centering.
+2. Attribute CMG application internally before changing it. Grids and dense
+   worker-firm cases spend 79–88% of solve time there; distinguish edge
+   traversals, smoothing, transfers, coarse centering and terminal solves before
+   selecting another loop fusion or storage change.
+3. Treat sparse terminal reach lists as a targeted setup experiment. Connected
+   path terminals have about 0.8% strict fill, but setup is already only about
+   3.5%/0.9% of large-path total time with one/four RHSs. The large sparse
+   worker-firm terminal has 53.4% fill. Avoid extrapolating the abundance of zero
+   scan slots into an end-to-end gain or selecting a dense/sparse threshold
+   from these endpoints alone.
+
+The original merged checkpoint also passed its normal post-merge Rust CI,
+serial/parallel performance workflows and pinned C-kernel comparison. Those
+results apply to `1921d66`, not to this subsequent prototype.
+
+### Follow-up local evidence
+
+Source and binary identities, commands, process order, return codes and raw
+records remain in the local manifests. SHA-256 hashes of their `SHA256SUMS`:
+
+- `/private/tmp/cmg-components-e0d21ae-profile/SHA256SUMS`:
+  `c04ca634250b71a2f0bac2adef48dc1c5a8ad83aa2e5ebf9e7ebf819a106959c`.
+- `/private/tmp/cmg-centering-ce0b024-final/SHA256SUMS`:
+  `b0ea0f69ffb87bb3a470a5ae2b91111c254532e3c68e2a27bacaa43de785a7dd`.
+- `/private/tmp/cmg-centering-ce0b024-large/SHA256SUMS`:
+  `570d816877fd7d2b6e454811c2c747f2a55e3ebf8da3f0cf7c416fc87e75997c`.
+- `/private/tmp/cmg-centering-ce0b024-holdout/SHA256SUMS`:
+  `0c1151260c5b328b54d5dd6b7dbb4119a7f8a106955664f712f7047b969c2fc0`.
+- `/private/tmp/cmg-centering-ce0b024-instrumentation/SHA256SUMS`:
+  `5cc7dfd580b6893ba3ccb3343581afc5474754ca8a48e384e1fc241a7c701b2c`.
+
+Reference timing binary SHA-256:
+`bcc55e1da5c950c372378a5e7b97c3540dbcff86e1bb1ca8d2a40f6d65a0f60d`.
+Prototype timing binary SHA-256:
+`3098a59c3c8255c0ac1ffa8d9a38c7d75811c95898f11c0ace963b3953f69db1`.
