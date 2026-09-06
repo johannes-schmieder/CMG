@@ -1,4 +1,4 @@
-#![cfg(feature = "profiling")]
+#![cfg(feature = "cycle-profiling")]
 
 use cmg::{
     CmgApplyPhase as Phase, CmgOptions, CmgPreconditioner, Components, Laplacian, ParallelCmgPlan,

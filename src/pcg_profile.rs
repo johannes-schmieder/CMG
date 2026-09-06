@@ -44,6 +44,7 @@ pub struct PcgPhaseProfile {
     total_nanoseconds: u128,
     setup: PcgPhaseSample,
     preconditioner: PcgPhaseSample,
+    #[cfg(feature = "cycle-profiling")]
     cycle: crate::CmgApplyProfile,
     matvec: PcgPhaseSample,
     dot_products: PcgPhaseSample,
@@ -75,6 +76,7 @@ impl PcgPhaseProfile {
 
     /// Return exclusive phase attribution within the measured CMG applications.
     #[must_use]
+    #[cfg(feature = "cycle-profiling")]
     pub fn cycle(&self) -> &crate::CmgApplyProfile {
         &self.cycle
     }
@@ -287,10 +289,11 @@ pub fn profile_pcg_with_plan(
     }
     plan.validate(preconditioner)?;
 
-    let mut profile = PcgPhaseProfile {
-        cycle: crate::CmgApplyProfile::new(preconditioner.hierarchy().levels().len()),
-        ..PcgPhaseProfile::default()
-    };
+    let mut profile = PcgPhaseProfile::default();
+    #[cfg(feature = "cycle-profiling")]
+    {
+        profile.cycle = crate::CmgApplyProfile::new(preconditioner.hierarchy().levels().len());
+    }
     let mut workspace = ProfileWorkspace::new(preconditioner);
     let components = preconditioner.finest_components();
 
@@ -337,14 +340,28 @@ pub fn profile_pcg_with_plan(
     }
 
     measure(&mut profile.preconditioner, || {
-        preconditioner.apply_profiled_with_plan(
-            &workspace.residual,
-            &mut workspace.preconditioned,
-            &mut workspace.cmg,
-            plan,
-            executor,
-            &mut profile.cycle,
-        )
+        #[cfg(feature = "cycle-profiling")]
+        {
+            preconditioner.apply_profiled_with_plan(
+                &workspace.residual,
+                &mut workspace.preconditioned,
+                &mut workspace.cmg,
+                plan,
+                executor,
+                &mut profile.cycle,
+            )
+        }
+        #[cfg(not(feature = "cycle-profiling"))]
+        {
+            plan.apply_compatible_into_prevalidated(
+                preconditioner,
+                &workspace.residual,
+                &mut workspace.preconditioned,
+                &mut workspace.cmg,
+                options.validation,
+                executor,
+            )
+        }
     })?;
     #[cfg(feature = "experimental-components")]
     let mut rho = measure(&mut profile.centering, || {
@@ -500,14 +517,28 @@ pub fn profile_pcg_with_plan(
             )
         })?;
         measure(&mut profile.preconditioner, || {
-            preconditioner.apply_profiled_with_plan(
-                &workspace.residual,
-                &mut workspace.preconditioned,
-                &mut workspace.cmg,
-                plan,
-                executor,
-                &mut profile.cycle,
-            )
+            #[cfg(feature = "cycle-profiling")]
+            {
+                preconditioner.apply_profiled_with_plan(
+                    &workspace.residual,
+                    &mut workspace.preconditioned,
+                    &mut workspace.cmg,
+                    plan,
+                    executor,
+                    &mut profile.cycle,
+                )
+            }
+            #[cfg(not(feature = "cycle-profiling"))]
+            {
+                plan.apply_compatible_into_prevalidated(
+                    preconditioner,
+                    &workspace.residual,
+                    &mut workspace.preconditioned,
+                    &mut workspace.cmg,
+                    options.validation,
+                    executor,
+                )
+            }
         })?;
         #[cfg(feature = "experimental-components")]
         let new_rho = measure(&mut profile.centering, || {

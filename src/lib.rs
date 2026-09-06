@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "cycle-profiling")]
 mod cmg_profile;
 mod coarsen;
 #[cfg(feature = "experimental-components")]
@@ -34,7 +34,7 @@ mod sddm;
 mod sddm_solver;
 mod workspace;
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "cycle-profiling")]
 pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
 pub use coarsen::Aggregation;
 #[cfg(feature = "experimental-components")]

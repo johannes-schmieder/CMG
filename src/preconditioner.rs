@@ -1,6 +1,6 @@
 //! Stationary recursive CMG preconditioner application.
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "cycle-profiling")]
 use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
 use crate::components::CenteringPlan;
 use crate::{
@@ -790,7 +790,7 @@ impl CmgPreconditioner {
     ///
     /// Timings are exclusive across phases and recursive levels. As with
     /// `apply_compatible_into`, the caller supplies a compatible RHS.
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "cycle-profiling")]
     pub fn profile_apply_compatible_into(
         &self,
         rhs: &[f64],
@@ -812,7 +812,7 @@ impl CmgPreconditioner {
         Ok(profile)
     }
 
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "cycle-profiling")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_profiled_with_plan(
         &self,
@@ -1088,7 +1088,7 @@ impl CmgPreconditioner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "cycle-profiling")]
     fn apply_level_with_plan_recorded<R: CycleRecorder>(
         &self,
         level_index: usize,
@@ -1399,7 +1399,7 @@ impl CmgPreconditioner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "profiling")]
+    #[cfg(feature = "cycle-profiling")]
     fn apply_level_recorded<R: CycleRecorder>(
         &self,
         level_index: usize,

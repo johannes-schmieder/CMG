@@ -127,13 +127,16 @@ workspaces change overhead; use ordinary paired measurements to accept speedups.
 
 `component-cycle-profile REPETITIONS RHS_COUNT SUITE SEED [CASE_SUBSTRING]`
 reports the recursive work inside the PCG preconditioner timer. For example,
-run `component-cycle-profile 3 4 large 20260908` from an experimental build.
+run `component-cycle-profile 3 4 large 20260908` from a build with both
+`experimental-components` and `cycle-profiling`. Enable `cycle-profiling` only
+for separate trace builds: it implies `profiling` and adds recursive timers.
+Ordinary timing builds omit it to preserve their compiled caller layout.
 Its `cycle_level` records contain actual visits, stationary iterations and
 exclusive initialization, smoothing, residual-matvec, restriction, centering,
 prolongation and terminal times. Parent phase times exclude child recursion.
 Each result is checked against the ordinary planned solver and a fresh
 original-system residual. This separate executable leaves the existing timing
-entry point unchanged. The public `profiling` API exposes these levels through
+entry point unchanged. The public `cycle-profiling` API exposes these levels through
 `PcgPhaseProfile::cycle` and profiles a standalone compatible serial application
 through `CmgPreconditioner::profile_apply_compatible_into`.
 
