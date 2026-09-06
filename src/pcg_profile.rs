@@ -44,6 +44,7 @@ pub struct PcgPhaseProfile {
     total_nanoseconds: u128,
     setup: PcgPhaseSample,
     preconditioner: PcgPhaseSample,
+    cycle: crate::CmgApplyProfile,
     matvec: PcgPhaseSample,
     dot_products: PcgPhaseSample,
     vector_updates: PcgPhaseSample,
@@ -70,6 +71,12 @@ impl PcgPhaseProfile {
     #[must_use]
     pub const fn preconditioner(&self) -> PcgPhaseSample {
         self.preconditioner
+    }
+
+    /// Return exclusive phase attribution within the measured CMG applications.
+    #[must_use]
+    pub fn cycle(&self) -> &crate::CmgApplyProfile {
+        &self.cycle
     }
 
     /// Return ordinary finest-level matrix-vector timing outside residual replacement.
@@ -280,7 +287,10 @@ pub fn profile_pcg_with_plan(
     }
     plan.validate(preconditioner)?;
 
-    let mut profile = PcgPhaseProfile::default();
+    let mut profile = PcgPhaseProfile {
+        cycle: crate::CmgApplyProfile::new(preconditioner.hierarchy().levels().len()),
+        ..PcgPhaseProfile::default()
+    };
     let mut workspace = ProfileWorkspace::new(preconditioner);
     let components = preconditioner.finest_components();
 
@@ -327,13 +337,13 @@ pub fn profile_pcg_with_plan(
     }
 
     measure(&mut profile.preconditioner, || {
-        plan.apply_compatible_into_prevalidated(
-            preconditioner,
+        preconditioner.apply_profiled_with_plan(
             &workspace.residual,
             &mut workspace.preconditioned,
             &mut workspace.cmg,
-            options.validation,
+            plan,
             executor,
+            &mut profile.cycle,
         )
     })?;
     #[cfg(feature = "experimental-components")]
@@ -490,13 +500,13 @@ pub fn profile_pcg_with_plan(
             )
         })?;
         measure(&mut profile.preconditioner, || {
-            plan.apply_compatible_into_prevalidated(
-                preconditioner,
+            preconditioner.apply_profiled_with_plan(
                 &workspace.residual,
                 &mut workspace.preconditioned,
                 &mut workspace.cmg,
-                options.validation,
+                plan,
                 executor,
+                &mut profile.cycle,
             )
         })?;
         #[cfg(feature = "experimental-components")]

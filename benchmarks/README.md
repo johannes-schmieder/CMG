@@ -23,6 +23,7 @@ dependency path. The command-line tools emit machine-readable JSON.
 | `plan-phase-profile` | parallel-plan construction attribution |
 | `fixed-topology-sequence` | changing-weight assembly, caller buffers, retained preconditioners, warm starts, routing, profiles, and allocations |
 | `component-bench` | opt-in disconnected-graph sentinels, independent pruning/block-LDL switches, paired setup/solve timings, and recursive work counts |
+| `component-cycle-profile` | exclusive per-level CMG phases inside certified PCG on the same component fixtures |
 
 The `cmg-bench` and `cmg-parallel-bench` binaries support the durable GitHub
 Actions comparisons. `scc-benchmark`, `scc2-diagnostics`, and `scc2-memory`
@@ -123,6 +124,18 @@ their original reduction trees. Solver entry selects a separately compiled PCG
 loop, so the connected iteration does not carry a runtime fusion branch.
 Run it separately from allocation instrumentation. Profile timers and fresh
 workspaces change overhead; use ordinary paired measurements to accept speedups.
+
+`component-cycle-profile REPETITIONS RHS_COUNT SUITE SEED [CASE_SUBSTRING]`
+reports the recursive work inside the PCG preconditioner timer. For example,
+run `component-cycle-profile 3 4 large 20260908` from an experimental build.
+Its `cycle_level` records contain actual visits, stationary iterations and
+exclusive initialization, smoothing, residual-matvec, restriction, centering,
+prolongation and terminal times. Parent phase times exclude child recursion.
+Each result is checked against the ordinary planned solver and a fresh
+original-system residual. This separate executable leaves the existing timing
+entry point unchanged. The public `profiling` API exposes these levels through
+`PcgPhaseProfile::cycle` and profiles a standalone compatible serial application
+through `CmgPreconditioner::profile_apply_compatible_into`.
 
 ## Comparison discipline
 

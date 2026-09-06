@@ -1,5 +1,6 @@
 //! Stationary recursive CMG preconditioner application.
 
+use crate::cmg_profile::{CmgApplyPhase, CycleRecorder, NoCycleProfile};
 use crate::components::CenteringPlan;
 use crate::{
     CmgError, CmgHierarchy, CmgOptions, CmgWorkspace, Components, GroundedLdl, Laplacian,
@@ -784,6 +785,46 @@ impl CmgPreconditioner {
         self.apply_level(0, rhs, output, workspace, 1)
     }
 
+    /// Profile the exact serial cycle for an already compatible right-hand side.
+    ///
+    /// Timings are exclusive across phases and recursive levels. As with
+    /// `apply_compatible_into`, the caller supplies a compatible RHS.
+    #[cfg(feature = "profiling")]
+    pub fn profile_apply_compatible_into(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+    ) -> Result<crate::CmgApplyProfile, CmgError> {
+        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
+        for (context, actual) in [
+            ("CmgPreconditioner::apply compatible rhs", rhs.len()),
+            ("CmgPreconditioner::apply compatible output", output.len()),
+        ] {
+            if actual != dimension {
+                return Err(CmgError::dimension(context, dimension, actual));
+            }
+        }
+        self.validate_workspace(workspace)?;
+        let mut profile = crate::CmgApplyProfile::new(self.hierarchy.levels().len());
+        self.apply_level_recorded(0, rhs, output, workspace, 1, &mut profile)?;
+        Ok(profile)
+    }
+
+    #[cfg(feature = "profiling")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_profiled_with_plan(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        plan: &ParallelCmgPlan,
+        executor: &ParallelExecutor,
+        profile: &mut crate::CmgApplyProfile,
+    ) -> Result<(), CmgError> {
+        self.apply_level_with_plan_recorded(0, rhs, output, workspace, 1, plan, executor, profile)
+    }
+
     pub(crate) fn apply_compatible_into_prevalidated(
         &self,
         rhs: &[f64],
@@ -900,6 +941,31 @@ impl CmgPreconditioner {
         plan: &ParallelCmgPlan,
         executor: &ParallelExecutor,
     ) -> Result<(), CmgError> {
+        self.apply_level_with_plan_recorded(
+            level_index,
+            rhs,
+            output,
+            workspace,
+            iterations,
+            plan,
+            executor,
+            &mut NoCycleProfile,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "parallel")]
+    fn apply_level_with_plan_recorded<R: CycleRecorder>(
+        &self,
+        level_index: usize,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        iterations: usize,
+        plan: &ParallelCmgPlan,
+        executor: &ParallelExecutor,
+        recorder: &mut R,
+    ) -> Result<(), CmgError> {
         let level = &self.hierarchy.levels()[level_index];
         let dimension = level.graph().vertex_count();
         if rhs.len() != dimension || output.len() != dimension {
@@ -908,7 +974,9 @@ impl CmgPreconditioner {
             });
         }
 
+        recorder.enter(level_index);
         if let Some(reason) = level.terminal_reason() {
+            let stamp = R::start();
             if reason == TerminalReason::Direct {
                 let factor = self
                     .direct_terminal
@@ -924,9 +992,11 @@ impl CmgPreconditioner {
                     &mut local.factor_solution,
                 );
                 workspace.put_level(level_index, local);
+                recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
                 return result;
             }
             assign_scaled_planned(output, level.inverse_diagonal(), rhs, executor, false);
+            recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
             return Ok(());
         }
 
@@ -953,6 +1023,8 @@ impl CmgPreconditioner {
         let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
+                recorder.iteration(level_index);
+                let stamp = R::start();
                 if iteration == 0 {
                     assign_scaled_planned(
                         output,
@@ -979,7 +1051,18 @@ impl CmgPreconditioner {
                     );
                 }
 
+                recorder.finish(
+                    level_index,
+                    if iteration == 0 {
+                        CmgApplyPhase::Initialization
+                    } else {
+                        CmgApplyPhase::Smoothing
+                    },
+                    stamp,
+                );
+
                 if has_coarse_work {
+                    let stamp = R::start();
                     plan.matvec_into(
                         level_index,
                         level.graph(),
@@ -987,6 +1070,8 @@ impl CmgPreconditioner {
                         &mut local.residual,
                         executor,
                     )?;
+                    recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
+                    let stamp = R::start();
                     residual_from_matvec_planned(
                         &mut local.residual,
                         rhs,
@@ -994,6 +1079,8 @@ impl CmgPreconditioner {
                         parallel_level,
                     );
                     level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
+                    let stamp = R::start();
                     let centering = &self.coarse_centering[level_index];
                     let mut centering_workspace = workspace.take_centering(level_index);
                     let centering_result = centering.center_in_place_with_workspace_and_executor(
@@ -1003,7 +1090,8 @@ impl CmgPreconditioner {
                     );
                     workspace.put_centering(level_index, centering_workspace);
                     centering_result?;
-                    self.apply_level_with_plan(
+                    recorder.finish(level_index, CmgApplyPhase::Centering, stamp);
+                    self.apply_level_with_plan_recorded(
                         level_index + 1,
                         &local.coarse_rhs,
                         &mut local.coarse_correction,
@@ -1011,7 +1099,9 @@ impl CmgPreconditioner {
                         child_iterations,
                         plan,
                         executor,
+                        recorder,
                     )?;
+                    let stamp = R::start();
                     if parallel_level {
                         level.prolong_add_into_with_executor(
                             &local.coarse_correction,
@@ -1021,8 +1111,10 @@ impl CmgPreconditioner {
                     } else {
                         level.prolong_add_into(&local.coarse_correction, output)?;
                     }
+                    recorder.finish(level_index, CmgApplyPhase::Prolongation, stamp);
                 }
 
+                let stamp = R::start();
                 plan.matvec_into(
                     level_index,
                     level.graph(),
@@ -1038,6 +1130,7 @@ impl CmgPreconditioner {
                     executor,
                     parallel_level,
                 );
+                recorder.finish(level_index, CmgApplyPhase::Smoothing, stamp);
             }
             Ok(())
         })();
@@ -1053,6 +1146,26 @@ impl CmgPreconditioner {
         workspace: &mut CmgWorkspace,
         iterations: usize,
     ) -> Result<(), CmgError> {
+        self.apply_level_recorded(
+            level_index,
+            rhs,
+            output,
+            workspace,
+            iterations,
+            &mut NoCycleProfile,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_level_recorded<R: CycleRecorder>(
+        &self,
+        level_index: usize,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        iterations: usize,
+        recorder: &mut R,
+    ) -> Result<(), CmgError> {
         let level = &self.hierarchy.levels()[level_index];
         let dimension = level.graph().vertex_count();
         if rhs.len() != dimension || output.len() != dimension {
@@ -1061,7 +1174,9 @@ impl CmgPreconditioner {
             });
         }
 
+        recorder.enter(level_index);
         if let Some(reason) = level.terminal_reason() {
+            let stamp = R::start();
             if reason == TerminalReason::Direct {
                 let factor = self
                     .direct_terminal
@@ -1077,6 +1192,7 @@ impl CmgPreconditioner {
                     &mut local.factor_solution,
                 );
                 workspace.put_level(level_index, local);
+                recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
                 return result;
             }
             for ((value, inverse_diagonal), rhs_value) in
@@ -1084,6 +1200,7 @@ impl CmgPreconditioner {
             {
                 *value = *inverse_diagonal * *rhs_value;
             }
+            recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
             return Ok(());
         }
 
@@ -1109,6 +1226,8 @@ impl CmgPreconditioner {
         let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
+                recorder.iteration(level_index);
+                let stamp = R::start();
                 if iteration == 0 {
                     for ((value, inverse_diagonal), rhs_value) in
                         output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
@@ -1127,12 +1246,27 @@ impl CmgPreconditioner {
                     }
                 }
 
+                recorder.finish(
+                    level_index,
+                    if iteration == 0 {
+                        CmgApplyPhase::Initialization
+                    } else {
+                        CmgApplyPhase::Smoothing
+                    },
+                    stamp,
+                );
+
                 if has_coarse_work {
+                    let stamp = R::start();
                     level.graph().matvec_into(output, &mut local.residual)?;
+                    recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
+                    let stamp = R::start();
                     for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
                         *residual = *rhs_value - *residual;
                     }
                     level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
+                    let stamp = R::start();
                     let centering = &self.coarse_centering[level_index];
                     let mut centering_workspace = workspace.take_centering(level_index);
                     // Restricted residuals are component-compatible in exact
@@ -1145,16 +1279,21 @@ impl CmgPreconditioner {
                     );
                     workspace.put_centering(level_index, centering_workspace);
                     centering_result?;
-                    self.apply_level(
+                    recorder.finish(level_index, CmgApplyPhase::Centering, stamp);
+                    self.apply_level_recorded(
                         level_index + 1,
                         &local.coarse_rhs,
                         &mut local.coarse_correction,
                         workspace,
                         child_iterations,
+                        recorder,
                     )?;
+                    let stamp = R::start();
                     level.prolong_add_into(&local.coarse_correction, output)?;
+                    recorder.finish(level_index, CmgApplyPhase::Prolongation, stamp);
                 }
 
+                let stamp = R::start();
                 level.graph().matvec_into(output, &mut local.residual)?;
                 for (((value, inverse_diagonal), rhs_value), matrix_value) in output
                     .iter_mut()
@@ -1164,6 +1303,7 @@ impl CmgPreconditioner {
                 {
                     *value += *inverse_diagonal * (*rhs_value - *matrix_value);
                 }
+                recorder.finish(level_index, CmgApplyPhase::Smoothing, stamp);
             }
             Ok(())
         })();

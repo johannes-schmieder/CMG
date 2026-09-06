@@ -17,6 +17,10 @@ name = "component-bench"
 path = "src/bin/component-bench.rs"
 
 [[bin]]
+name = "component-cycle-profile"
+path = "src/bin/component-cycle-profile.rs"
+
+[[bin]]
 name = "graph-build"
 path = "src/bin/graph-build.rs"
 

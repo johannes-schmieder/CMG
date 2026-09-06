@@ -984,3 +984,22 @@ SHA-256 hashes of the local evidence directories' `SHA256SUMS`:
   `92927aeceb07a5299b39c40ae150e895eb0dcc529ff6fadb5d503e3a84064202`.
 - `/private/tmp/cmg-matched-dot-allocations`:
   `c8fbf8aeba487d8d66a2af0f0f2a45cdb3d6914f6885dc7461088cae80782650`.
+
+### Next kernel and fine-component campaign
+
+The next campaign starts from `1f727f9` (numerical checkpoint `b6c6e61`). It
+first profiles exclusive recursive CMG phases, then independently tests stable
+interleaved-component sums and residual/restriction fusion. A terminal-solve
+experiment is conditional on direct terminals occupying at least 10% of full
+solve time. The final, separate algorithmic experiment directly solves isolates
+and pairs and runs stationary PCG on the remaining vertices.
+
+Development uses stress seed 20260912. Qualification uses the original 32
+fixtures and untouched stress seed 20260913, with one/four RHSs and a 16-RHS
+reuse comparison. Start with nine rotated external rounds and extend questionable
+cases once to 21. Keep exact-order changes only with a target total-time interval
+favoring the candidate and a 2% noninferiority margin on connected one-shot
+controls; unresolved controls remain unqualified. Profile and allocation runs
+are separate. Portfolio arithmetic may differ, but original-system tolerances,
+validation and final certification remain mandatory. No automatic dispatch or
+main-branch promotion is part of this campaign.

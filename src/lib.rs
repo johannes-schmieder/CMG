@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod cmg_profile;
 mod coarsen;
 #[cfg(feature = "experimental-components")]
 mod component_experiment;
@@ -32,6 +33,8 @@ mod sddm;
 mod sddm_solver;
 mod workspace;
 
+#[cfg(feature = "profiling")]
+pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
 pub use coarsen::Aggregation;
 #[cfg(feature = "experimental-components")]
 pub use component_experiment::{ComponentBuildOptions, PrunedTransfer};
