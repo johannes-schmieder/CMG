@@ -479,7 +479,7 @@ impl CmgHierarchy {
             )?;
             #[cfg(feature = "experimental-components")]
             let (coarse, pruned_transfer) = if PRUNE {
-                match crate::component_experiment::prune(&aggregation, &coarse)? {
+                match crate::component_experiment::prune(&aggregation, &coarse) {
                     Some((transfer, compact)) => {
                         // Isolates contribute zero matrix nonzeros. Keep just
                         // their count for the ordinary vertex stopping checks;

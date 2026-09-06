@@ -101,18 +101,8 @@ impl PrunedTransfer {
 pub(crate) fn prune(
     aggregation: &Aggregation,
     coarse: &Laplacian,
-) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
-    if coarse.diagonal().iter().all(|&degree| degree > 0.0) {
-        return Ok(None);
-    }
-    let mut map = vec![usize::MAX; coarse.vertex_count()];
-    let mut dimension = 0;
-    for (vertex, &degree) in coarse.diagonal().iter().enumerate() {
-        if degree > 0.0 {
-            map[vertex] = dimension;
-            dimension += 1;
-        }
-    }
+) -> Option<(PrunedTransfer, Laplacian)> {
+    let (map, graph) = coarse.without_isolated_vertices()?;
     let mut entries = Vec::new();
     // The public graph representation already bounds vertex indices to u32.
     for fine in 0..aggregation.fine_dimension() {
@@ -122,20 +112,13 @@ pub(crate) fn prune(
         }
     }
     entries.shrink_to_fit();
-    let graph = Laplacian::from_edges(
-        dimension,
-        coarse
-            .edges()
-            .iter()
-            .map(|edge| (map[edge.u()], map[edge.v()], edge.weight())),
-    )?;
-    Ok(Some((
+    Some((
         PrunedTransfer {
             fine_dimension: aggregation.fine_dimension(),
-            coarse_dimension: dimension,
+            coarse_dimension: graph.vertex_count(),
             represented_coarse_dimension: coarse.vertex_count(),
             entries,
         },
         graph,
-    )))
+    ))
 }
