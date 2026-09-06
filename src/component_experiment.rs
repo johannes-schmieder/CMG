@@ -10,6 +10,12 @@ use crate::{Aggregation, CmgError, Laplacian};
 pub struct ComponentBuildOptions {
     /// Retire isolated coarse vertices after contraction, retaining parent smoothing.
     pub prune_coarse_isolates: bool,
+    /// Keep retired representatives in vertex-based stopping decisions.
+    ///
+    /// With pruning enabled, this separates compact storage from early direct
+    /// factorization. Retired representatives carry no edges, vectors or work.
+    /// An empty compact child always terminates directly. Ignored without pruning.
+    pub preserve_unpruned_stopping: bool,
     /// Factor disconnected direct terminals one block at a time.
     pub factor_terminal_components: bool,
 }

@@ -79,7 +79,9 @@ that total. See [the component design note](../docs/component-aware-cmg.md).
 Add `--suite stress --seed 20260906` for the frozen weighted, bridge-heavy,
 bipartite, heterogeneous and material-threshold cases. An optional third
 positional argument filters case names by substring. Use `--route baseline`,
-`prune`, `block-ldl`, or `combined` for a single arm. Without the
+`prune`, `block-ldl`, `combined`, or `preserve-stopping` for a single arm. The
+last arm combines block LDL with compact storage and the original vertex-based
+stopping decisions. The experimental build now rotates all five arms. Without the
 `experimental-components` feature this same harness builds against ordinary
 CMG and runs only the baseline, permitting a separately compiled comparison.
 Set `CMG_BENCH_COMMIT` at build time to record the numerical source identity.

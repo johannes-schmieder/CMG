@@ -26,8 +26,9 @@ fn build(graph: &Laplacian, route: usize) -> Result<CmgPreconditioner, CmgError>
         graph,
         CmgOptions::default(),
         ComponentBuildOptions {
-            prune_coarse_isolates: route == 1 || route == 3,
-            factor_terminal_components: route == 2 || route == 3,
+            prune_coarse_isolates: route == 1 || route >= 3,
+            factor_terminal_components: route >= 2,
+            preserve_unpruned_stopping: route == 4,
         },
     );
     #[cfg(not(feature = "experimental-components"))]
@@ -35,7 +36,13 @@ fn build(graph: &Laplacian, route: usize) -> Result<CmgPreconditioner, CmgError>
 }
 
 fn names(route: usize) -> &'static str {
-    ["baseline", "prune", "block-ldl", "prune+block-ldl"][route]
+    [
+        "baseline",
+        "prune",
+        "block-ldl",
+        "prune+block-ldl",
+        "preserve-stopping+block-ldl",
+    ][route]
 }
 
 struct Sample {
@@ -228,6 +235,7 @@ fn main() {
                     "prune" => 1,
                     "block-ldl" => 2,
                     "combined" => 3,
+                    "preserve-stopping" => 4,
                     _ => panic!("unknown route"),
                 })
             }
@@ -254,7 +262,7 @@ fn main() {
     let routes = route.map_or_else(
         || {
             if cfg!(feature = "experimental-components") {
-                (0..4).collect::<Vec<_>>()
+                (0..5).collect::<Vec<_>>()
             } else {
                 vec![0]
             }

@@ -25,6 +25,7 @@ fn build(graph: &Laplacian, threshold: usize, prune: bool, blocks: bool) -> CmgP
         ComponentBuildOptions {
             prune_coarse_isolates: prune,
             factor_terminal_components: blocks,
+            ..ComponentBuildOptions::default()
         },
     )
     .unwrap()
@@ -101,6 +102,127 @@ fn mixed_graph_retires_coarse_isolates_and_retains_parent_rows() {
     }
     assert_eq!(pre.workspace().dimensions(), &[6096, 1024, 256]);
     assert!(pre.workspace().byte_len() < build(&graph, 700, false, false).workspace().byte_len());
+}
+
+#[test]
+fn preserving_stopping_compacts_the_original_hierarchy_without_early_dense_factors() {
+    let bipartite = Laplacian::from_edges(
+        656,
+        (0..128)
+            .flat_map(|u| (0..6).map(move |k| (u, 128 + (u + k * 17) % 128, 0.5 + k as f64 / 4.0)))
+            .chain((0..200).map(|c| (256 + c * 2, 257 + c * 2, 1.0))),
+    )
+    .unwrap();
+    for graph in [mixed(384, 200), mixed(384, 7), bipartite] {
+        for (max_levels, max_fill) in [(100, 4.0), (2, 4.0), (100, 1.0)] {
+            let options = CmgOptions {
+                direct_threshold: 80,
+                max_levels,
+                max_hierarchy_nnz_factor: max_fill,
+                ..CmgOptions::default()
+            };
+            let baseline = CmgPreconditioner::build(&graph, options).unwrap();
+            let compact = CmgPreconditioner::build_component_experiment(
+                &graph,
+                options,
+                ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    preserve_unpruned_stopping: true,
+                    factor_terminal_components: true,
+                },
+            )
+            .unwrap();
+            let old = baseline.hierarchy().levels();
+            let new = compact.hierarchy().levels();
+            assert_eq!(old.len(), new.len());
+            for (index, (old, new)) in old.iter().zip(new).enumerate() {
+                let expected = if index == 0 {
+                    old.graph().clone()
+                } else {
+                    let mut map = vec![usize::MAX; old.graph().vertex_count()];
+                    let mut n = 0;
+                    for (v, &degree) in old.graph().diagonal().iter().enumerate() {
+                        if degree > 0.0 {
+                            map[v] = n;
+                            n += 1;
+                        }
+                    }
+                    Laplacian::from_edges(
+                        n,
+                        old.graph()
+                            .edges()
+                            .iter()
+                            .map(|e| (map[e.u()], map[e.v()], e.weight())),
+                    )
+                    .unwrap()
+                };
+                assert_eq!(new.graph(), &expected);
+                if new.graph().vertex_count() > 0 {
+                    assert_eq!(old.terminal_reason(), new.terminal_reason());
+                    assert_eq!(old.repeat(), new.repeat());
+                }
+            }
+            if new.last().unwrap().graph().vertex_count() > 0 {
+                assert_eq!(
+                    baseline.terminal_factor().is_some(),
+                    compact.terminal_factor().is_some()
+                );
+            }
+            // Removed coarse rows have identically zero range. Compare the
+            // complete stationary action, not only a favorable solve timing.
+            for seed in [1, 7] {
+                let rhs = vector(&graph, seed);
+                close(
+                    &baseline.apply(&rhs).unwrap(),
+                    &compact.apply(&rhs).unwrap(),
+                    1e-10,
+                );
+                let known_rhs = graph.matvec(&rhs).unwrap();
+                let solved =
+                    solve_pcg(&graph, &compact, &known_rhs, PcgOptions::default()).unwrap();
+                let ax = graph.matvec(solved.solution()).unwrap();
+                let residual = known_rhs
+                    .iter()
+                    .zip(ax)
+                    .map(|(b, ax)| (b - ax).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                assert!(residual <= solved.tolerance());
+            }
+        }
+    }
+}
+
+#[test]
+fn preserving_stopping_handles_empty_children_and_finest_isolates() {
+    for graph in [
+        mixed(0, 200),
+        Laplacian::from_edges(500, (0..127).map(|v| (v, v + 1, 1.0))).unwrap(),
+        Laplacian::from_edges(0, []).unwrap(),
+    ] {
+        let baseline = build(&graph, 8, false, false);
+        let compact = CmgPreconditioner::build_component_experiment(
+            &graph,
+            CmgOptions {
+                direct_threshold: 8,
+                ..CmgOptions::default()
+            },
+            ComponentBuildOptions {
+                prune_coarse_isolates: true,
+                preserve_unpruned_stopping: true,
+                factor_terminal_components: true,
+            },
+        )
+        .unwrap();
+        let rhs = vector(&graph, 2);
+        close(
+            &baseline.apply(&rhs).unwrap(),
+            &compact.apply(&rhs).unwrap(),
+            1e-10,
+        );
+        assert_eq!(compact.workspace().dimensions()[0], graph.vertex_count());
+        assert!(compact.hierarchy().levels().len() < 10);
+    }
 }
 
 #[test]
@@ -290,61 +412,75 @@ fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator(
     .unwrap();
     let weights: Vec<_> = original.edges().iter().map(|e| e.weight()).collect();
     let first = topology.assemble(&weights).unwrap();
-    let pre = build(&first, 4, true, true);
-    let hierarchy = pre.hierarchy().clone();
-    let mut ws = PcgWorkspace::new(&pre);
-    let known = vector(&first, 4);
-    let mut out = vec![0.0; known.len()];
-    for scale in [0.1, 1.0, 10.0] {
-        let current = topology
-            .assemble(
-                &weights
-                    .iter()
-                    .enumerate()
-                    .map(|(i, w)| w * scale * (0.9 + 0.02 * (i % 11) as f64))
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
-        let rhs = current.matvec(&known).unwrap();
-        let result = solve_pcg_with_retained_preconditioner_into_with_workspace(
-            &current,
-            &pre,
-            &rhs,
-            None,
-            &mut out,
-            PcgOptions {
-                relative_tolerance: 1e-12,
-                ..PcgOptions::default()
+    for preserve_unpruned_stopping in [false, true] {
+        let pre = CmgPreconditioner::build_component_experiment(
+            &first,
+            CmgOptions {
+                direct_threshold: 4,
+                ..CmgOptions::default()
             },
-            &mut ws,
+            ComponentBuildOptions {
+                prune_coarse_isolates: true,
+                factor_terminal_components: true,
+                preserve_unpruned_stopping,
+            },
         )
         .unwrap();
-        close(&out, &known, 1e-7);
-        assert_eq!(pre.hierarchy(), &hierarchy);
-        let ax = current.matvec(&out).unwrap();
-        let r: Vec<_> = rhs.iter().zip(ax).map(|(b, ax)| b - ax).collect();
-        assert!(dot(&r, &r).sqrt() <= result.tolerance());
-    }
-    let unrelated = PreparedLaplacianTopology::prepare(
-        first.vertex_count(),
-        first.edges().iter().map(|e| (e.u(), e.v())),
-    )
-    .unwrap()
-    .assemble(&weights)
-    .unwrap();
-    let rhs = unrelated.matvec(&known).unwrap();
-    assert!(
-        solve_pcg_with_retained_preconditioner_into_with_workspace(
-            &unrelated,
-            &pre,
-            &rhs,
-            None,
-            &mut out,
-            PcgOptions::default(),
-            &mut ws
+        let hierarchy = pre.hierarchy().clone();
+        let mut ws = PcgWorkspace::new(&pre);
+        let known = vector(&first, 4);
+        let mut out = vec![0.0; known.len()];
+        for scale in [0.1, 1.0, 10.0] {
+            let current = topology
+                .assemble(
+                    &weights
+                        .iter()
+                        .enumerate()
+                        .map(|(i, w)| w * scale * (0.9 + 0.02 * (i % 11) as f64))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let rhs = current.matvec(&known).unwrap();
+            let result = solve_pcg_with_retained_preconditioner_into_with_workspace(
+                &current,
+                &pre,
+                &rhs,
+                None,
+                &mut out,
+                PcgOptions {
+                    relative_tolerance: 1e-12,
+                    ..PcgOptions::default()
+                },
+                &mut ws,
+            )
+            .unwrap();
+            close(&out, &known, 1e-7);
+            assert_eq!(pre.hierarchy(), &hierarchy);
+            let ax = current.matvec(&out).unwrap();
+            let r: Vec<_> = rhs.iter().zip(ax).map(|(b, ax)| b - ax).collect();
+            assert!(dot(&r, &r).sqrt() <= result.tolerance());
+        }
+        let unrelated = PreparedLaplacianTopology::prepare(
+            first.vertex_count(),
+            first.edges().iter().map(|e| (e.u(), e.v())),
         )
-        .is_err()
-    );
+        .unwrap()
+        .assemble(&weights)
+        .unwrap();
+        let rhs = unrelated.matvec(&known).unwrap();
+        assert!(
+            solve_pcg_with_retained_preconditioner_into_with_workspace(
+                &unrelated,
+                &pre,
+                &rhs,
+                None,
+                &mut out,
+                PcgOptions::default(),
+                &mut ws
+            )
+            .is_err()
+        );
+    }
 }
 
 #[cfg(feature = "parallel")]
@@ -355,50 +491,64 @@ fn existing_parallel_plans_and_workspace_budgets_accept_compact_levels() {
         solve_pcg_batch_with_executor, solve_pcg_with_plan_and_workspace,
     };
     let graph = mixed(128, 40);
-    let pre = build(&graph, 4, true, true);
-    let rhs = graph.matvec(&vector(&graph, 1)).unwrap();
-    for threads in [1, 2, 4] {
-        let bytes = PcgWorkspace::new(&pre).byte_len();
-        let executor = ParallelExecutor::new(ParallelOptions {
-            threads,
-            min_parallel_len: 1,
-            reduction_chunk_size: 16,
-            workspace_memory_budget_bytes: Some(bytes),
-        })
-        .unwrap();
-        let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
-        let mut ws = PcgWorkspace::new(&pre);
-        let a = solve_pcg_with_plan_and_workspace(
+    for preserve_unpruned_stopping in [false, true] {
+        let pre = CmgPreconditioner::build_component_experiment(
             &graph,
-            &pre,
-            &plan,
-            &rhs,
-            PcgOptions::default(),
-            &mut ws,
-            &executor,
+            CmgOptions {
+                direct_threshold: 4,
+                ..CmgOptions::default()
+            },
+            ComponentBuildOptions {
+                prune_coarse_isolates: true,
+                factor_terminal_components: true,
+                preserve_unpruned_stopping,
+            },
         )
         .unwrap();
-        let b = solve_pcg_with_plan_and_workspace(
-            &graph,
-            &pre,
-            &plan,
-            &rhs,
-            PcgOptions::default(),
-            &mut ws,
-            &executor,
-        )
-        .unwrap();
-        assert_eq!(a, b);
-        assert!(a.residual_norm() <= a.tolerance());
-        let batch = solve_pcg_batch_with_executor(
-            &graph,
-            &pre,
-            &[rhs.clone(), rhs.clone()],
-            PcgOptions::default(),
-            &executor,
-        )
-        .unwrap();
-        assert_eq!(batch[0], batch[1]);
-        assert_eq!(executor.batch_concurrency(bytes, 2).unwrap(), 1);
+        let rhs = graph.matvec(&vector(&graph, 1)).unwrap();
+        for threads in [1, 2, 4] {
+            let bytes = PcgWorkspace::new(&pre).byte_len();
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                min_parallel_len: 1,
+                reduction_chunk_size: 16,
+                workspace_memory_budget_bytes: Some(bytes),
+            })
+            .unwrap();
+            let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+            let mut ws = PcgWorkspace::new(&pre);
+            let a = solve_pcg_with_plan_and_workspace(
+                &graph,
+                &pre,
+                &plan,
+                &rhs,
+                PcgOptions::default(),
+                &mut ws,
+                &executor,
+            )
+            .unwrap();
+            let b = solve_pcg_with_plan_and_workspace(
+                &graph,
+                &pre,
+                &plan,
+                &rhs,
+                PcgOptions::default(),
+                &mut ws,
+                &executor,
+            )
+            .unwrap();
+            assert_eq!(a, b);
+            assert!(a.residual_norm() <= a.tolerance());
+            let batch = solve_pcg_batch_with_executor(
+                &graph,
+                &pre,
+                &[rhs.clone(), rhs.clone()],
+                PcgOptions::default(),
+                &executor,
+            )
+            .unwrap();
+            assert_eq!(batch[0], batch[1]);
+            assert_eq!(executor.batch_concurrency(bytes, 2).unwrap(), 1);
+        }
     }
 }

@@ -30,6 +30,7 @@ let preconditioner = CmgPreconditioner::build_component_experiment(
     ComponentBuildOptions {
         prune_coarse_isolates: true,
         factor_terminal_components: true,
+        ..ComponentBuildOptions::default()
     },
 )?;
 // Use the existing certified solve_pcg / caller-workspace / planned interfaces.
@@ -242,3 +243,29 @@ and conservative estimates. Require zero allocations in warmed caller-buffer
 CMG application and PCG loops. These counters exclude allocator arena overhead,
 RSS, preexisting inputs and transient internal storage used by a system realloc;
 they do not qualify allocation-failure recovery or a process-memory limit.
+
+## Storage pruning with unchanged stopping decisions
+
+The frozen stress screen at `5084161` exposed a setup regression: active-count
+pruning reaches dense direct terminals of 299 and 659 vertices in the two
+worker-firm mixtures. The ordinary hierarchy continues contracting and uses an
+iterative terminal. Median one-RHS setup increases from 0.26 to 3.90 ms and from
+1.54 to 41.00 ms; total increases 3.05x and 4.17x. Four RHSs amortize some setup
+but still regress 1.61x and 1.49x. Weighted paths and bridged cliques also regress
+for one RHS, while improving for four. This rules out promoting the original
+combined option as an unconditional improvement.
+
+The next isolated experiment adds `preserve_unpruned_stopping: true` alongside
+pruning. Keep a scalar count of retired coarse representatives and include it
+in the original direct/full-contraction/stagnation vertex checks. Their graph
+rows and recursive vectors remain absent. Isolates contribute zero matrix
+nonzeros, so the original fill checks and repeat calculation already apply.
+The zero-dimensional child terminates directly with a zero correction; it
+cannot continue recursing on virtual representatives.
+
+This route preserves the material hierarchy and stationary cycle of the
+unpruned build up to floating-point rounding, with block LDL still available
+for ordinary direct terminals. It introduces no fitted threshold, new inner
+solver, RHS-dependent rule or production routing. Compare it with all four
+existing arms on the unchanged sentinels and stress seed before deciding
+whether earlier active-count termination deserves further development.

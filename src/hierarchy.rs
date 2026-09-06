@@ -273,8 +273,21 @@ impl CmgHierarchy {
     }
 
     #[cfg(feature = "experimental-components")]
-    pub(crate) fn build_pruned(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        Self::build_with_kernels_impl::<false, true, _, _>(
+    pub(crate) fn build_pruned(
+        graph: &Laplacian,
+        options: CmgOptions,
+        preserve_stopping: bool,
+    ) -> Result<Self, CmgError> {
+        if preserve_stopping {
+            return Self::build_with_kernels_impl::<false, true, true, _, _>(
+                graph,
+                options,
+                build_forest_aggregation_labels,
+                |aggregation, current| aggregation.contract(current),
+            )
+            .map(|(hierarchy, _)| hierarchy);
+        }
+        Self::build_with_kernels_impl::<false, true, false, _, _>(
             graph,
             options,
             build_forest_aggregation_labels,
@@ -326,8 +339,10 @@ impl CmgHierarchy {
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        Self::build_with_kernels_impl::<PROFILE, false, _, _>(graph, options, group, contract)
-            .map(|(hierarchy, _)| hierarchy)
+        Self::build_with_kernels_impl::<PROFILE, false, false, _, _>(
+            graph, options, group, contract,
+        )
+        .map(|(hierarchy, _)| hierarchy)
     }
 
     #[cfg(feature = "profiling")]
@@ -341,10 +356,16 @@ impl CmgHierarchy {
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        Self::build_with_kernels_impl::<true, false, _, _>(graph, options, group, contract)
+        Self::build_with_kernels_impl::<true, false, false, _, _>(graph, options, group, contract)
     }
 
-    fn build_with_kernels_impl<const PROFILE: bool, const PRUNE: bool, Group, Contract>(
+    fn build_with_kernels_impl<
+        const PROFILE: bool,
+        const PRUNE: bool,
+        const PRESERVE_STOPPING: bool,
+        Group,
+        Contract,
+    >(
         graph: &Laplacian,
         options: CmgOptions,
         mut group: Group,
@@ -370,16 +391,21 @@ impl CmgHierarchy {
             || graph.clone(),
         );
         let mut levels = Vec::new();
+        #[cfg(feature = "experimental-components")]
+        let mut retired_vertices = 0usize;
         let terminal_reason;
 
         loop {
             let level_index = levels.len();
             let n = current.vertex_count();
+            let decision_n = n;
+            #[cfg(feature = "experimental-components")]
+            let decision_n = decision_n + retired_vertices;
             let direct = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
                 "direct_terminal_check",
-                || n <= 1 || n < options.direct_threshold,
+                || n == 0 || decision_n <= 1 || decision_n < options.direct_threshold,
             );
             if direct {
                 terminal_reason = TerminalReason::Direct;
@@ -406,16 +432,19 @@ impl CmgHierarchy {
                 || Aggregation::from_forest_labels(labels, aggregate_count),
             );
             let coarse_count = aggregation.coarse_dimension();
+            let decision_coarse_count = coarse_count;
+            #[cfg(feature = "experimental-components")]
+            let decision_coarse_count = decision_coarse_count + retired_vertices;
             let terminal = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
                 "hierarchy_bookkeeping_and_fill_checks",
                 || {
-                    if coarse_count == 1 {
+                    if decision_coarse_count == 1 {
                         return Some(TerminalReason::FullContraction);
                     }
                     cumulative_nonzeros = cumulative_nonzeros.saturating_add(current.matrix_nnz());
-                    if coarse_count >= n.saturating_sub(1) {
+                    if decision_coarse_count >= decision_n.saturating_sub(1) {
                         return Some(TerminalReason::StagnatedVertexReduction);
                     }
                     let fill_limit = options.max_hierarchy_nnz_factor * initial_nonzeros as f64;
@@ -449,7 +478,15 @@ impl CmgHierarchy {
             #[cfg(feature = "experimental-components")]
             let (coarse, pruned_transfer) = if PRUNE {
                 match crate::component_experiment::prune(&aggregation, &coarse)? {
-                    Some((transfer, compact)) => (compact, Some(transfer)),
+                    Some((transfer, compact)) => {
+                        // Isolates contribute zero matrix nonzeros. Keep just
+                        // their count for the ordinary vertex stopping checks;
+                        // no retired row survives in graph or cycle storage.
+                        if PRESERVE_STOPPING {
+                            retired_vertices += coarse.vertex_count() - compact.vertex_count();
+                        }
+                        (compact, Some(transfer))
+                    }
                     None => (coarse, None),
                 }
             } else {

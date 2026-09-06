@@ -520,7 +520,7 @@ impl CmgPreconditioner {
         experiment: crate::ComponentBuildOptions,
     ) -> Result<Self, CmgError> {
         let hierarchy = if experiment.prune_coarse_isolates {
-            CmgHierarchy::build_pruned(graph, options)?
+            CmgHierarchy::build_pruned(graph, options, experiment.preserve_unpruned_stopping)?
         } else {
             CmgHierarchy::build(graph, options)?
         };
