@@ -56,6 +56,7 @@ struct Sample {
     retained: usize,
     scratch: usize,
     relative_solution_errors: Vec<f64>,
+    solution_bit_hashes: Vec<String>,
 }
 
 fn measure(
@@ -126,7 +127,23 @@ fn measure(
         retained: pre.retained_bytes(),
         scratch: ws.byte_len(),
         relative_solution_errors,
+        solution_bit_hashes: results
+            .iter()
+            .map(|r| solution_bit_hash(r.solution()))
+            .collect(),
     })
+}
+
+// A deterministic, noncryptographic fingerprint for cross-binary checks of
+// complete returned vectors, including signed zero. Computed outside timings.
+fn solution_bit_hash(solution: &[f64]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for value in solution {
+        for byte in value.to_bits().to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{hash:016x}")
 }
 
 fn print_structure(case: &Case, route: usize) -> Result<(), Failure> {
@@ -332,7 +349,7 @@ fn main() {
                 }
                 let total = s.setup + s.workspace + s.solve;
                 println!(
-                    "{{\"type\":\"sample\",\"case\":{},\"route\":{},\"round\":{},\"setup_ns\":{},\"workspace_allocation_ns\":{},\"solve_ns\":{},\"total_ns\":{total},\"apply_ns\":{},\"iterations\":{:?},\"residuals\":{:?},\"tolerances\":{:?},\"relative_solution_errors\":{:?},\"retained_preconditioner_bytes\":{},\"pcg_workspace_bytes\":{}}}",
+                    "{{\"type\":\"sample\",\"case\":{},\"route\":{},\"round\":{},\"setup_ns\":{},\"workspace_allocation_ns\":{},\"solve_ns\":{},\"total_ns\":{total},\"apply_ns\":{},\"iterations\":{:?},\"residuals\":{:?},\"tolerances\":{:?},\"relative_solution_errors\":{:?},\"solution_bit_hashes\":{:?},\"retained_preconditioner_bytes\":{},\"pcg_workspace_bytes\":{}}}",
                     json_string(case.name),
                     json_string(names(route)),
                     round - 2,
@@ -344,6 +361,7 @@ fn main() {
                     s.residuals,
                     s.tolerances,
                     s.relative_solution_errors,
+                    s.solution_bit_hashes,
                     s.retained,
                     s.scratch
                 );

@@ -226,6 +226,55 @@ fn preserving_stopping_handles_empty_children_and_finest_isolates() {
 }
 
 #[test]
+fn empty_child_keeps_both_smoothing_sweeps_with_reused_workspaces() {
+    let triangles = Laplacian::from_edges(
+        240,
+        (0..80).flat_map(|c| {
+            [
+                (3 * c, 3 * c + 1, 1.0),
+                (3 * c + 1, 3 * c + 2, 2.0),
+                (3 * c, 3 * c + 2, 0.5),
+            ]
+        }),
+    )
+    .unwrap();
+    for graph in [mixed(0, 120), triangles] {
+        let pre = build(&graph, 4, true, true);
+        assert_eq!(pre.hierarchy().levels()[1].graph().vertex_count(), 0);
+        let inverse = pre.hierarchy().levels()[0].inverse_diagonal();
+        let mut workspace = pre.workspace();
+        let mut output = vec![f64::NAN; graph.vertex_count()];
+        for seed in [1, 3, 1] {
+            let rhs = graph.matvec(&vector(&graph, seed)).unwrap();
+            let mut expected: Vec<_> = rhs.iter().zip(inverse).map(|(b, d)| b * d).collect();
+            let ax = graph.matvec(&expected).unwrap();
+            for (((x, b), d), ax) in expected.iter_mut().zip(&rhs).zip(inverse).zip(ax) {
+                *x += d * (b - ax);
+            }
+            pre.apply_compatible_into(&rhs, &mut output, &mut workspace)
+                .unwrap();
+            assert_eq!(
+                output.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            );
+            #[cfg(feature = "parallel")]
+            for threads in [1, 2, 4] {
+                let executor = cmg::ParallelExecutor::new(cmg::ParallelOptions {
+                    threads,
+                    min_parallel_len: 1,
+                    ..cmg::ParallelOptions::default()
+                })
+                .unwrap();
+                let plan = cmg::ParallelCmgPlan::build(&pre, &executor).unwrap();
+                plan.apply_compatible_into(&pre, &rhs, &mut output, &mut workspace, &executor)
+                    .unwrap();
+                close(&output, &expected, 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
 fn partial_transfer_is_transposed_and_galerkin_and_dimension_checked() {
     let graph = mixed(80, 12);
     let pre = build(&graph, 4, true, false);
@@ -357,7 +406,20 @@ fn sparse_terminal_factors_match_dense_arithmetic_across_fill_and_scale() {
                 let sparse = GroundedLdl::factor_by_component(&graph).unwrap();
                 assert_eq!(dense, sparse, "n={n}, density={density}, scale={scale}");
                 let rhs = graph.matvec(&vector(&graph, density)).unwrap();
-                assert_eq!(dense.solve(&rhs).unwrap(), sparse.solve(&rhs).unwrap());
+                assert_eq!(
+                    dense
+                        .solve(&rhs)
+                        .unwrap()
+                        .into_iter()
+                        .map(f64::to_bits)
+                        .collect::<Vec<_>>(),
+                    sparse
+                        .solve(&rhs)
+                        .unwrap()
+                        .into_iter()
+                        .map(f64::to_bits)
+                        .collect::<Vec<_>>()
+                );
             }
         }
     }

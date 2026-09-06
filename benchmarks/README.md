@@ -88,6 +88,10 @@ Set `CMG_BENCH_COMMIT` at build time to record the numerical source identity.
 Failures are emitted as JSONL records; the harness finishes the remaining cases
 and returns a nonzero exit status. Successful samples include known-solution
 relative errors in addition to residual certificates.
+Complete solution vectors also receive deterministic fingerprints of their
+floating-point bits outside the timed region, for cross-binary comparisons.
+These fingerprints are noncryptographic. Cycle visit counts describe the
+hierarchy model; execution may omit a zero-dimensional recursive correction.
 
 For a separate requested-allocation run, enable `component-allocations` and
 use one repetition. The allocator counters affect timings, so do not use those

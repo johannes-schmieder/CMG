@@ -115,12 +115,22 @@ impl LowerFactor {
 
     fn backward_correction(&self, row: usize, solution: &[f64]) -> f64 {
         match self {
-            Self::Packed { values } => ((row + 1)..solution.len())
-                .map(|later| {
-                    let index = later.saturating_mul(later.saturating_sub(1)) / 2 + row;
-                    values[index] * solution[later]
-                })
-                .sum(),
+            Self::Packed { values } => {
+                // Consecutive packed rows differ in length by one. Advance the
+                // column position instead of multiplying triangular indices
+                // for every coefficient; retain the reference summation order.
+                let mut index = row.saturating_mul(row.saturating_add(1)) / 2 + row;
+                solution
+                    .iter()
+                    .enumerate()
+                    .skip(row + 1)
+                    .map(|(later, &value)| {
+                        let product = values[index] * value;
+                        index += later;
+                        product
+                    })
+                    .sum()
+            }
             Self::Sparse {
                 column_offsets,
                 rows,
@@ -595,15 +605,6 @@ fn factor_components(
 // Nonzero columns support ordered left-looking updates; row links visit prior
 // columns in exactly the dense reference's increasing-column arithmetic order.
 #[cfg(feature = "experimental-components")]
-#[derive(Clone, Copy)]
-struct ColumnEntry {
-    row: u32,
-    column: u32,
-    value: f64,
-    next_in_row: usize,
-}
-
-#[cfg(feature = "experimental-components")]
 struct ComponentFactorRows {
     diagonal: Vec<f64>,
     row_offsets: Vec<usize>,
@@ -641,7 +642,13 @@ impl ComponentFactorRows {
                 next[column] += 1;
             }
         }
-        let mut entries: Vec<ColumnEntry> = Vec::with_capacity(edge_indices.len());
+        // The arithmetic scan reads only rows and values. Keep the row-link
+        // bookkeeping in separate arrays so it does not occupy that scan's
+        // cache lines.
+        let mut entry_rows = Vec::with_capacity(edge_indices.len());
+        let mut entry_columns = Vec::with_capacity(edge_indices.len());
+        let mut entry_values = Vec::with_capacity(edge_indices.len());
+        let mut next_in_row = Vec::with_capacity(edge_indices.len());
         let mut column_offsets = Vec::with_capacity(dimension + 1);
         column_offsets.push(0);
         let mut first = vec![usize::MAX; dimension];
@@ -658,15 +665,19 @@ impl ComponentFactorRows {
             let mut pivot = graph.diagonal()[permutation[column]];
             let mut link = first[column];
             while link != usize::MAX {
-                let previous = entries[link];
-                let k = previous.column as usize;
-                pivot -= previous.value * previous.value * diagonal[k];
+                let previous = entry_values[link];
+                let k = entry_columns[link] as usize;
+                pivot -= previous * previous * diagonal[k];
                 // Column rows are increasing, so the suffix after this link
                 // contains precisely the rows below the current pivot.
-                for entry in &entries[link + 1..column_offsets[k + 1]] {
-                    work[entry.row as usize] -= entry.value * previous.value * diagonal[k];
+                let end = column_offsets[k + 1];
+                for (&row, &value) in entry_rows[link + 1..end]
+                    .iter()
+                    .zip(&entry_values[link + 1..end])
+                {
+                    work[row as usize] -= value * previous * diagonal[k];
                 }
-                link = previous.next_in_row;
+                link = next_in_row[link];
             }
             if !pivot.is_finite() || pivot <= 0.0 {
                 return Err(CmgError::NonPositivePivot {
@@ -688,30 +699,28 @@ impl ComponentFactorRows {
                     });
                 }
                 if value != 0.0 {
-                    let index = entries.len();
-                    entries.push(ColumnEntry {
-                        row: row as u32,
-                        column: column as u32,
-                        value,
-                        next_in_row: usize::MAX,
-                    });
+                    let index = entry_values.len();
+                    entry_rows.push(row as u32);
+                    entry_columns.push(column as u32);
+                    entry_values.push(value);
+                    next_in_row.push(usize::MAX);
                     if last[row] == usize::MAX {
                         first[row] = index;
                     } else {
-                        entries[last[row]].next_in_row = index;
+                        next_in_row[last[row]] = index;
                     }
                     last[row] = index;
                 }
             }
-            column_offsets.push(entries.len());
+            column_offsets.push(entry_values.len());
         }
         self.diagonal.extend(diagonal);
         for mut link in first {
             while link != usize::MAX {
-                let entry = entries[link];
-                self.columns.push((base + entry.column as usize) as u32);
-                self.values.push(entry.value);
-                link = entry.next_in_row;
+                self.columns
+                    .push((base + entry_columns[link] as usize) as u32);
+                self.values.push(entry_values[link]);
+                link = next_in_row[link];
             }
             self.row_offsets.push(self.columns.len());
         }

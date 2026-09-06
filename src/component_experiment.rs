@@ -64,8 +64,14 @@ impl PrunedTransfer {
     pub fn restrict_into(&self, fine: &[f64], coarse: &mut [f64]) -> Result<(), CmgError> {
         self.validate(fine.len(), coarse.len())?;
         coarse.fill(0.0);
-        for &(fine_index, coarse_index) in &self.entries {
-            coarse[coarse_index as usize] += fine[fine_index as usize];
+        if self.has_fine_prefix() {
+            for (&value, &(_, coarse_index)) in fine.iter().zip(&self.entries) {
+                coarse[coarse_index as usize] += value;
+            }
+        } else {
+            for &(fine_index, coarse_index) in &self.entries {
+                coarse[coarse_index as usize] += fine[fine_index as usize];
+            }
         }
         Ok(())
     }
@@ -73,10 +79,24 @@ impl PrunedTransfer {
     /// Add the transpose action; fine rows without an entry remain unchanged.
     pub fn prolong_add_into(&self, coarse: &[f64], fine: &mut [f64]) -> Result<(), CmgError> {
         self.validate(fine.len(), coarse.len())?;
-        for &(fine_index, coarse_index) in &self.entries {
-            fine[fine_index as usize] += coarse[coarse_index as usize];
+        if self.has_fine_prefix() {
+            for (value, &(_, coarse_index)) in fine.iter_mut().zip(&self.entries) {
+                *value += coarse[coarse_index as usize];
+            }
+        } else {
+            for &(fine_index, coarse_index) in &self.entries {
+                fine[fine_index as usize] += coarse[coarse_index as usize];
+            }
         }
         Ok(())
+    }
+
+    fn has_fine_prefix(&self) -> bool {
+        // Entries are unique and sorted by fine index, so this last-index test
+        // proves that every preceding fine row is represented contiguously.
+        self.entries
+            .last()
+            .is_none_or(|&(fine, _)| fine as usize + 1 == self.entries.len())
     }
 
     fn validate(&self, fine: usize, coarse: usize) -> Result<(), CmgError> {

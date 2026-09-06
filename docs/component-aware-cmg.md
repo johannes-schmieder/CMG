@@ -428,3 +428,13 @@ with ten cases up to 97,536 vertices. Compare one and four RHSs against the
 previous recommended numerical source `297a4a3` using the same new harness.
 Use a one-round pilot followed by three rotated external rounds if every pilot
 solve certifies. This is a bounded local scaling check, not an SCC campaign.
+
+The final loop changes separate sparse arithmetic arrays from row-link metadata,
+advance packed triangular indices by addition, and use contiguous fine-vector
+access for prefix transfers. Empty-child cycles retain both smoothing sweeps
+but omit the unused middle residual, restriction and recursive correction in
+both serial and planned execution. This is a structural zero-dimensional case,
+not RHS-dependent skipping. Tests compare that cycle with two explicit Jacobi
+sweeps and cover workspace reuse and 1/2/4-thread plans. The harness now records
+noncryptographic fingerprints of full solution bits outside timings, in
+addition to residuals and known-solution errors.
