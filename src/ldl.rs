@@ -423,7 +423,6 @@ impl GroundedLdl {
             ));
         }
 
-        #[cfg(feature = "experimental-components")]
         {
             for row in 0..dimension {
                 let value =
@@ -435,20 +434,6 @@ impl GroundedLdl {
             }
             for row in (0..dimension).rev() {
                 factor_solution[row] -= self.lower.backward_correction(row, factor_solution);
-            }
-        }
-        #[cfg(not(feature = "experimental-components"))]
-        {
-            for row in 0..dimension {
-                forward[row] =
-                    rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
-            }
-            for (value, pivot) in forward.iter_mut().zip(&self.diagonal) {
-                *value /= *pivot;
-            }
-            for row in (0..dimension).rev() {
-                factor_solution[row] =
-                    forward[row] - self.lower.backward_correction(row, factor_solution);
             }
         }
 
@@ -746,7 +731,7 @@ impl ComponentFactorRows {
     }
 }
 
-#[cfg(all(test, feature = "experimental-components"))]
+#[cfg(test)]
 mod scaled_forward_tests {
     use super::*;
 
@@ -786,6 +771,7 @@ mod scaled_forward_tests {
                     let graph = Laplacian::from_edges(n + 3, edges).unwrap();
                     for factor in [
                         GroundedLdl::factor(&graph).unwrap(),
+                        #[cfg(feature = "experimental-components")]
                         GroundedLdl::factor_by_component(&graph).unwrap(),
                     ] {
                         saw_packed |= matches!(factor.lower, LowerFactor::Packed { .. });

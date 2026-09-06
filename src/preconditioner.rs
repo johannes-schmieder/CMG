@@ -989,10 +989,7 @@ impl CmgPreconditioner {
         // With a zero-dimensional child, restriction and correction have no
         // output. Keep both smoothing sweeps, but avoid forming the unused
         // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
         let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
                 if iteration == 0 {
@@ -1029,18 +1026,7 @@ impl CmgPreconditioner {
                         &mut local.residual,
                         executor,
                     )?;
-                    #[cfg(feature = "experimental-components")]
                     level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        residual_from_matvec_planned(
-                            &mut local.residual,
-                            rhs,
-                            executor,
-                            parallel_level,
-                        );
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
                     let centering = &self.coarse_centering[level_index];
                     let mut centering_workspace = workspace.take_centering(level_index);
                     let centering_result = centering.center_in_place_with_workspace_and_executor(
@@ -1156,10 +1142,7 @@ impl CmgPreconditioner {
         // With a zero-dimensional child, restriction and correction have no
         // output. Keep both smoothing sweeps, but avoid forming the unused
         // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
         let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
                 recorder.iteration(level_index);
@@ -1211,18 +1194,7 @@ impl CmgPreconditioner {
                     )?;
                     recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
                     let stamp = R::start();
-                    #[cfg(feature = "experimental-components")]
                     level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        residual_from_matvec_planned(
-                            &mut local.residual,
-                            rhs,
-                            executor,
-                            parallel_level,
-                        );
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
                     recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
                     let stamp = R::start();
                     let centering = &self.coarse_centering[level_index];
@@ -1340,10 +1312,7 @@ impl CmgPreconditioner {
         // With a zero-dimensional child, restriction and correction have no
         // output. Keep both smoothing sweeps, but avoid forming the unused
         // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
         let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
                 if iteration == 0 {
@@ -1366,15 +1335,7 @@ impl CmgPreconditioner {
 
                 if has_coarse_work {
                     level.graph().matvec_into(output, &mut local.residual)?;
-                    #[cfg(feature = "experimental-components")]
                     level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
-                            *residual = *rhs_value - *residual;
-                        }
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
                     let centering = &self.coarse_centering[level_index];
                     let mut centering_workspace = workspace.take_centering(level_index);
                     // Restricted residuals are component-compatible in exact
@@ -1478,10 +1439,7 @@ impl CmgPreconditioner {
         // With a zero-dimensional child, restriction and correction have no
         // output. Keep both smoothing sweeps, but avoid forming the unused
         // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
         let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
         let result = (|| {
             for iteration in 0..iterations {
                 recorder.iteration(level_index);
@@ -1519,15 +1477,7 @@ impl CmgPreconditioner {
                     level.graph().matvec_into(output, &mut local.residual)?;
                     recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
                     let stamp = R::start();
-                    #[cfg(feature = "experimental-components")]
                     level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
-                            *residual = *rhs_value - *residual;
-                        }
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
                     recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
                     let stamp = R::start();
                     let centering = &self.coarse_centering[level_index];
@@ -1612,22 +1562,6 @@ fn jacobi_add_planned(
     }
 }
 
-#[cfg(all(feature = "parallel", not(feature = "experimental-components")))]
-fn residual_from_matvec_planned(
-    matvec: &mut [f64],
-    rhs: &[f64],
-    executor: &ParallelExecutor,
-    parallel: bool,
-) {
-    if parallel {
-        residual_from_matvec_parallel(matvec, rhs, executor);
-    } else {
-        for (value, &right) in matvec.iter_mut().zip(rhs) {
-            *value = right - *value;
-        }
-    }
-}
-
 #[cfg(feature = "parallel")]
 fn assign_scaled_parallel(
     output: &mut [f64],
@@ -1681,22 +1615,6 @@ fn jacobi_add_parallel(
             .zip(matrix_value)
         {
             *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-        }
-    }
-}
-
-#[cfg(all(feature = "parallel", not(feature = "experimental-components")))]
-fn residual_from_matvec_parallel(residual: &mut [f64], rhs: &[f64], executor: &ParallelExecutor) {
-    if executor.should_parallel(residual.len()) {
-        executor.install(|| {
-            residual
-                .par_iter_mut()
-                .zip(rhs.par_iter())
-                .for_each(|(value, rhs_value)| *value = *rhs_value - *value);
-        });
-    } else {
-        for (value, rhs_value) in residual.iter_mut().zip(rhs) {
-            *value = *rhs_value - *value;
         }
     }
 }

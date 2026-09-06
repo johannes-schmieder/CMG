@@ -122,19 +122,6 @@ impl HierarchyLevel {
         }
     }
 
-    #[cfg(not(feature = "experimental-components"))]
-    #[inline]
-    pub(crate) fn restrict_into(&self, fine: &[f64], coarse: &mut [f64]) -> Result<(), CmgError> {
-        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no transfer",
-        })? {
-            LevelTransfer::Full(aggregation) => aggregation.restrict_into(fine, coarse),
-            #[cfg(feature = "experimental-components")]
-            LevelTransfer::Pruned(transfer) => transfer.restrict_into(fine, coarse),
-        }
-    }
-
-    #[cfg(feature = "experimental-components")]
     #[inline]
     pub(crate) fn restrict_residual_into(
         &self,
@@ -148,6 +135,7 @@ impl HierarchyLevel {
             LevelTransfer::Full(aggregation) => {
                 aggregation.restrict_residual_into(rhs, matrix_value, coarse)
             }
+            #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => {
                 transfer.restrict_residual_into(rhs, matrix_value, coarse)
             }

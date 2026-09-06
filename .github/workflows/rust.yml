@@ -65,6 +65,13 @@ jobs:
       - name: Benchmark Clippy (all features)
         run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets --all-features -- -D warnings
 
+      - name: Minimal caller harness
+        run: |
+          cargo fmt --manifest-path benchmarks/callers/Cargo.toml --all -- --check
+          cargo clippy --manifest-path benchmarks/callers/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path benchmarks/callers/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo test --manifest-path benchmarks/callers/Cargo.toml --all-features
+
       - name: Component benchmark fixture tests
         run: cargo test --manifest-path benchmarks/Cargo.toml --features experimental-components --bin component-bench
 

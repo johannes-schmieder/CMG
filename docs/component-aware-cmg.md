@@ -1203,3 +1203,27 @@ identity, source archives, frozen binaries, auditors and validation logs. Every
 archived audited file is rechecked against its recorded checksum. Failed or
 rejected raw evidence is preserved. No main merge, SCC deployment or new cluster
 campaign is part of this work.
+
+## Default-promotion study after the second checkpoint merge
+
+PR #5 merged as `90d06d58edf7de43e6e78855b1b14c4b6311b808`, retaining opt-in
+experiments. The following work is on a separate study branch; it does not
+promote defaults on main. Candidate A makes the retained ordered kernels
+available to ordinary builds without changing hierarchy or factor selection.
+Candidate B will additionally use preserved-stopping pruning and component
+terminal factors consistently across ordinary builders. Cargo defaults stay
+empty and the tiny-component portfolio remains explicitly selected.
+
+Development uses historical fixtures and seed 20260914. Both sources, the matched
+caller harness, matrix and gates are frozen before fresh seed 20260915. Compare
+against both the merged checkpoint and pre-merge `1921d66`, never by multiplying
+ratios from distinct harnesses. The local screen covers original 32 and fresh
+12 cases at 1/4/16 RHSs, owning and buffer paths, minimal and parallel builds,
+public Veneto complete/connected graphs, and one/four-thread prepared callers.
+Nine rotated external rounds use two warmups. Connected controls must establish
+the existing 2% margin; a clear loss beyond 2% elsewhere blocks a broad local
+recommendation. Require a supported gain of at least 5% on a target workload.
+One extension to 21 rounds is allowed for inconclusive controls; unresolved
+results remain unqualified. Allocation and profile runs are separate. No source
+is tuned to fresh qualification data. Default promotion on main and SCC are
+outside this study.
