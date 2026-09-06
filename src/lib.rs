@@ -13,6 +13,8 @@ mod cmg_profile;
 mod coarsen;
 #[cfg(feature = "experimental-components")]
 mod component_experiment;
+#[cfg(feature = "experimental-components")]
+mod component_portfolio;
 mod components;
 mod csr;
 mod error;
@@ -39,6 +41,10 @@ pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
 pub use coarsen::Aggregation;
 #[cfg(feature = "experimental-components")]
 pub use component_experiment::{ComponentBuildOptions, PrunedTransfer};
+#[cfg(feature = "experimental-components")]
+pub use component_portfolio::{
+    ComponentPcgDiagnostics, ComponentPcgExperiment, ComponentPcgWorkspace,
+};
 pub use components::Components;
 pub use csr::CsrLaplacian;
 pub use error::CmgError;

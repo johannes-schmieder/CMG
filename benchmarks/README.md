@@ -179,3 +179,20 @@ kernels. It is not an end-to-end C solver. Durable machine records are indexed
 by [`.ci/performance/index.json`](../.ci/performance/index.json). Current
 workflow output is uploaded as GitHub Actions artifacts instead of being
 committed back to `main`.
+
+`component-portfolio-bench` (requires `experimental-components`) compares two
+caller-buffer routes: `--route scalar` uses preserved-stopping component CMG;
+`--route portfolio` prepares direct isolate/pair blocks and stationary PCG on
+the remaining induced graph. It accepts the same repetition/RHS/filter and
+`--suite`/`--seed` arguments as `component-bench`. Compile with the full
+`CMG_BENCH_COMMIT`, freeze that binary, and rotate the two routes in separate
+processes. Both routes allocate output buffers in the workspace timer and include
+all preparation and full-system certification costs in total time. Iterations
+and solution bits may differ; graph/RHS/target fingerprints and independently
+recomputed original residuals identify the scientific comparison. Failures remain
+JSONL records and produce a nonzero exit. No fallback is attempted.
+
+With `component-allocations`, this entry point emits separate setup/workspace
+requested-memory measurements and checks zero warmed caller-buffer allocations.
+It omits timing samples in that build. Never use instrumented binaries for timing
+qualification. The original `component-bench` timing entry point stays unchanged.

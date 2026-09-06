@@ -2376,7 +2376,7 @@ pub fn solve_pcg_batch_parallel(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn make_diagnostics(
+pub(crate) fn make_diagnostics(
     solution: &[f64],
     iterations: usize,
     initial_residual_norm: f64,
@@ -2425,7 +2425,7 @@ fn result_from_diagnostics(solution: Vec<f64>, diagnostics: PcgDiagnostics) -> P
     }
 }
 
-fn allowed_residual(
+pub(crate) fn allowed_residual(
     options: PcgOptions,
     rhs_norm: f64,
     operator_bound: f64,
@@ -2710,7 +2710,7 @@ mod deterministic_parallel_norm_sum_tests {
     }
 }
 
-fn euclidean_norm(values: &[f64]) -> f64 {
+pub(crate) fn euclidean_norm(values: &[f64]) -> f64 {
     let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
     if scale == 0.0 {
         0.0

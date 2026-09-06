@@ -73,3 +73,8 @@ path = "src/bin/teaching-supplement.rs"
 [[bin]]
 name = "fixed-topology-sequence"
 path = "src/bin/fixed-topology-sequence.rs"
+
+[[bin]]
+name = "component-portfolio-bench"
+path = "src/bin/component-portfolio-bench.rs"
+required-features = ["experimental-components"]

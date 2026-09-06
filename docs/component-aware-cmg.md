@@ -1054,3 +1054,20 @@ factor arithmetic. Packed and sparse factors, empty/isolated graphs, extreme
 weight scales, repeated scratch use and independent old-loop output bits are
 covered by differential tests. This prototype is still subject to total-time
 qualification; a high terminal share alone does not establish a benefit.
+
+The separate `ComponentPcgExperiment` API prepares a fixed isolate/pair partition,
+provides a reusable `ComponentPcgWorkspace`, and exposes `solve_into`. Stable
+original-vertex maps preserve each induced graph's canonical order. Tiny blocks
+share one grounded factor; the active graph uses preserved-stopping component
+CMG. Full graphs with no removable block use the ordinary solver selected at
+preparation time. This is not a fallback after failed convergence.
+
+Full RHS compatibility and every supplied initial-guess value are checked before
+subsystem work. The active solver retains the submitted PCG options. After
+scattering and component centering, a fresh original-graph matvec certifies the
+complete result using the original RHS norm, original operator bound and full
+solution norm. A failed factor, active solve or certificate returns an error
+without modifying the caller's output. The report distinguishes active-PCG
+diagnostics from the full-system certificate. Workspaces require exact prepared
+identity; matrix-weight changes require a new preparation. Extra maps, factors,
+active/full vectors and certificate scratch are included in memory reports.
