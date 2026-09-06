@@ -857,3 +857,130 @@ The paired-norm timing binary SHA-256 is
 `f4b2ce9a3594fce1fbdee8dd1d64766483e301e031b51ed3fae7b9aca4c3bdb2`;
 its separate allocation binary SHA-256 is
 `5071e78e9789ee304540110a2a66760c0e2729e602a83a5ceb42ffaf898c3fcf`.
+
+### Centered-dot follow-up
+
+This follow-up combines subtraction of the preconditioned vector's component
+means with the following compensated `r^T z` dot product. It computes and checks
+all component sums first, then visits centered values in the original vertex
+order. It preserves the multiplication operand order, all input checks before
+mutation, stationary PCG, tolerance and residual-replacement rules, and final
+certification. It adds no retained vector or component metadata.
+
+The initial all-layout implementation (`252929c`) gives useful mixed-path gains
+but uneven connected-case results. A guard inside the new helper (`e88c540`)
+still leaves a connected-path regression. The retained design selects a
+specialized scalar or planned PCG loop once at solver entry (`d72d43a`). Only
+serial solves with multiple components use fusion; connected solves retain the
+original center-then-dot call sequence, and multithreaded plans retain their
+fixed reduction trees. Both scalar loop specializations are tested against
+each other, including warm starts and residual replacements.
+
+The investigation also exposes a benchmark confound. Adding an environment
+field for profiling had changed the timing harness along with the solver.
+Commit `b6c6e611374e3560a4d5ecacd76b7276f0d90287` restores the entire benchmark
+source and dependency manifests to the reference bytes. Its solver source is
+identical to `d72d43a323d560c5debed1dfc430401b2a212738`. In a rotated 21-round
+comparison, restoring the harness improves large connected-path total time
+1.023x [1.007, 1.051] / 1.017x [1.013, 1.025] with one/four RHSs. This isolates
+a harness/build-layout contribution; it does not identify a specific cache or
+instruction mechanism. Treat the earlier comparisons with mismatched harnesses
+as exploratory. Profiling documentation now explains the combined centering
+and dot timing without modifying the timing entry point.
+
+The final comparison uses three fixed binaries with identical benchmark source:
+merged-solver reference `e0d21ae`, paired-norm checkpoint `07af84b`, and candidate
+`b6c6e61`. There are nine rotated external rounds on the original 22 cases, three
+on the ten large cases, and nine on twelve fresh stress wirings from seed
+20260911. The structural dispatch rule was selected before this fresh wiring
+was used. Each invocation has two warm-ups and one recorded round, with one or
+four sequential RHSs. Ratios include setup, workspace allocation, solves and
+certification; larger than one favors the candidate.
+
+| Fixture | Prior/candidate, 1 RHS | Prior/candidate, 4 RHS | Merged/candidate, 1 RHS | Merged/candidate, 4 RHS |
+|---|---:|---:|---:|---:|
+| Path + pairs | 1.037x | 1.033x | 1.288x | 1.293x |
+| Path + isolates | 1.041x | 1.029x | 1.299x | 1.292x |
+| Two paths + pairs | 1.022x | 1.015x | 1.222x | 1.237x |
+| Grid + pairs | 1.020x | 1.023x | 1.177x | 1.217x |
+| Interleaved weighted path + pairs | 1.009x | 1.022x | 1.035x | 1.048x |
+| Fresh interleaved weighted path + pairs | 1.017x | 1.020x | 1.034x | 1.044x |
+| Connected path control | 1.000x | 0.996x | 1.049x | 1.033x |
+
+The path-plus-pairs increment has exploratory paired-bootstrap 95% intervals
+[1.021, 1.060] and [1.007, 1.055]. No original or fresh nine-round total-time
+interval identifies a regression against the paired-norm checkpoint. Some
+improvements and controls remain inconclusive: for example, both grid-mixture
+increment intervals include one. The three-round large path mixture gives
+1.070x/1.045x incremental and 1.213x/1.246x cumulative point estimates; these
+short large-case screens are not confidence-qualified speedup claims.
+
+Separate 21-round comparisons put the large connected path at 0.995
+[0.984, 1.024] / 0.995 [0.982, 1.005] relative to the paired-norm checkpoint.
+The weighted connected path is 1.017 [1.000, 1.036] / 0.998 [0.991, 1.003].
+The large connected grid's three-round one-RHS screen initially suggests a
+slowdown. Its focused 21-round check gives 0.999 [0.992, 1.005] against the
+paired-norm checkpoint and 1.020 [1.018, 1.030] against the merged reference.
+These use the same exploratory whole-pair bootstrap convention as above and
+support approximate local parity, not a universal no-regression guarantee.
+
+The final matrix contains 180 successful invocations, 2,016 samples and 5,040
+original-system certificates. All iteration counts, residuals, tolerances,
+known-solution errors, solution-bit fingerprints and hierarchy levels match.
+The two focused harness comparisons add 252 samples and 630 certificates, also
+matching exactly. The grid control adds 63 samples and 63 certificates with
+the same exact agreement. Raw results from the earlier prototypes remain
+immutable.
+
+Separate profiles validate 1,056 recorded solves across the same 44 fixture
+wirings, with complete vectors and diagnostics matching scalar and one-thread
+planned PCG. The audit also checks exact cross-revision fingerprints and
+diagnostics, phase accounting, and unchanged call counts apart from moving one
+rho dot per iteration into the centering timer. All 32 allocation cases retain
+zero warmed application and caller-buffer PCG allocations, unchanged reported
+retained memory, and setup peaks within their conservative estimates.
+
+All 143 all-feature and 91 default-feature tests pass in debug and release.
+Formatting, root and benchmark Clippy, private rustdoc, the two fixture tests,
+release builds, and Rust 1.85 root/benchmark compatibility checks pass.
+All-feature debug tests and all-feature root Clippy were run on `d72d43a`;
+its solver sources are identical to the final measured `b6c6e61`.
+
+The implementation remains under `experimental-components` on the investigation
+branch. These are local macOS ARM64 results. Percent-level effects are sensitive
+to caller/build layout, so another CPU/caller qualification is needed before
+general promotion. Interleaved-component sum accumulation and CMG application
+remain the larger optimization targets; a fine-level tiny-component portfolio
+would require a separate algorithmic study. In the final separate profiles,
+centering plus dot products occupy approximately 40.7% of the large interleaved
+weighted mixture's solve time. CMG application occupies approximately 68.9% of
+the large connected path and 88.4% of the large dense connected worker-firm
+solve. Use these instrumented shares to choose experiments, not to qualify
+speedups.
+
+### Centered-dot evidence
+
+The timing entry point SHA-256 is
+`c29e8543a17e2c0e26c59c269827ae01178ec103e09008f77b2254e90d60cc91`,
+identical in all final arms. The candidate timing binary SHA-256 is
+`7c86239839fc28c953551979249711b5b04ac37b2deec2437a9aedcc6504eba8`.
+Its separate allocation binary SHA-256 is
+`b70675da16b63808f4a0fccbbc178d92cfd836763926182dc45177bd04509d24`.
+SHA-256 hashes of the local evidence directories' `SHA256SUMS`:
+
+- `/private/tmp/cmg-matched-dot-final`:
+  `cbdfcc8e7e81ef36ce39ca7e12ea0587c7ab8b8225cbeb8304f3eb41abd6b142`.
+- `/private/tmp/cmg-matched-dot-large`:
+  `99e66c24960dda12b556840cc366cc0d1fc35516b35ccafc301a95985c7931e9`.
+- `/private/tmp/cmg-matched-dot-holdout`:
+  `dded4c174f81fec3658973b65a4e0db622a769865b4a188823fcd4cb4a1a6254`.
+- `/private/tmp/cmg-matched-dot-path`:
+  `b474e0f026aa9989c3c843af139db46a86ce3110876ab7c0b601b1b3cb468a9a`.
+- `/private/tmp/cmg-matched-dot-weighted`:
+  `fad2074a02a08307e3baa57bbf6db61ecd4809cfece8477136c3e8a08178358b`.
+- `/private/tmp/cmg-matched-dot-grid-control`:
+  `c2a753e547ddc1cde203c3feb9697646c55d6051dcb28cb861b94e14c2a61220`.
+- `/private/tmp/cmg-matched-dot-profiles`:
+  `92927aeceb07a5299b39c40ae150e895eb0dcc529ff6fadb5d503e3a84064202`.
+- `/private/tmp/cmg-matched-dot-allocations`:
+  `c8fbf8aeba487d8d66a2af0f0f2a45cdb3d6914f6885dc7461088cae80782650`.
