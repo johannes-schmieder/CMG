@@ -763,6 +763,40 @@ fn solve_pcg_core(
     workspace: &mut PcgWorkspace,
     compatibility: GraphCompatibility,
 ) -> Result<PcgDiagnostics, CmgError> {
+    // Choose one monomorphized loop at entry; connected solves keep the original
+    // centering and dot-product call sequence throughout their iterations.
+    #[cfg(feature = "experimental-components")]
+    if preconditioner.finest_components().count() > 1 {
+        return solve_pcg_core_kernel::<true>(
+            graph,
+            preconditioner,
+            rhs,
+            initial_guess,
+            options,
+            workspace,
+            compatibility,
+        );
+    }
+    solve_pcg_core_kernel::<false>(
+        graph,
+        preconditioner,
+        rhs,
+        initial_guess,
+        options,
+        workspace,
+        compatibility,
+    )
+}
+
+fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    rhs: &[f64],
+    initial_guess: Option<&[f64]>,
+    options: PcgOptions,
+    workspace: &mut PcgWorkspace,
+    compatibility: GraphCompatibility,
+) -> Result<PcgDiagnostics, CmgError> {
     let options = options.validate()?;
     let dimension = graph.vertex_count();
     let compatible = match compatibility {
@@ -863,11 +897,19 @@ fn solve_pcg_core(
         &mut workspace.cmg,
     )?;
     #[cfg(feature = "experimental-components")]
-    let mut rho = components.center_and_dot_with_workspace(
-        &mut workspace.preconditioned,
-        &workspace.residual,
-        &mut workspace.component,
-    )?;
+    let mut rho = if FUSED_CENTERING {
+        components.center_and_dot_with_workspace(
+            &mut workspace.preconditioned,
+            &workspace.residual,
+            &mut workspace.component,
+        )?
+    } else {
+        components.center_in_place_with_workspace(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+        )?;
+        dot(&workspace.residual, &workspace.preconditioned)
+    };
     #[cfg(not(feature = "experimental-components"))]
     let mut rho = {
         components.center_in_place_with_workspace(
@@ -973,11 +1015,19 @@ fn solve_pcg_core(
             &mut workspace.cmg,
         )?;
         #[cfg(feature = "experimental-components")]
-        let new_rho = components.center_and_dot_with_workspace(
-            &mut workspace.preconditioned,
-            &workspace.residual,
-            &mut workspace.component,
-        )?;
+        let new_rho = if FUSED_CENTERING {
+            components.center_and_dot_with_workspace(
+                &mut workspace.preconditioned,
+                &workspace.residual,
+                &mut workspace.component,
+            )?
+        } else {
+            components.center_in_place_with_workspace(
+                &mut workspace.preconditioned,
+                &mut workspace.component,
+            )?;
+            dot(&workspace.residual, &workspace.preconditioned)
+        };
         #[cfg(not(feature = "experimental-components"))]
         let new_rho = {
             components.center_in_place_with_workspace(
@@ -1162,6 +1212,48 @@ fn solve_pcg_with_plan_core(
     executor: &ParallelExecutor,
     compatibility: GraphCompatibility,
 ) -> Result<PcgDiagnostics, CmgError> {
+    // Choose one monomorphized loop at entry; connected solves keep the original
+    // centering and dot-product call sequence throughout their iterations.
+    #[cfg(feature = "experimental-components")]
+    if preconditioner.finest_components().count() > 1 && executor.thread_count() == 1 {
+        return solve_pcg_with_plan_core_kernel::<true>(
+            graph,
+            preconditioner,
+            plan,
+            rhs,
+            initial_guess,
+            options,
+            workspace,
+            executor,
+            compatibility,
+        );
+    }
+    solve_pcg_with_plan_core_kernel::<false>(
+        graph,
+        preconditioner,
+        plan,
+        rhs,
+        initial_guess,
+        options,
+        workspace,
+        executor,
+        compatibility,
+    )
+}
+
+#[cfg(feature = "parallel")]
+#[allow(clippy::too_many_arguments)]
+fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    plan: &ParallelCmgPlan,
+    rhs: &[f64],
+    initial_guess: Option<&[f64]>,
+    options: PcgOptions,
+    workspace: &mut PcgWorkspace,
+    executor: &ParallelExecutor,
+    compatibility: GraphCompatibility,
+) -> Result<PcgDiagnostics, CmgError> {
     let options = options.validate()?;
     let dimension = graph.vertex_count();
     let graph_matches = match compatibility {
@@ -1272,13 +1364,20 @@ fn solve_pcg_with_plan_core(
         executor,
     )?;
     #[cfg(feature = "experimental-components")]
-    let mut rho = center_and_dot_with_executor(
-        components,
-        &mut workspace.preconditioned,
-        &workspace.residual,
-        &mut workspace.component,
-        executor,
-    )?;
+    let mut rho = if FUSED_CENTERING {
+        components.center_and_dot_with_workspace(
+            &mut workspace.preconditioned,
+            &workspace.residual,
+            &mut workspace.component,
+        )?
+    } else {
+        components.center_in_place_with_workspace_and_executor(
+            &mut workspace.preconditioned,
+            &mut workspace.component,
+            executor,
+        )?;
+        dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
+    };
     #[cfg(not(feature = "experimental-components"))]
     let mut rho = {
         components.center_in_place_with_workspace_and_executor(
@@ -1405,13 +1504,20 @@ fn solve_pcg_with_plan_core(
             executor,
         )?;
         #[cfg(feature = "experimental-components")]
-        let new_rho = center_and_dot_with_executor(
-            components,
-            &mut workspace.preconditioned,
-            &workspace.residual,
-            &mut workspace.component,
-            executor,
-        )?;
+        let new_rho = if FUSED_CENTERING {
+            components.center_and_dot_with_workspace(
+                &mut workspace.preconditioned,
+                &workspace.residual,
+                &mut workspace.component,
+            )?
+        } else {
+            components.center_in_place_with_workspace_and_executor(
+                &mut workspace.preconditioned,
+                &mut workspace.component,
+                executor,
+            )?;
+            dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
+        };
         #[cfg(not(feature = "experimental-components"))]
         let new_rho = {
             components.center_in_place_with_workspace_and_executor(
@@ -2501,7 +2607,7 @@ pub(crate) fn center_and_dot_with_executor(
     workspace: &mut ComponentWorkspace,
     executor: &ParallelExecutor,
 ) -> Result<f64, CmgError> {
-    if executor.thread_count() == 1 {
+    if components.count() > 1 && executor.thread_count() == 1 {
         components.center_and_dot_with_workspace(values, left, workspace)
     } else {
         // Both centering and the dot product retain their fixed reduction trees.
@@ -2513,6 +2619,76 @@ pub(crate) fn center_and_dot_with_executor(
 #[cfg(all(test, feature = "experimental-components"))]
 mod paired_norm_tests {
     use super::{euclidean_norm, paired_euclidean_norms};
+
+    #[test]
+    fn fused_and_original_scalar_loops_match_with_warm_starts_and_restarts() {
+        use super::{GraphCompatibility, solve_pcg_core_kernel};
+        use crate::{
+            CmgOptions, CmgPreconditioner, Components, Laplacian, PcgOptions, PcgWorkspace,
+        };
+
+        for disconnected in [false, true] {
+            let path_len = if disconnected { 96 } else { 130 };
+            let mut edges: Vec<_> = (0..path_len - 1)
+                .map(|v| (v, v + 1, 0.5 + (v % 7) as f64 / 4.0))
+                .collect();
+            if disconnected {
+                edges.extend((96..128).step_by(2).map(|v| (v, v + 1, 1.0)));
+            }
+            let graph = Laplacian::from_edges(130, edges).unwrap();
+            let preconditioner = CmgPreconditioner::build(
+                &graph,
+                CmgOptions {
+                    direct_threshold: 16,
+                    ..CmgOptions::default()
+                },
+            )
+            .unwrap();
+            let mut target: Vec<_> = (0..130).map(|i| ((i * 13) % 31) as f64 - 15.0).collect();
+            Components::from_laplacian(&graph)
+                .center_in_place(&mut target)
+                .unwrap();
+            let rhs = graph.matvec(&target).unwrap();
+            let guess: Vec<_> = target.iter().map(|x| x / 3.0).collect();
+            let mut reference_workspace = PcgWorkspace::new(&preconditioner);
+            let mut fused_workspace = PcgWorkspace::new(&preconditioner);
+            for initial_guess in [None, Some(guess.as_slice()), None] {
+                let options = PcgOptions {
+                    residual_recompute_interval: 3,
+                    ..PcgOptions::default()
+                };
+                let reference = solve_pcg_core_kernel::<false>(
+                    &graph,
+                    &preconditioner,
+                    &rhs,
+                    initial_guess,
+                    options,
+                    &mut reference_workspace,
+                    GraphCompatibility::Exact,
+                )
+                .unwrap();
+                let fused = solve_pcg_core_kernel::<true>(
+                    &graph,
+                    &preconditioner,
+                    &rhs,
+                    initial_guess,
+                    options,
+                    &mut fused_workspace,
+                    GraphCompatibility::Exact,
+                )
+                .unwrap();
+                assert_eq!(reference, fused);
+                assert!(
+                    reference_workspace
+                        .solution
+                        .iter()
+                        .zip(&fused_workspace.solution)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+                assert!(reference.restarts() > 0);
+            }
+        }
+    }
 
     #[test]
     fn paired_norms_preserve_independent_bits_across_scale_and_zero() {
