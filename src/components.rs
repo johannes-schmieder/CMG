@@ -155,7 +155,9 @@ pub(crate) struct CenteringPlan {
 
 impl CenteringPlan {
     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
-        let Components { labels, sizes } = Components::from_laplacian(graph);
+        let Components { labels, sizes, .. } = Components::from_laplacian(graph);
+        #[cfg(feature = "experimental-components")]
+        let labels = labels.into_vec();
         let vertex_count = labels.len();
         let component_count = sizes.len();
         let labels = if component_count <= 1 {
@@ -330,8 +332,16 @@ impl CenteringPlan {
 /// Connected-component metadata for a weighted graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Components {
+    #[cfg(not(feature = "experimental-components"))]
     labels: Vec<usize>,
+    // Labels never change length after construction. A boxed slice leaves room
+    // for the experimental layout flag without growing the metadata embedded
+    // in every terminal factor (and its containing preconditioner).
+    #[cfg(feature = "experimental-components")]
+    labels: Box<[usize]>,
     sizes: Vec<usize>,
+    #[cfg(feature = "experimental-components")]
+    contiguous: bool,
 }
 
 impl Components {
@@ -367,7 +377,15 @@ impl Components {
             labels[vertex] = label;
             sizes[label] += 1;
         }
-        Self { labels, sizes }
+        Self {
+            #[cfg(feature = "experimental-components")]
+            contiguous: labels.is_sorted(),
+            #[cfg(not(feature = "experimental-components"))]
+            labels,
+            #[cfg(feature = "experimental-components")]
+            labels: labels.into_boxed_slice(),
+            sizes,
+        }
     }
 
     pub(crate) fn try_from_endpoints<I>(vertex_count: usize, endpoints: I) -> Result<Self, CmgError>
@@ -409,7 +427,15 @@ impl Components {
         for &label in &labels {
             sizes[label] += 1;
         }
-        Ok(Self { labels, sizes })
+        Ok(Self {
+            #[cfg(feature = "experimental-components")]
+            contiguous: labels.is_sorted(),
+            #[cfg(not(feature = "experimental-components"))]
+            labels,
+            #[cfg(feature = "experimental-components")]
+            labels: labels.into_boxed_slice(),
+            sizes,
+        })
     }
 
     /// Return the number of connected components.
@@ -582,6 +608,43 @@ impl Components {
             ));
         }
         workspace.validate(self.count())?;
+        #[cfg(feature = "experimental-components")]
+        if self.contiguous && self.count() > 1 {
+            // Every component occupies one slice in label order. Accumulate in
+            // registers and subtract one constant per slice, preserving the
+            // existing vertex order within each compensated sum.
+            let mut start = 0;
+            for (component, &size) in self.sizes.iter().enumerate() {
+                let end = start + size;
+                let mut sum = 0.0;
+                let mut correction = 0.0;
+                for (offset, &value) in values[start..end].iter().enumerate() {
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: start + offset,
+                            column: 0,
+                            value,
+                        });
+                    }
+                    neumaier_add(&mut sum, &mut correction, value);
+                }
+                workspace.sums[component] = sum + correction;
+                workspace.corrections[component] = correction;
+                workspace.means[component] = workspace.sums[component] / size as f64;
+                start = end;
+            }
+            // Complete all finite-value checks before mutating the input, as
+            // the general labeled path does on an error.
+            let mut remaining = values;
+            for (&size, &mean) in self.sizes.iter().zip(&workspace.means) {
+                let (component, tail) = remaining.split_at_mut(size);
+                for value in component {
+                    *value -= mean;
+                }
+                remaining = tail;
+            }
+            return Ok(());
+        }
         self.compensated_sums_into(
             values,
             "Components::center_in_place",
@@ -602,6 +665,88 @@ impl Components {
             }
         }
         Ok(())
+    }
+
+    /// Center a vector and accumulate its dot product with `left` in vertex order.
+    /// All input checks finish before the first centered value is written.
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn center_and_dot_with_workspace(
+        &self,
+        values: &mut [f64],
+        left: &[f64],
+        workspace: &mut ComponentWorkspace,
+    ) -> Result<f64, CmgError> {
+        if values.len() != self.labels.len() {
+            return Err(CmgError::dimension(
+                "Components::center_in_place",
+                self.labels.len(),
+                values.len(),
+            ));
+        }
+        if left.len() != values.len() {
+            return Err(CmgError::dimension(
+                "Components::center_and_dot",
+                values.len(),
+                left.len(),
+            ));
+        }
+        workspace.validate(self.count())?;
+        if self.contiguous {
+            let mut start = 0;
+            for (component, &size) in self.sizes.iter().enumerate() {
+                let end = start + size;
+                let mut sum = 0.0;
+                let mut correction = 0.0;
+                for (offset, &value) in values[start..end].iter().enumerate() {
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: start + offset,
+                            column: 0,
+                            value,
+                        });
+                    }
+                    neumaier_add(&mut sum, &mut correction, value);
+                }
+                workspace.sums[component] = sum + correction;
+                workspace.corrections[component] = correction;
+                workspace.means[component] = workspace.sums[component] / size as f64;
+                start = end;
+            }
+        } else {
+            self.compensated_sums_into(
+                values,
+                "Components::center_in_place",
+                &mut workspace.sums,
+                &mut workspace.corrections,
+            )?;
+            for component in 0..self.count() {
+                workspace.means[component] =
+                    workspace.sums[component] / self.sizes[component] as f64;
+            }
+        }
+
+        let mut sum = 0.0;
+        let mut correction = 0.0;
+        if self.contiguous {
+            let mut remaining = values;
+            let mut left_remaining = left;
+            for (&size, &mean) in self.sizes.iter().zip(&workspace.means) {
+                let (component, tail) = remaining.split_at_mut(size);
+                let (left_component, left_tail) = left_remaining.split_at(size);
+                for (value, &left) in component.iter_mut().zip(left_component) {
+                    *value -= mean;
+                    crate::graph::compensated_add(&mut sum, &mut correction, left * *value);
+                }
+                remaining = tail;
+                left_remaining = left_tail;
+            }
+        } else {
+            for ((value, &label), &left) in values.iter_mut().zip(&self.labels).zip(left) {
+                *value -= workspace.means[label];
+                crate::graph::compensated_add(&mut sum, &mut correction, left * *value);
+            }
+        }
+        Ok(sum + correction)
     }
 
     #[cfg(feature = "parallel")]
@@ -876,6 +1021,205 @@ fn union_min_root(parent: &mut [usize], left: usize, right: usize) {
         (right_root, left_root)
     };
     parent[child] = root;
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod contiguous_tests {
+    use super::{Components, Laplacian};
+
+    fn bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    #[test]
+    fn contiguous_centering_matches_labeled_path_with_reused_workspace() {
+        for graph in [
+            Laplacian::from_edges(0, []).unwrap(),
+            Laplacian::from_edges(9, []).unwrap(),
+            Laplacian::from_edges(9, (0..8).map(|v| (v, v + 1, 1.0))).unwrap(),
+            Laplacian::from_edges(15, [(0, 1, 1.0), (1, 2, 1.0), (4, 5, 1.0), (7, 8, 1.0)])
+                .unwrap(),
+        ] {
+            let components = Components::from_laplacian(&graph);
+            assert!(components.contiguous);
+            let prepared = Components::try_from_endpoints(
+                graph.vertex_count(),
+                graph.edges().iter().map(|e| (e.u(), e.v())),
+            )
+            .unwrap();
+            assert_eq!(components, prepared);
+            let mut labeled = components.clone();
+            labeled.contiguous = false;
+            let mut workspace = components.workspace();
+            let mut reference_workspace = labeled.workspace();
+            let values = [1e150, 1.0, -1e150, -0.0, 0.0, 1e-150, -1e-150];
+            for offset in 0..values.len() {
+                let mut actual: Vec<_> = (0..graph.vertex_count())
+                    .map(|v| values[(v + offset) % values.len()])
+                    .collect();
+                let mut expected = actual.clone();
+                workspace.sums.fill(f64::NAN);
+                workspace.corrections.fill(f64::NAN);
+                workspace.means.fill(f64::NAN);
+                components
+                    .center_in_place_with_workspace(&mut actual, &mut workspace)
+                    .unwrap();
+                labeled
+                    .center_in_place_with_workspace(&mut expected, &mut reference_workspace)
+                    .unwrap();
+                assert_eq!(bits(&actual), bits(&expected));
+                assert_eq!(bits(&workspace.sums), bits(&reference_workspace.sums));
+                assert_eq!(
+                    bits(&workspace.corrections),
+                    bits(&reference_workspace.corrections)
+                );
+                assert_eq!(bits(&workspace.means), bits(&reference_workspace.means));
+            }
+        }
+        let scattered = Laplacian::from_edges(4, [(0, 2, 1.0), (1, 3, 1.0)]).unwrap();
+        assert!(!Components::from_laplacian(&scattered).contiguous);
+        assert!(
+            !Components::try_from_endpoints(4, [(0, 2), (1, 3)])
+                .unwrap()
+                .contiguous
+        );
+    }
+
+    #[test]
+    fn contiguous_centering_preserves_input_on_nonfinite_failure() {
+        let graph = Laplacian::from_edges(6, [(0, 1, 1.0), (2, 3, 1.0)]).unwrap();
+        let components = Components::from_laplacian(&graph);
+        let mut workspace = components.workspace();
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut input = vec![1.0, 3.0, 5.0, bad, bad, 0.0];
+            let before = bits(&input);
+            let error = components
+                .center_in_place_with_workspace(&mut input, &mut workspace)
+                .unwrap_err();
+            match error {
+                crate::CmgError::NonFiniteMatrixValue { row, column, value } => {
+                    assert_eq!((row, column), (3, 0));
+                    assert_eq!(value.to_bits(), bad.to_bits());
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+            assert_eq!(bits(&input), before);
+            input[3] = 7.0;
+            input[4] = 0.0;
+            components
+                .center_in_place_with_workspace(&mut input, &mut workspace)
+                .unwrap();
+            assert_eq!(input, [-1.0, 1.0, -1.0, 1.0, 0.0, 0.0]);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod centered_dot_tests {
+    use super::{ComponentWorkspace, Components, Laplacian};
+    use crate::{CmgError, graph::compensated_sum};
+
+    fn bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    #[test]
+    fn centered_dot_matches_separate_passes_across_layouts_and_scales() {
+        for graph in [
+            Laplacian::from_edges(0, []).unwrap(),
+            Laplacian::from_edges(9, []).unwrap(),
+            Laplacian::from_edges(9, (0..8).map(|v| (v, v + 1, 1.0))).unwrap(),
+            Laplacian::from_edges(15, [(0, 1, 1.0), (1, 2, 1.0), (4, 5, 1.0)]).unwrap(),
+            Laplacian::from_edges(15, [(0, 4, 1.0), (1, 5, 1.0), (4, 8, 1.0)]).unwrap(),
+        ] {
+            let components = Components::try_from_endpoints(
+                graph.vertex_count(),
+                graph.edges().iter().map(|e| (e.u(), e.v())),
+            )
+            .unwrap();
+            let mut workspace = components.workspace();
+            let mut reference_workspace = components.workspace();
+            let values = [1e150, 1.0, -1e150, -0.0, 0.0, 1e-150, -1e-150];
+            for scale in [0.0, 1e-150, 1.0, 1e150] {
+                for offset in 0..values.len() {
+                    let mut actual: Vec<_> = (0..graph.vertex_count())
+                        .map(|v| values[(v + offset) % values.len()])
+                        .collect();
+                    let mut expected = actual.clone();
+                    let left: Vec<_> = (0..graph.vertex_count())
+                        .map(|v| scale * (((v * 17 + 3) % 19) as f64 - 9.0))
+                        .collect();
+                    workspace.sums.fill(f64::NAN);
+                    workspace.corrections.fill(f64::NAN);
+                    workspace.means.fill(f64::NAN);
+                    components
+                        .center_in_place_with_workspace(&mut expected, &mut reference_workspace)
+                        .unwrap();
+                    let reference = compensated_sum(left.iter().zip(&expected).map(|(a, b)| a * b));
+                    let actual_dot = components
+                        .center_and_dot_with_workspace(&mut actual, &left, &mut workspace)
+                        .unwrap();
+                    assert_eq!(bits(&actual), bits(&expected));
+                    assert_eq!(actual_dot.to_bits(), reference.to_bits());
+                    assert_eq!(bits(&workspace.sums), bits(&reference_workspace.sums));
+                    assert_eq!(
+                        bits(&workspace.corrections),
+                        bits(&reference_workspace.corrections)
+                    );
+                    assert_eq!(bits(&workspace.means), bits(&reference_workspace.means));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn centered_dot_preserves_input_on_validation_errors_and_reuses_workspace() {
+        for edges in [[(0, 1, 1.0), (2, 3, 1.0)], [(0, 2, 1.0), (1, 3, 1.0)]] {
+            let components = Components::from_laplacian(&Laplacian::from_edges(6, edges).unwrap());
+            let mut workspace = components.workspace();
+            for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut values = [1.0, 3.0, 5.0, bad, bad, 0.0];
+                let before = bits(&values);
+                let error = components
+                    .center_and_dot_with_workspace(&mut values, &[1.0; 6], &mut workspace)
+                    .unwrap_err();
+                match error {
+                    CmgError::NonFiniteMatrixValue { row, column, value } => {
+                        assert_eq!((row, column), (3, 0));
+                        assert_eq!(value.to_bits(), bad.to_bits());
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+                assert_eq!(bits(&values), before);
+                values[3] = 7.0;
+                values[4] = 0.0;
+                let mut expected = values;
+                components.center_in_place(&mut expected).unwrap();
+                let actual = components
+                    .center_and_dot_with_workspace(&mut values, &[1.0; 6], &mut workspace)
+                    .unwrap();
+                assert_eq!(bits(&values), bits(&expected));
+                assert_eq!(actual.to_bits(), compensated_sum(expected).to_bits());
+            }
+            let mut values = [1.0; 6];
+            assert!(
+                components
+                    .center_and_dot_with_workspace(&mut values, &[1.0; 5], &mut workspace)
+                    .is_err()
+            );
+            assert_eq!(values, [1.0; 6]);
+            assert!(
+                components
+                    .center_and_dot_with_workspace(
+                        &mut values,
+                        &[1.0; 6],
+                        &mut ComponentWorkspace::new(0)
+                    )
+                    .is_err()
+            );
+            assert_eq!(values, [1.0; 6]);
+        }
+    }
 }
 
 #[cfg(all(test, feature = "parallel"))]

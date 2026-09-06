@@ -4,13 +4,28 @@ This opt-in study addresses [issue #2](https://github.com/johannes-schmieder/CMG
 The branch starts from `main` at `90e1fe0b0c14065155532711246ede6678bb4935`.
 Existing builders, SDDM normalization, automatic routing, and SCC campaigns keep
 their existing behavior. This is a local development prototype, not a promoted
-algorithm or a platform qualification.
+algorithm. Timing evidence is local macOS ARM64; correctness CI covers Ubuntu,
+macOS and Windows.
 
 The current development recommendation is compact coarse storage with
 `preserve_unpruned_stopping: true`, plus ordered sparse terminal factors. The
 latest kernel checkpoint below improves both connected terminal setup and
 mixed-component cycles. The original active-count stopping experiment remains
 available for comparison; it still regresses on some worker-firm cases.
+
+## Latest result
+
+Numerical checkpoint `ab2b0a4` retains residual/restriction fusion and terminal
+scaling fusion, with identical PCG solutions and certificates. The original
+32 fixtures and held-out stress seed 20260913 pass the 2% connected one-shot
+control margin. One development clique wiring remains inconclusive at that
+margin; this is not a universal no-regression claim. The indexed traversal trial
+was removed. Deep recursive timers require the separate `cycle-profiling` feature.
+
+The new explicit `ComponentPcgExperiment` prepares direct isolate/pair blocks
+and stationary PCG on the remaining graph. It helps many path, clique and grid
+mixtures but can substantially regress worker-firm cases. It is not selected
+automatically. See the final qualification and reuse results below.
 
 ## Current approach
 
@@ -579,3 +594,612 @@ The candidate timing binary SHA-256 is
 the allocation binary SHA-256 is
 `d4f9c243e46d00b31edfe3a1101e821e924d2c7fc161add9ce69437e47670600`.
 Raw results and one-off comparison/audit scripts remain outside the repository.
+
+## Follow-up investigation after merge
+
+PR [#4](https://github.com/johannes-schmieder/CMG/pull/4) merged as
+`1921d66f86455540336a73b76f7619deec0b75bb` after Ubuntu quality checks and
+Linux/macOS/Windows tests passed. Its source commits remain in the merge history.
+The follow-up branch starts at that exact merge and keeps the feature opt-in.
+
+The `e0d21ae` harness adds a separate `--profile` mode using the existing PCG
+phase profiler with one executor thread. Every profiled vector and diagnostic
+must match scalar and planned PCG, followed by a fresh residual check. Nine
+recorded rounds and four RHSs cover the 32 frozen cases and 12 held-out stress
+wirings. Profiles allocate their own workspaces and add timers; use their phase
+shares for attribution, not as an end-to-end speedup measurement.
+
+Profiles identify finest-component centering as a substantial cost on mixed
+paths: approximately 26% on the large path mixture, 33% on the large weighted
+mixture, and 38% on the smaller weighted mixture. CMG application occupies
+approximately 79% on the large connected grid and 88% on the large dense
+connected worker-firm graph. These are separate optimization targets.
+
+The first isolated prototype specializes finest-component centering when labels
+are nondecreasing, so each component occupies one contiguous slice. It retains
+the same compensated additions in vertex order, validates all inputs before
+modifying any values, and subtracts one mean per slice. Constructors record one
+feature-gated boolean; no new heap buffer is retained. Interleaved and single
+components use the existing path. This experiment is compiled only with
+`experimental-components`; within that build it also applies to ordinary
+builders and prepared component metadata.
+
+Compare the prototype to `e0d21ae` with the same compiler and harness, preserved
+stopping, frozen seeds and identical RHSs. Start with one paired round across
+all 32 cases. If correctness passes, use nine rotated external rounds for the
+22 original cases and three for the ten larger cases, with one and four RHSs.
+Check exact diagnostics and solution-bit fingerprints before interpreting
+total times, and separately check warmed allocations and setup estimates.
+The `20260907` stress wiring remains the held-out correctness/performance check.
+
+### Investigation results and remaining priorities
+
+The prototype numerical source is
+`ce0b02410fd0b4fb293941f929457d54cb949255`; its reference is
+`e0d21aed3f84268f46a27786051606e95a6dbfb5`, whose solver sources are identical
+to merged `1921d66`. Both use the new harness and Rust 1.97.1 release builds on
+the same local macOS aarch64 host. The table gives median paired
+`reference / prototype` total-time ratios, including setup and certification:
+
+| Fixture | 1 RHS | 4 RHS |
+|---|---:|---:|
+| Path + pairs | 1.231x | 1.256x |
+| Path + isolates | 1.235x | 1.242x |
+| Two paths + pairs | 1.178x | 1.190x |
+| Grid + pairs | 1.120x | 1.132x |
+| All triangles | 1.179x | 1.240x |
+| Material at direct threshold | 1.348x | 1.382x |
+| Large path + pairs | 1.170x | 1.210x |
+| Large grid + pairs | 1.120x | 1.133x |
+| Large all pairs | 1.037x | 1.079x |
+| Large connected path control | 0.983x | 0.982x |
+
+Contiguous mixed paths and grids improve consistently in the larger screen.
+Interleaved worker-firm and weighted mixtures remain approximately at parity;
+this specialization does not speed up arbitrary component layouts. The held-out
+material-at-threshold case improves 1.339x/1.389x, while other held-out cases
+mostly remain within approximately 1% of the reference. The large connected
+path's approximately 2% paired regression is unresolved. Individual external
+rounds also contain timing outliers, including regressions on some otherwise
+improved small cases. These are median local results without confidence bounds,
+not a universal no-regression qualification or a second merge recommendation.
+
+The baseline profiling run contains 1,584 recorded profiles, all matching both
+scalar and planned results bit for bit. Focused post-change profiles cover 108
+additional solves on large path, grid and weighted mixtures. They support the
+intended mechanism: median centering time on the large path mixture falls from
+23.61 to 9.64 ms, and on the large grid mixture from 9.35 to 5.02 ms. Centering
+shares fall from 26.1% to 12.5% and 22.3% to 13.5%, respectively. The interleaved
+weighted mixture stays at 33.2%. These separate instrumented runs explain the
+mechanism; the paired uninstrumented runs above establish the reported ratios.
+
+All 120 final comparison invocations succeeded with empty stderr: 1,344 samples
+and 3,360 original-system certificates. Iterations, residuals, tolerances,
+known-solution errors and full-vector bit fingerprints match in every pair.
+Allocation instrumentation passes on all 32 cases: zero warmed application and
+caller-buffer PCG allocations, and requested setup peaks within the conservative
+estimates. The two new centering tests cover exact fallback comparisons,
+prepared metadata, signed zero, cancellation, wide scales, nonfinite errors,
+unchanged input on failure, and workspace reuse. All 137 all-feature and 91
+default-feature tests pass in debug and release; root/benchmark Clippy,
+formatting, private rustdoc, fixture tests and Rust 1.85 compatibility checks
+also pass. The new kernel remains on the investigation branch and has not yet
+received its own cross-platform CI qualification.
+
+The next priorities follow from the measured costs:
+
+1. Investigate a retained traversal plan for interleaved components, preserving
+   ascending vertex order inside each compensated sum. Compare the cost of
+   extra indices and indirect reads with the existing labeled pass; account for
+   retained memory and setup before adopting it. The weighted mixtures still
+   spend roughly one third of solve time in finest-component centering.
+2. Attribute CMG application internally before changing it. Grids and dense
+   worker-firm cases spend 79–88% of solve time there; distinguish edge
+   traversals, smoothing, transfers, coarse centering and terminal solves before
+   selecting another loop fusion or storage change.
+3. Treat sparse terminal reach lists as a targeted setup experiment. Connected
+   path terminals have about 0.8% strict fill, but setup is already only about
+   3.5%/0.9% of large-path total time with one/four RHSs. The large sparse
+   worker-firm terminal has 53.4% fill. Avoid extrapolating the abundance of zero
+   scan slots into an end-to-end gain or selecting a dense/sparse threshold
+   from these endpoints alone.
+
+The original merged checkpoint also passed its normal post-merge Rust CI,
+serial/parallel performance workflows and pinned C-kernel comparison. Those
+results apply to `1921d66`, not to this subsequent prototype.
+
+### Follow-up local evidence
+
+Source and binary identities, commands, process order, return codes and raw
+records remain in the local manifests. SHA-256 hashes of their `SHA256SUMS`:
+
+- `/private/tmp/cmg-components-e0d21ae-profile/SHA256SUMS`:
+  `c04ca634250b71a2f0bac2adef48dc1c5a8ad83aa2e5ebf9e7ebf819a106959c`.
+- `/private/tmp/cmg-centering-ce0b024-final/SHA256SUMS`:
+  `b0ea0f69ffb87bb3a470a5ae2b91111c254532e3c68e2a27bacaa43de785a7dd`.
+- `/private/tmp/cmg-centering-ce0b024-large/SHA256SUMS`:
+  `570d816877fd7d2b6e454811c2c747f2a55e3ebf8da3f0cf7c416fc87e75997c`.
+- `/private/tmp/cmg-centering-ce0b024-holdout/SHA256SUMS`:
+  `0c1151260c5b328b54d5dd6b7dbb4119a7f8a106955664f712f7047b969c2fc0`.
+- `/private/tmp/cmg-centering-ce0b024-instrumentation/SHA256SUMS`:
+  `5cc7dfd580b6893ba3ccb3343581afc5474754ca8a48e384e1fc241a7c701b2c`.
+
+Reference timing binary SHA-256:
+`bcc55e1da5c950c372378a5e7b97c3540dbcff86e1bb1ca8d2a40f6d65a0f60d`.
+Prototype timing binary SHA-256:
+`3098a59c3c8255c0ac1ffa8d9a38c7d75811c95898f11c0ace963b3953f69db1`.
+
+### Regression diagnosis and paired PCG norms
+
+Two subsequent 21-round, interleaved comparisons reproduce the large connected
+path regression: the centering prototype takes approximately 2–3% longer than
+`e0d21ae`, with identical iterations, diagnostics and solution fingerprints.
+The public CMG application also slows down, while setup stays near parity.
+Thus the change in solve time is not explained by poorer Krylov convergence.
+
+The added layout flag grew `Components` from 48 to 56 bytes on this build,
+`GroundedLdl` from 280 to 288, and `CmgPreconditioner` from 424 to 432. Commit
+`b8fd5b483baad9702cf54e7e7d188898c3ea6bf6` stores the fixed-length experimental
+labels as a boxed slice, restoring all three sizes without another heap buffer
+or unsafe representation. The default feature configuration retains its
+original vector storage. The compact version removes most of the measured
+penalty: reference/compact total ratios are 0.988 [0.979, 1.003] for one RHS and
+1.001 [0.991, 1.007] for four. These results support a layout contribution;
+they do not isolate a particular cache effect from changes in generated code.
+
+Commit `07af84bc8baf217331a073911cee7cda278bad57` then pairs the solution and
+recursive-residual norms in each PCG iteration. Their independent maximum-scale
+and compensated-square-sum chains share two traversal loops. Each norm retains
+its original per-element divisions and compensated addition order, including
+the zero-scale case. It does not replace scaled norms with unscaled squares or
+change residual replacement, tolerance calculation or certification. This
+kernel is feature-gated and also serves the one-thread planned/profiling path;
+multithreaded plans retain their existing fixed-chunk reduction trees.
+
+On this ARM64 release build, the compiler places the two compensated chains in
+separate SIMD lanes (`fdiv.2d`, `fadd.2d`, `fsub.2d`), without reassociating either
+sum across vertices. Separate profiles show the large connected path's median
+norm phase falling from 4.27 to 2.46 ms, approximately 42% less time. The large
+path mixture falls from 5.90 to 3.44 ms and the interleaved weighted mixture
+from 5.43 to 3.04 ms. These are phase attribution measurements, not whole-solve
+speedups.
+
+The final three-arm comparison keeps the reference, compact metadata and paired
+norm binaries fixed. It repeats the original 22 cases and 12 held-out stress
+wirings nine times, and the ten large cases three times, with one and four RHSs.
+The connected-path regression receives a separate 21-round comparison. Ratios
+below include setup, workspace allocation, all solves and certification; larger
+than one favors the paired-norm candidate.
+
+| Fixture | Reference/candidate, 1 RHS | Reference/candidate, 4 RHS | Compact/candidate, 1 RHS | Compact/candidate, 4 RHS |
+|---|---:|---:|---:|---:|
+| Large connected path, 21 rounds | 1.025x | 1.028x | 1.039x | 1.029x |
+| Weighted connected path | 1.051x | 1.095x | 1.066x | 1.072x |
+| Interleaved weighted path + pairs | 1.033x | 1.032x | 1.033x | 1.045x |
+| Path + pairs | 1.255x | 1.263x | 1.014x | 1.011x |
+| Grid + pairs | 1.167x | 1.160x | 1.033x | 1.032x |
+| Dense connected worker-firm | 1.002x | 1.004x | 0.996x | 0.993x |
+
+The large connected path's reference/candidate ratios have exploratory paired
+bootstrap 95% intervals of [1.017, 1.039] and [1.016, 1.040]. The earlier local
+regression has therefore become a small net improvement in this comparison.
+The held-out weighted connected path improves 1.059x/1.062x overall; the paired
+norm increment is 1.048x/1.057x. The three-round large path and grid mixtures
+retain overall gains of 1.179x/1.212x and 1.138x/1.173x, respectively.
+
+Intervals resample whole external-round pairs 10,000 times, reporting the median
+ratio with percentile endpoints and fixed resampling seed 20260909. They are
+exploratory local intervals without adjustment for multiple fixtures, not a
+cross-machine guarantee. No nine-round original or held-out total-time interval
+identifies a regression. Individual rounds still contain outliers; three large
+screen rounds alone cannot resolve percent-level control differences.
+
+The one-RHS large worker-firm cases with suspicious three-round point estimates
+receive a separate 21-round follow-up. Their reference/candidate total ratios
+are 1.005 [0.999, 1.007] for dense connected, 1.011 [1.003, 1.023] for dense
+mixed, 1.011 [1.006, 1.025] for sparse connected, and 1.021 [1.019, 1.037] for
+sparse mixed. This focused check finds small gains or parity, with no clear
+regression under the same exploratory interval convention.
+
+The full comparison has 180 successful invocations, 2,016 samples and 5,040
+original-system certificates. The dedicated path comparison adds 126 samples
+and 315 certificates; the worker-firm follow-up adds 63 invocations, 252 samples
+and 252 certificates. All paired iteration counts, residuals, tolerances,
+known-solution errors, solution-bit fingerprints and hierarchy levels match.
+Separate profiling covers 1,056 recorded solves across both binaries and all
+44 fixture wirings, with complete vectors and diagnostics matching scalar and
+one-thread planned PCG. All 32 allocation cases have zero warmed application
+and caller-buffer PCG allocations and setup peaks within their estimates.
+
+All 139 all-feature and 91 default-feature tests pass in debug and release,
+including the new extreme-scale, signed-zero and executor-reduction checks.
+Formatting, root and benchmark Clippy, private rustdoc, the two fixture tests,
+release builds, and Rust 1.85 root/benchmark compatibility checks pass. This is
+still an opt-in investigation branch; its measured gains are from local macOS
+ARM64 runs and it has not received a new cross-platform CI qualification.
+
+The most promising further experiments are:
+
+1. Fuse the final centering subtraction of the preconditioned vector with
+   `r^T z`, retaining its vertex-ordered compensated dot product. This could
+   remove a full vector pass without changing PCG, but the fused serial
+   reduction could also inhibit vectorization of the subtraction. Measure the
+   complete iteration and preserve finite-input checks before mutation.
+2. Build a stable component traversal for interleaved labels. Their largest
+   weighted mixture still spends approximately 34.5% of solve time in finest
+   centering after the norm improvement. Account for extra indices, gathering
+   and setup; preserve ascending vertex order within each component sum.
+3. Solve tiny disconnected components once and exclude them from finest-level
+   Krylov vectors. Coarse pruning currently leaves those fine vertices in every
+   vector update, centering operation and reduction. A direct tiny-component
+   solve plus PCG on the remaining block could remove that repeated work. This
+   changes the recurrence and requires a separate experiment with full-system
+   residual certification, compatible error budgets and correct gauges; it is
+   not part of the bit-preserving kernel above.
+4. Profile inside CMG application before attempting another dense-graph PCG
+   optimization. After pairing norms, it occupies approximately 69% of large
+   connected-path solves and 88.5% of large dense worker-firm solves. Distinguish
+   smoothing/edge traversals, restriction/prolongation, repeated coarse cycles
+   and terminal solves; outer-vector optimizations have limited scope there.
+
+### Regression follow-up evidence
+
+Raw records and one-off runners/auditors remain outside the repository. The
+following are SHA-256 hashes of each directory's `SHA256SUMS`:
+
+- `/private/tmp/cmg-connected-path-reproduction`:
+  `454ebd9bc1e7297e0817922c85d936cf298c0c00a52b07d8a3c831b5b195a712`.
+- `/private/tmp/cmg-connected-path-layout`:
+  `875a7ca91a005bf21f4aad7d0a2b778ac46a7d568efdaf7fc0e0cbe7dde4e2d2`.
+- `/private/tmp/cmg-paired-norm-path`:
+  `a45cafbaf1f1391cef9643e4fb7ffd6c7f9792c6883a88bc41128024127127b2`.
+- `/private/tmp/cmg-paired-norm-final`:
+  `b2f80079eda70bee0bd2656a012f3b09aabf904202d19231a312d4ee7aa162cb`.
+- `/private/tmp/cmg-paired-norm-large`:
+  `44169dc07df842330d1505e69dca6aa8ca3458f2bcd8c973d2dc56e120b0b8ab`.
+- `/private/tmp/cmg-paired-norm-holdout`:
+  `2d0defe765fe5ac55489469d3c2b33c649957c687a9113ff3884ff1b83a4d08b`.
+- `/private/tmp/cmg-paired-norm-worker-controls`:
+  `13d665535af6a98ae7d7f937e35f47d28ca3ee2c7a9f0707e8fab0e26f328c2b`.
+- `/private/tmp/cmg-paired-norm-profiles`:
+  `082ffebaabba0a542a13df3d5d927908f9d956b21ef0c28132e1b1083bab38ba`.
+- `/private/tmp/cmg-paired-norm-allocations`:
+  `8ca548d18fd736eb0074cbe96b7c73156765c3654df1d21668fddaea0f945d81`.
+
+The compact-metadata timing binary SHA-256 is
+`fe866a548b182dc02190a37e7895c2a43f434f043ae6d64bf95be68f02af1c38`.
+The paired-norm timing binary SHA-256 is
+`f4b2ce9a3594fce1fbdee8dd1d64766483e301e031b51ed3fae7b9aca4c3bdb2`;
+its separate allocation binary SHA-256 is
+`5071e78e9789ee304540110a2a66760c0e2729e602a83a5ceb42ffaf898c3fcf`.
+
+### Centered-dot follow-up
+
+This follow-up combines subtraction of the preconditioned vector's component
+means with the following compensated `r^T z` dot product. It computes and checks
+all component sums first, then visits centered values in the original vertex
+order. It preserves the multiplication operand order, all input checks before
+mutation, stationary PCG, tolerance and residual-replacement rules, and final
+certification. It adds no retained vector or component metadata.
+
+The initial all-layout implementation (`252929c`) gives useful mixed-path gains
+but uneven connected-case results. A guard inside the new helper (`e88c540`)
+still leaves a connected-path regression. The retained design selects a
+specialized scalar or planned PCG loop once at solver entry (`d72d43a`). Only
+serial solves with multiple components use fusion; connected solves retain the
+original center-then-dot call sequence, and multithreaded plans retain their
+fixed reduction trees. Both scalar loop specializations are tested against
+each other, including warm starts and residual replacements.
+
+The investigation also exposes a benchmark confound. Adding an environment
+field for profiling had changed the timing harness along with the solver.
+Commit `b6c6e611374e3560a4d5ecacd76b7276f0d90287` restores the entire benchmark
+source and dependency manifests to the reference bytes. Its solver source is
+identical to `d72d43a323d560c5debed1dfc430401b2a212738`. In a rotated 21-round
+comparison, restoring the harness improves large connected-path total time
+1.023x [1.007, 1.051] / 1.017x [1.013, 1.025] with one/four RHSs. This isolates
+a harness/build-layout contribution; it does not identify a specific cache or
+instruction mechanism. Treat the earlier comparisons with mismatched harnesses
+as exploratory. Profiling documentation now explains the combined centering
+and dot timing without modifying the timing entry point.
+
+The final comparison uses three fixed binaries with identical benchmark source:
+merged-solver reference `e0d21ae`, paired-norm checkpoint `07af84b`, and candidate
+`b6c6e61`. There are nine rotated external rounds on the original 22 cases, three
+on the ten large cases, and nine on twelve fresh stress wirings from seed
+20260911. The structural dispatch rule was selected before this fresh wiring
+was used. Each invocation has two warm-ups and one recorded round, with one or
+four sequential RHSs. Ratios include setup, workspace allocation, solves and
+certification; larger than one favors the candidate.
+
+| Fixture | Prior/candidate, 1 RHS | Prior/candidate, 4 RHS | Merged/candidate, 1 RHS | Merged/candidate, 4 RHS |
+|---|---:|---:|---:|---:|
+| Path + pairs | 1.037x | 1.033x | 1.288x | 1.293x |
+| Path + isolates | 1.041x | 1.029x | 1.299x | 1.292x |
+| Two paths + pairs | 1.022x | 1.015x | 1.222x | 1.237x |
+| Grid + pairs | 1.020x | 1.023x | 1.177x | 1.217x |
+| Interleaved weighted path + pairs | 1.009x | 1.022x | 1.035x | 1.048x |
+| Fresh interleaved weighted path + pairs | 1.017x | 1.020x | 1.034x | 1.044x |
+| Connected path control | 1.000x | 0.996x | 1.049x | 1.033x |
+
+The path-plus-pairs increment has exploratory paired-bootstrap 95% intervals
+[1.021, 1.060] and [1.007, 1.055]. No original or fresh nine-round total-time
+interval identifies a regression against the paired-norm checkpoint. Some
+improvements and controls remain inconclusive: for example, both grid-mixture
+increment intervals include one. The three-round large path mixture gives
+1.070x/1.045x incremental and 1.213x/1.246x cumulative point estimates; these
+short large-case screens are not confidence-qualified speedup claims.
+
+Separate 21-round comparisons put the large connected path at 0.995
+[0.984, 1.024] / 0.995 [0.982, 1.005] relative to the paired-norm checkpoint.
+The weighted connected path is 1.017 [1.000, 1.036] / 0.998 [0.991, 1.003].
+The large connected grid's three-round one-RHS screen initially suggests a
+slowdown. Its focused 21-round check gives 0.999 [0.992, 1.005] against the
+paired-norm checkpoint and 1.020 [1.018, 1.030] against the merged reference.
+These use the same exploratory whole-pair bootstrap convention as above and
+support approximate local parity, not a universal no-regression guarantee.
+
+The final matrix contains 180 successful invocations, 2,016 samples and 5,040
+original-system certificates. All iteration counts, residuals, tolerances,
+known-solution errors, solution-bit fingerprints and hierarchy levels match.
+The two focused harness comparisons add 252 samples and 630 certificates, also
+matching exactly. The grid control adds 63 samples and 63 certificates with
+the same exact agreement. Raw results from the earlier prototypes remain
+immutable.
+
+Separate profiles validate 1,056 recorded solves across the same 44 fixture
+wirings, with complete vectors and diagnostics matching scalar and one-thread
+planned PCG. The audit also checks exact cross-revision fingerprints and
+diagnostics, phase accounting, and unchanged call counts apart from moving one
+rho dot per iteration into the centering timer. All 32 allocation cases retain
+zero warmed application and caller-buffer PCG allocations, unchanged reported
+retained memory, and setup peaks within their conservative estimates.
+
+All 143 all-feature and 91 default-feature tests pass in debug and release.
+Formatting, root and benchmark Clippy, private rustdoc, the two fixture tests,
+release builds, and Rust 1.85 root/benchmark compatibility checks pass.
+All-feature debug tests and all-feature root Clippy were run on `d72d43a`;
+its solver sources are identical to the final measured `b6c6e61`.
+
+The implementation remains under `experimental-components` on the investigation
+branch. These are local macOS ARM64 results. Percent-level effects are sensitive
+to caller/build layout, so another CPU/caller qualification is needed before
+general promotion. Interleaved-component sum accumulation and CMG application
+remain the larger optimization targets; a fine-level tiny-component portfolio
+would require a separate algorithmic study. In the final separate profiles,
+centering plus dot products occupy approximately 40.7% of the large interleaved
+weighted mixture's solve time. CMG application occupies approximately 68.9% of
+the large connected path and 88.4% of the large dense connected worker-firm
+solve. Use these instrumented shares to choose experiments, not to qualify
+speedups.
+
+### Centered-dot evidence
+
+The timing entry point SHA-256 is
+`c29e8543a17e2c0e26c59c269827ae01178ec103e09008f77b2254e90d60cc91`,
+identical in all final arms. The candidate timing binary SHA-256 is
+`7c86239839fc28c953551979249711b5b04ac37b2deec2437a9aedcc6504eba8`.
+Its separate allocation binary SHA-256 is
+`b70675da16b63808f4a0fccbbc178d92cfd836763926182dc45177bd04509d24`.
+SHA-256 hashes of the local evidence directories' `SHA256SUMS`:
+
+- `/private/tmp/cmg-matched-dot-final`:
+  `cbdfcc8e7e81ef36ce39ca7e12ea0587c7ab8b8225cbeb8304f3eb41abd6b142`.
+- `/private/tmp/cmg-matched-dot-large`:
+  `99e66c24960dda12b556840cc366cc0d1fc35516b35ccafc301a95985c7931e9`.
+- `/private/tmp/cmg-matched-dot-holdout`:
+  `dded4c174f81fec3658973b65a4e0db622a769865b4a188823fcd4cb4a1a6254`.
+- `/private/tmp/cmg-matched-dot-path`:
+  `b474e0f026aa9989c3c843af139db46a86ce3110876ab7c0b601b1b3cb468a9a`.
+- `/private/tmp/cmg-matched-dot-weighted`:
+  `fad2074a02a08307e3baa57bbf6db61ecd4809cfece8477136c3e8a08178358b`.
+- `/private/tmp/cmg-matched-dot-grid-control`:
+  `c2a753e547ddc1cde203c3feb9697646c55d6051dcb28cb861b94e14c2a61220`.
+- `/private/tmp/cmg-matched-dot-profiles`:
+  `92927aeceb07a5299b39c40ae150e895eb0dcc529ff6fadb5d503e3a84064202`.
+- `/private/tmp/cmg-matched-dot-allocations`:
+  `c8fbf8aeba487d8d66a2af0f0f2a45cdb3d6914f6885dc7461088cae80782650`.
+
+### Next kernel and fine-component campaign
+
+The next campaign starts from `1f727f9` (numerical checkpoint `b6c6e61`). It
+first profiles exclusive recursive CMG phases, then independently tests stable
+interleaved-component sums and residual/restriction fusion. A terminal-solve
+experiment is conditional on direct terminals occupying at least 10% of full
+solve time. The final, separate algorithmic experiment directly solves isolates
+and pairs and runs stationary PCG on the remaining vertices.
+
+Development uses stress seed 20260912. Qualification uses the original 32
+fixtures and untouched stress seed 20260913, with one/four RHSs and a 16-RHS
+reuse comparison. Start with nine rotated external rounds and extend questionable
+cases once to 21. Keep exact-order changes only with a target total-time interval
+favoring the candidate and a 2% noninferiority margin on connected one-shot
+controls; unresolved controls remain unqualified. Profile and allocation runs
+are separate. Portfolio arithmetic may differ, but original-system tolerances,
+validation and final certification remain mandatory. No automatic dispatch or
+main-branch promotion is part of this campaign.
+
+The phase instrumentation is gated separately by `cycle-profiling`, which
+implies `profiling`. Adding a no-op recorder to ordinary recursion changed
+path timings despite unchanged arithmetic. Restoring the original recursive
+bodies fixed those paths but left a caller-layout effect on a weighted control.
+Ordinary benchmark builds therefore exclude the deep instrumentation completely;
+trace builds enable it explicitly. The production and traced cycle bodies are
+cross-checked for complete output bits and exact recursive operation counts.
+
+The stable-traversal trial (`92639f9`) cached four-byte vertex indices per
+eligible finest-level workspace, retained component identity and preserved all
+per-component summation and global subtraction/dot ordering. It improved the
+interleaved weighted mixtures by roughly 11–17% locally, but the final combined
+21-round connected-clique control was 0.9813 [0.9738, 0.9853] against `b6c6e61`.
+That interval does not establish the required 2% noninferiority margin. Small
+heterogeneous mixtures also regressed. The cache is therefore removed from the
+retained implementation; its source, tests and immutable timing evidence remain
+in the trial commit. Restriction and terminal fusion are qualified separately
+without the cache. The qualification holdout has not been used for this decision.
+
+Exclusive tracing (three repetitions, four RHSs, 384 complete solves) identifies
+restriction at about 31% of the large connected-path solve and 27% of the path
+mixture. Direct terminal solves occupy about 30% on the large grid and sparse
+worker-firm controls, and 68–71% on several small connected controls. These
+fractions qualify the proposed terminal experiment under its 10% gate. Dense
+large worker-firm solves instead spend about 87% in smoothing and residual
+matvecs. Traces preserve full planned-PCG output bits and diagnostics; exclusive
+phase totals exclude child recursion. Profiling fractions are not speedup claims.
+
+The separately gated trace baseline (`5cb1f14`) passes all connected one-shot
+controls against `b6c6e61`. The initially wide small path/grid and four large
+control intervals were extended once to 21 rotated rounds. All lower bounds
+for reference/candidate total time exceed `1/1.02`. Small controls have intervals
+[0.987, 1.004] (grid) and [0.993, 1.015] (path); large controls range from
+[0.993, 1.028] to [0.999, 1.005]. The timing entry point remains byte-identical.
+
+The residual/restriction prototype removes the materialized residual pass at
+nonterminal levels. Full aggregation and pruned transfers perform `b[v]-Ax[v]`
+immediately before the same ordered coarse addition. Pruned rows are skipped;
+matvec completion, pre/post smoothing, transfers, centering, child visits and
+repeat counts retain their existing order. The default-feature cycle is
+unchanged. Both ordinary and separately traced experimental cycles use the same
+fused transfer helper.
+
+The terminal scaling prototype retains unscaled forward values for subsequent
+forward dependencies while writing their scaled values into the existing second
+scratch vector. Back substitution overwrites that second vector in reverse row
+order. It removes the separate diagonal pass without adding storage or changing
+factor arithmetic. Packed and sparse factors, empty/isolated graphs, extreme
+weight scales, repeated scratch use and independent old-loop output bits are
+covered by differential tests. This prototype is still subject to total-time
+qualification; a high terminal share alone does not establish a benefit.
+
+The separate `ComponentPcgExperiment` API prepares a fixed isolate/pair partition,
+provides a reusable `ComponentPcgWorkspace`, and exposes `solve_into`. Stable
+original-vertex maps preserve each induced graph's canonical order. Tiny blocks
+share one grounded factor; the active graph uses preserved-stopping component
+CMG. Full graphs with no removable block use the ordinary solver selected at
+preparation time. This is not a fallback after failed convergence.
+
+Full RHS compatibility and every supplied initial-guess value are checked before
+subsystem work. The active solver retains the submitted PCG options. After
+scattering and component centering, a fresh original-graph matvec certifies the
+complete result using the original RHS norm, original operator bound and full
+solution norm. A failed factor, active solve or certificate returns an error
+without modifying the caller's output. The report distinguishes active-PCG
+diagnostics from the full-system certificate. Workspaces require exact prepared
+identity; matrix-weight changes require a new preparation. Extra maps, factors,
+active/full vectors and certificate scratch are included in memory reports.
+
+Example of explicit fixed-matrix reuse (requires `experimental-components`):
+
+```rust
+use cmg::{CmgOptions, ComponentPcgExperiment, PcgOptions};
+let prepared = ComponentPcgExperiment::build(graph, CmgOptions::default())?;
+let mut workspace = prepared.workspace()?;
+let mut solution = vec![0.0; graph.vertex_count()];
+for rhs in right_hand_sides {
+    let report = prepared.solve_into(
+        rhs, None, &mut solution, PcgOptions::default(), &mut workspace,
+    )?;
+    assert!(report.original().residual_norm() <= report.original().tolerance());
+}
+```
+
+The initial portfolio development matrix (seed 20260912, nine external rounds,
+one/four RHSs) has 432 successful samples and 1,080 independent original-system
+certificates. Weighted path mixtures improve 1.786x [1.743, 1.809] / 1.959x
+[1.899, 2.083]; clique mixtures improve 1.310x [1.292, 1.344] / 1.666x
+[1.653, 1.781]. Dense worker-firm mixtures regress to 0.302x [0.300, 0.310] /
+0.599x [0.573, 0.608], and sparse worker-firm mixtures to 0.685x
+[0.664, 0.701] / 0.865x [0.854, 0.885]. These are scalar/portfolio ratios,
+including preparation and full certification, not kernel-only timings.
+
+Removing tiny components changes active-hierarchy stopping and direct-factor
+cost as well as the Krylov vectors. On the development dense mixture, retained
+storage grows from 983,124 to 2,333,136 bytes, while workspace falls from 359,504
+to 294,408 bytes. Iterations remain eight. The sparse mixture changes from
+13 to 14 iterations and also retains a larger factor. This explains why fewer
+Krylov vertices alone is insufficient to choose a route; it is not evidence for
+a production threshold. No automatic selection is implemented.
+
+### Final fusion and portfolio qualification
+
+The numerical source is `ab2b0a46dec957f4b7c3de0191c3406a0e34ac26`.
+Each final comparison covers the original 32 fixtures at 1/4/16 RHSs and the
+untouched 12-case stress seed 20260913 at 1/4 RHSs, with nine rotated external
+rounds. Each route comparison has 198 invocations, 2,160 recorded samples and
+13,176 original-system certificates. The kernel and portfolio comparisons
+therefore contribute 26,352 certificates, all passing. These counts exclude
+warmups, development runs, focused controls and traces.
+
+Ratios below are reference/candidate total time, including preparation,
+workspace creation, solves and internal certification; above one favors the
+candidate. Kernel reference is `b6c6e61`. Portfolio reference is the retained
+ordinary scalar solver in its own matched caller-buffer harness. Do not multiply
+ratios across the two harnesses. The confidence intervals are exploratory paired
+external-round bootstrap intervals, not multiplicity-adjusted universal bounds.
+
+| Comparison and fixture | 1 RHS | 4 RHS | 16 RHS |
+|---|---:|---:|---:|
+| Kernels: path + pairs | 1.073x | 1.089x | 1.081x |
+| Kernels: large connected path | 1.145x | 1.155x | 1.176x |
+| Kernels: large path + pairs | 1.106x | 1.109x | 1.119x |
+| Portfolio: path + pairs | 1.811x | 1.938x | 1.959x |
+| Portfolio: weighted path + pairs | 1.641x | 1.896x | 1.979x |
+| Portfolio: cliques + pairs | 1.359x | 1.778x | 1.967x |
+| Portfolio: large grid + pairs | 1.431x | 1.497x | 1.523x |
+| Portfolio: dense worker-firm + pairs | 0.292x | 0.580x | 0.868x |
+| Portfolio: sparse worker-firm + pairs | 0.607x | 0.794x | 0.866x |
+| Portfolio: large sparse worker-firm + pairs | 1.089x | 1.517x | 1.691x |
+
+For the large connected path, the 16-RHS kernel interval is [1.160, 1.185].
+The corresponding path-mixture interval is [1.114, 1.134]. At one RHS, all
+original connected controls pass after one 21-round extension; all held-out
+connected controls pass their initial nine rounds. The original connected
+clique is 0.9885 [0.9824, 0.9956], so it remains slightly slower within the
+allowed margin. The development clique is 0.9826 [0.9755, 0.9897] and remains
+inconclusive at 2%; it is not reported as qualified. Small effects on other
+controls are not generalized into a broad speedup claim.
+
+The portfolio's weighted mixture reaches 1.979x [1.973, 1.990] at 16 RHSs.
+Large sparse worker-firm mixtures reach 1.691x [1.601, 1.703]. All-pairs cases
+move from one-shot parity/loss to clear gains at four and sixteen RHSs. However,
+small sparse and dense worker-firm mixtures remain slower even at sixteen RHSs,
+and the large dense mixture remains slower throughout. There is no observed
+crossover through sixteen RHSs for those cases. The held-out dense mixture is
+0.265x [0.263, 0.268] at one RHS, about 3.8 times slower. The 4.48x result on
+`material-at-threshold` is a stopping-boundary case, not a general portfolio
+speedup; its below-threshold neighbor regresses. No dispatch threshold is inferred.
+
+All 155 all-feature and 91 default-feature tests pass in debug and release.
+Formatting, root and benchmark Clippy, private rustdoc, benchmark builds,
+fixture tests and Rust 1.85 compatibility checks pass. GitHub Rust CI passes
+quality and Ubuntu/macOS/Windows tests. Separate instrumentation verifies 384
+complete planned-PCG profiles and zero warmed caller-buffer allocations on all
+32 original cases, including both portfolio routes. Ordinary setup peaks remain
+within their conservative memory estimates. Portfolio reports include its extra
+maps, factors, original/active graph storage and certificate scratch.
+
+The remaining targets are dense smoothing/matvec traversal (about 87% of the
+large dense solve in the final trace), active-hierarchy preparation and terminal
+growth in the portfolio, and finest-component centering without the rejected
+cache or connected caller regressions. Any new hierarchy policy needs a fresh
+explicit experiment and independent qualification; none was tuned to the holdout.
+
+### Final campaign evidence
+
+The original timing entry point SHA-256 remains
+`c29e8543a17e2c0e26c59c269827ae01178ec103e09008f77b2254e90d60cc91`.
+The retained kernel timing binary is
+`6cd714a29f7f0139fdcde1f0976819c472894bc53845cf29d4ce6035738d4579`;
+the matched portfolio timing binary is
+`6a804cd24f170a85b0733c2d3fd6d8d4db92eabb4527d58901794ef4443bbd10`.
+
+The full local report is `/private/tmp/cmg-component-optimization-report.md`
+(SHA-256 `bf6863bf2cc773bd3485d98b6b66bb3e55e792fe7297ab13569a0f220a95f05e`).
+The evidence archive is
+`/private/tmp/cmg-component-optimization-evidence.tar.gz`
+(SHA-256 `593b5aab2918fb7b457b3ea33f53705dee07521193a782a4d43fe1b83f923fd4`).
+It contains all 37 audited directories, the excluded runs with missing compiled
+identity, source archives, frozen binaries, auditors and validation logs. Every
+archived audited file is rechecked against its recorded checksum. Failed or
+rejected raw evidence is preserved. No main merge, SCC deployment or new cluster
+campaign is part of this work.

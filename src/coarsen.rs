@@ -201,6 +201,46 @@ impl Aggregation {
         Ok(())
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn restrict_residual_into(
+        &self,
+        rhs: &[f64],
+        matrix_value: &[f64],
+        coarse: &mut [f64],
+    ) -> Result<(), CmgError> {
+        for (context, actual) in [
+            ("Aggregation residual rhs", rhs.len()),
+            ("Aggregation residual matvec", matrix_value.len()),
+        ] {
+            if actual != self.fine_dimension() {
+                return Err(CmgError::dimension(context, self.fine_dimension(), actual));
+            }
+        }
+        if coarse.len() != self.coarse_dimension() {
+            return Err(CmgError::dimension(
+                "Aggregation residual coarse",
+                self.coarse_dimension(),
+                coarse.len(),
+            ));
+        }
+        coarse.fill(0.0);
+        // Keep each subtraction and the ascending fine-vertex addition order.
+        // The completed matvec is read-only; smoothing still has its own barrier.
+        match &self.labels {
+            LabelStorage::Compact(labels) => {
+                for ((&b, &ax), &label) in rhs.iter().zip(matrix_value).zip(labels) {
+                    coarse[label as usize] += b - ax;
+                }
+            }
+            LabelStorage::Native(labels) => {
+                for ((&b, &ax), &label) in rhs.iter().zip(matrix_value).zip(labels) {
+                    coarse[label] += b - ax;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Prolong by copying each coarse value to its fine aggregate members.
     pub fn prolong(&self, coarse: &[f64]) -> Result<Vec<f64>, CmgError> {
         let mut fine = vec![0.0; self.fine_dimension()];
@@ -407,5 +447,48 @@ mod compact_aggregation_label_tests {
         assert!(cloned.sizes.get().is_none());
         assert_eq!(cloned.labels(), &[0, 1, 1, 2]);
         assert_eq!(cloned.sizes(), &[1, 2, 1]);
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod residual_restriction_tests {
+    use super::*;
+
+    #[test]
+    fn fused_restriction_keeps_cancellation_order_and_checks_dimensions() {
+        let labels = vec![2, 0, 1, 2, 2, 1, 0, 2];
+        let rhs = [1e100, 5.0, -0.0, 1.0, -1e100, 2.0, -5.0, 3.0];
+        let ax = [0.0, 1.0, 0.0, 0.5, 0.0, 1e-100, -1.0, -0.0];
+        let residual: Vec<_> = rhs.iter().zip(ax).map(|(b, a)| b - a).collect();
+        for native in [false, true] {
+            let mut aggregation = Aggregation::new(labels.clone(), 3).unwrap();
+            if native {
+                aggregation.labels = LabelStorage::Native(labels.clone());
+            }
+            let expected = aggregation.restrict(&residual).unwrap();
+            let mut actual = vec![f64::NAN; 3];
+            aggregation
+                .restrict_residual_into(&rhs, &ax, &mut actual)
+                .unwrap();
+            assert_eq!(
+                actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+            );
+            for (b, a) in [(&rhs[..7], &ax[..]), (&rhs[..], &ax[..7])] {
+                assert!(
+                    aggregation
+                        .restrict_residual_into(b, a, &mut actual)
+                        .is_err()
+                );
+                assert_eq!(actual, expected);
+            }
+            assert!(
+                aggregation
+                    .restrict_residual_into(&rhs, &ax, &mut [99.0; 2])
+                    .is_err()
+            );
+        }
+        let empty = Aggregation::new(Vec::new(), 0).unwrap();
+        empty.restrict_residual_into(&[], &[], &mut []).unwrap();
     }
 }

@@ -1,5 +1,7 @@
 //! Stationary recursive CMG preconditioner application.
 
+#[cfg(feature = "cycle-profiling")]
+use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
 use crate::components::CenteringPlan;
 use crate::{
     CmgError, CmgHierarchy, CmgOptions, CmgWorkspace, Components, GroundedLdl, Laplacian,
@@ -784,6 +786,46 @@ impl CmgPreconditioner {
         self.apply_level(0, rhs, output, workspace, 1)
     }
 
+    /// Profile the exact serial cycle for an already compatible right-hand side.
+    ///
+    /// Timings are exclusive across phases and recursive levels. As with
+    /// `apply_compatible_into`, the caller supplies a compatible RHS.
+    #[cfg(feature = "cycle-profiling")]
+    pub fn profile_apply_compatible_into(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+    ) -> Result<crate::CmgApplyProfile, CmgError> {
+        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
+        for (context, actual) in [
+            ("CmgPreconditioner::apply compatible rhs", rhs.len()),
+            ("CmgPreconditioner::apply compatible output", output.len()),
+        ] {
+            if actual != dimension {
+                return Err(CmgError::dimension(context, dimension, actual));
+            }
+        }
+        self.validate_workspace(workspace)?;
+        let mut profile = crate::CmgApplyProfile::new(self.hierarchy.levels().len());
+        self.apply_level_recorded(0, rhs, output, workspace, 1, &mut profile)?;
+        Ok(profile)
+    }
+
+    #[cfg(feature = "cycle-profiling")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_profiled_with_plan(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        plan: &ParallelCmgPlan,
+        executor: &ParallelExecutor,
+        profile: &mut crate::CmgApplyProfile,
+    ) -> Result<(), CmgError> {
+        self.apply_level_with_plan_recorded(0, rhs, output, workspace, 1, plan, executor, profile)
+    }
+
     pub(crate) fn apply_compatible_into_prevalidated(
         &self,
         rhs: &[f64],
@@ -987,13 +1029,18 @@ impl CmgPreconditioner {
                         &mut local.residual,
                         executor,
                     )?;
-                    residual_from_matvec_planned(
-                        &mut local.residual,
-                        rhs,
-                        executor,
-                        parallel_level,
-                    );
-                    level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    #[cfg(feature = "experimental-components")]
+                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
+                    #[cfg(not(feature = "experimental-components"))]
+                    {
+                        residual_from_matvec_planned(
+                            &mut local.residual,
+                            rhs,
+                            executor,
+                            parallel_level,
+                        );
+                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    }
                     let centering = &self.coarse_centering[level_index];
                     let mut centering_workspace = workspace.take_centering(level_index);
                     let centering_result = centering.center_in_place_with_workspace_and_executor(
@@ -1038,6 +1085,196 @@ impl CmgPreconditioner {
                     executor,
                     parallel_level,
                 );
+            }
+            Ok(())
+        })();
+        workspace.put_level(level_index, local);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "cycle-profiling")]
+    fn apply_level_with_plan_recorded<R: CycleRecorder>(
+        &self,
+        level_index: usize,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        iterations: usize,
+        plan: &ParallelCmgPlan,
+        executor: &ParallelExecutor,
+        recorder: &mut R,
+    ) -> Result<(), CmgError> {
+        let level = &self.hierarchy.levels()[level_index];
+        let dimension = level.graph().vertex_count();
+        if rhs.len() != dimension || output.len() != dimension {
+            return Err(CmgError::InvalidHierarchy {
+                context: "parallel recursive vector dimension does not match hierarchy level",
+            });
+        }
+
+        recorder.enter(level_index);
+        if let Some(reason) = level.terminal_reason() {
+            let stamp = R::start();
+            if reason == TerminalReason::Direct {
+                let factor = self
+                    .direct_terminal
+                    .as_ref()
+                    .ok_or(CmgError::InvalidHierarchy {
+                        context: "direct terminal is missing its LDL factor",
+                    })?;
+                let mut local = workspace.take_level(level_index);
+                let result = factor.solve_into_compatible(
+                    rhs,
+                    output,
+                    &mut local.factor_forward,
+                    &mut local.factor_solution,
+                );
+                workspace.put_level(level_index, local);
+                recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
+                return result;
+            }
+            assign_scaled_planned(output, level.inverse_diagonal(), rhs, executor, false);
+            recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
+            return Ok(());
+        }
+
+        if iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero stationary iterations",
+            });
+        }
+        let child_iterations = self.repeat_counts[level_index];
+        if child_iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero child recursive repeats",
+            });
+        }
+        let parallel_level = plan.level_operator(level_index).is_some();
+
+        let mut local = workspace.take_level(level_index);
+        // With a zero-dimensional child, restriction and correction have no
+        // output. Keep both smoothing sweeps, but avoid forming the unused
+        // middle residual and making an empty recursive call.
+        #[cfg(feature = "experimental-components")]
+        let has_coarse_work = !local.coarse_rhs.is_empty();
+        #[cfg(not(feature = "experimental-components"))]
+        let has_coarse_work = true;
+        let result = (|| {
+            for iteration in 0..iterations {
+                recorder.iteration(level_index);
+                let stamp = R::start();
+                if iteration == 0 {
+                    assign_scaled_planned(
+                        output,
+                        level.inverse_diagonal(),
+                        rhs,
+                        executor,
+                        parallel_level,
+                    );
+                } else {
+                    plan.matvec_into(
+                        level_index,
+                        level.graph(),
+                        output,
+                        &mut local.residual,
+                        executor,
+                    )?;
+                    jacobi_add_planned(
+                        output,
+                        level.inverse_diagonal(),
+                        rhs,
+                        &local.residual,
+                        executor,
+                        parallel_level,
+                    );
+                }
+
+                recorder.finish(
+                    level_index,
+                    if iteration == 0 {
+                        CmgApplyPhase::Initialization
+                    } else {
+                        CmgApplyPhase::Smoothing
+                    },
+                    stamp,
+                );
+
+                if has_coarse_work {
+                    let stamp = R::start();
+                    plan.matvec_into(
+                        level_index,
+                        level.graph(),
+                        output,
+                        &mut local.residual,
+                        executor,
+                    )?;
+                    recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
+                    let stamp = R::start();
+                    #[cfg(feature = "experimental-components")]
+                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
+                    #[cfg(not(feature = "experimental-components"))]
+                    {
+                        residual_from_matvec_planned(
+                            &mut local.residual,
+                            rhs,
+                            executor,
+                            parallel_level,
+                        );
+                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    }
+                    recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
+                    let stamp = R::start();
+                    let centering = &self.coarse_centering[level_index];
+                    let mut centering_workspace = workspace.take_centering(level_index);
+                    let centering_result = centering.center_in_place_with_workspace_and_executor(
+                        &mut local.coarse_rhs,
+                        &mut centering_workspace,
+                        executor,
+                    );
+                    workspace.put_centering(level_index, centering_workspace);
+                    centering_result?;
+                    recorder.finish(level_index, CmgApplyPhase::Centering, stamp);
+                    self.apply_level_with_plan_recorded(
+                        level_index + 1,
+                        &local.coarse_rhs,
+                        &mut local.coarse_correction,
+                        workspace,
+                        child_iterations,
+                        plan,
+                        executor,
+                        recorder,
+                    )?;
+                    let stamp = R::start();
+                    if parallel_level {
+                        level.prolong_add_into_with_executor(
+                            &local.coarse_correction,
+                            output,
+                            executor,
+                        )?;
+                    } else {
+                        level.prolong_add_into(&local.coarse_correction, output)?;
+                    }
+                    recorder.finish(level_index, CmgApplyPhase::Prolongation, stamp);
+                }
+
+                let stamp = R::start();
+                plan.matvec_into(
+                    level_index,
+                    level.graph(),
+                    output,
+                    &mut local.residual,
+                    executor,
+                )?;
+                jacobi_add_planned(
+                    output,
+                    level.inverse_diagonal(),
+                    rhs,
+                    &local.residual,
+                    executor,
+                    parallel_level,
+                );
+                recorder.finish(level_index, CmgApplyPhase::Smoothing, stamp);
             }
             Ok(())
         })();
@@ -1129,10 +1366,15 @@ impl CmgPreconditioner {
 
                 if has_coarse_work {
                     level.graph().matvec_into(output, &mut local.residual)?;
-                    for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
-                        *residual = *rhs_value - *residual;
+                    #[cfg(feature = "experimental-components")]
+                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
+                    #[cfg(not(feature = "experimental-components"))]
+                    {
+                        for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
+                            *residual = *rhs_value - *residual;
+                        }
+                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
                     }
-                    level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
                     let centering = &self.coarse_centering[level_index];
                     let mut centering_workspace = workspace.take_centering(level_index);
                     // Restricted residuals are component-compatible in exact
@@ -1164,6 +1406,167 @@ impl CmgPreconditioner {
                 {
                     *value += *inverse_diagonal * (*rhs_value - *matrix_value);
                 }
+            }
+            Ok(())
+        })();
+        workspace.put_level(level_index, local);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "cycle-profiling")]
+    fn apply_level_recorded<R: CycleRecorder>(
+        &self,
+        level_index: usize,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        iterations: usize,
+        recorder: &mut R,
+    ) -> Result<(), CmgError> {
+        let level = &self.hierarchy.levels()[level_index];
+        let dimension = level.graph().vertex_count();
+        if rhs.len() != dimension || output.len() != dimension {
+            return Err(CmgError::InvalidHierarchy {
+                context: "recursive vector dimension does not match hierarchy level",
+            });
+        }
+
+        recorder.enter(level_index);
+        if let Some(reason) = level.terminal_reason() {
+            let stamp = R::start();
+            if reason == TerminalReason::Direct {
+                let factor = self
+                    .direct_terminal
+                    .as_ref()
+                    .ok_or(CmgError::InvalidHierarchy {
+                        context: "direct terminal is missing its LDL factor",
+                    })?;
+                let mut local = workspace.take_level(level_index);
+                let result = factor.solve_into_compatible(
+                    rhs,
+                    output,
+                    &mut local.factor_forward,
+                    &mut local.factor_solution,
+                );
+                workspace.put_level(level_index, local);
+                recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
+                return result;
+            }
+            for ((value, inverse_diagonal), rhs_value) in
+                output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
+            {
+                *value = *inverse_diagonal * *rhs_value;
+            }
+            recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
+            return Ok(());
+        }
+
+        if iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero stationary iterations",
+            });
+        }
+        let child_iterations = self.repeat_counts[level_index];
+        if child_iterations == 0 {
+            return Err(CmgError::InvalidHierarchy {
+                context: "nonterminal level has zero child recursive repeats",
+            });
+        }
+
+        let mut local = workspace.take_level(level_index);
+        // With a zero-dimensional child, restriction and correction have no
+        // output. Keep both smoothing sweeps, but avoid forming the unused
+        // middle residual and making an empty recursive call.
+        #[cfg(feature = "experimental-components")]
+        let has_coarse_work = !local.coarse_rhs.is_empty();
+        #[cfg(not(feature = "experimental-components"))]
+        let has_coarse_work = true;
+        let result = (|| {
+            for iteration in 0..iterations {
+                recorder.iteration(level_index);
+                let stamp = R::start();
+                if iteration == 0 {
+                    for ((value, inverse_diagonal), rhs_value) in
+                        output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
+                    {
+                        *value = *inverse_diagonal * *rhs_value;
+                    }
+                } else {
+                    level.graph().matvec_into(output, &mut local.residual)?;
+                    for (((value, inverse_diagonal), rhs_value), matrix_value) in output
+                        .iter_mut()
+                        .zip(level.inverse_diagonal())
+                        .zip(rhs)
+                        .zip(&local.residual)
+                    {
+                        *value += *inverse_diagonal * (*rhs_value - *matrix_value);
+                    }
+                }
+
+                recorder.finish(
+                    level_index,
+                    if iteration == 0 {
+                        CmgApplyPhase::Initialization
+                    } else {
+                        CmgApplyPhase::Smoothing
+                    },
+                    stamp,
+                );
+
+                if has_coarse_work {
+                    let stamp = R::start();
+                    level.graph().matvec_into(output, &mut local.residual)?;
+                    recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
+                    let stamp = R::start();
+                    #[cfg(feature = "experimental-components")]
+                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
+                    #[cfg(not(feature = "experimental-components"))]
+                    {
+                        for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
+                            *residual = *rhs_value - *residual;
+                        }
+                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
+                    }
+                    recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
+                    let stamp = R::start();
+                    let centering = &self.coarse_centering[level_index];
+                    let mut centering_workspace = workspace.take_centering(level_index);
+                    // Restricted residuals are component-compatible in exact
+                    // arithmetic. Remove only floating-point null-space drift before
+                    // the recursive solve instead of repeating full public-boundary
+                    // compatibility validation and exact correction passes.
+                    let centering_result = centering.center_in_place_with_workspace(
+                        &mut local.coarse_rhs,
+                        &mut centering_workspace,
+                    );
+                    workspace.put_centering(level_index, centering_workspace);
+                    centering_result?;
+                    recorder.finish(level_index, CmgApplyPhase::Centering, stamp);
+                    self.apply_level_recorded(
+                        level_index + 1,
+                        &local.coarse_rhs,
+                        &mut local.coarse_correction,
+                        workspace,
+                        child_iterations,
+                        recorder,
+                    )?;
+                    let stamp = R::start();
+                    level.prolong_add_into(&local.coarse_correction, output)?;
+                    recorder.finish(level_index, CmgApplyPhase::Prolongation, stamp);
+                }
+
+                let stamp = R::start();
+                level.graph().matvec_into(output, &mut local.residual)?;
+                for (((value, inverse_diagonal), rhs_value), matrix_value) in output
+                    .iter_mut()
+                    .zip(level.inverse_diagonal())
+                    .zip(rhs)
+                    .zip(&local.residual)
+                {
+                    *value += *inverse_diagonal * (*rhs_value - *matrix_value);
+                }
+                recorder.finish(level_index, CmgApplyPhase::Smoothing, stamp);
             }
             Ok(())
         })();
@@ -1209,7 +1612,7 @@ fn jacobi_add_planned(
     }
 }
 
-#[cfg(feature = "parallel")]
+#[cfg(all(feature = "parallel", not(feature = "experimental-components")))]
 fn residual_from_matvec_planned(
     matvec: &mut [f64],
     rhs: &[f64],
@@ -1282,7 +1685,7 @@ fn jacobi_add_parallel(
     }
 }
 
-#[cfg(feature = "parallel")]
+#[cfg(all(feature = "parallel", not(feature = "experimental-components")))]
 fn residual_from_matvec_parallel(residual: &mut [f64], rhs: &[f64], executor: &ParallelExecutor) {
     if executor.should_parallel(residual.len()) {
         executor.install(|| {

@@ -23,6 +23,7 @@ dependency path. The command-line tools emit machine-readable JSON.
 | `plan-phase-profile` | parallel-plan construction attribution |
 | `fixed-topology-sequence` | changing-weight assembly, caller buffers, retained preconditioners, warm starts, routing, profiles, and allocations |
 | `component-bench` | opt-in disconnected-graph sentinels, independent pruning/block-LDL switches, paired setup/solve timings, and recursive work counts |
+| `component-cycle-profile` | exclusive per-level CMG phases inside certified PCG on the same component fixtures |
 
 The `cmg-bench` and `cmg-parallel-bench` binaries support the durable GitHub
 Actions comparisons. `scc-benchmark`, `scc2-diagnostics`, and `scc2-memory`
@@ -105,6 +106,40 @@ weighted mixed path and 40,000 independent pairs. The ordinary sentinels and
 stress fixtures retain their original dimensions and seeds. Start the large
 suite with one repetition; preserve any failed cases before increasing repeats.
 
+Add `--profile` to attribute PCG time on the same fixtures to CMG applications,
+matrix-vector products, centering, reductions, vector updates and certification.
+This mode uses the existing phase profiler with one executor thread and checks
+every returned solution bit and diagnostic against both scalar and planned PCG,
+plus a fresh original-system residual. It emits `profile` records after two
+warm-ups and `profile_structure` records for direct terminals. The latter report
+nonzero factors and the full column-scan slots within grounded components.
+With `experimental-components`, centering the preconditioned vector and its
+residual dot product are measured together under `centering`. Compare the sum
+of centering and dot-product time across source revisions with different fusion
+strategies. Keep timing-harness source identical across numerical comparisons;
+even an extra profiling metadata field can change the caller's compiled layout.
+The fusion itself is limited to multiple components; connected inputs retain
+separate subtraction and dot-product loops, and multithreaded plans retain
+their original reduction trees. Solver entry selects a separately compiled PCG
+loop, so the connected iteration does not carry a runtime fusion branch.
+Run it separately from allocation instrumentation. Profile timers and fresh
+workspaces change overhead; use ordinary paired measurements to accept speedups.
+
+`component-cycle-profile REPETITIONS RHS_COUNT SUITE SEED [CASE_SUBSTRING]`
+reports the recursive work inside the PCG preconditioner timer. For example,
+run `component-cycle-profile 3 4 large 20260908` from a build with both
+`experimental-components` and `cycle-profiling`. Enable `cycle-profiling` only
+for separate trace builds: it implies `profiling` and adds recursive timers.
+Ordinary timing builds omit it to preserve their compiled caller layout.
+Its `cycle_level` records contain actual visits, stationary iterations and
+exclusive initialization, smoothing, residual-matvec, restriction, centering,
+prolongation and terminal times. Parent phase times exclude child recursion.
+Each result is checked against the ordinary planned solver and a fresh
+original-system residual. This separate executable leaves the existing timing
+entry point unchanged. The public `cycle-profiling` API exposes these levels through
+`PcgPhaseProfile::cycle` and profiles a standalone compatible serial application
+through `CmgPreconditioner::profile_apply_compatible_into`.
+
 ## Comparison discipline
 
 1. Build baseline and candidate with the same compiler, features, and CPU settings.
@@ -144,3 +179,20 @@ kernels. It is not an end-to-end C solver. Durable machine records are indexed
 by [`.ci/performance/index.json`](../.ci/performance/index.json). Current
 workflow output is uploaded as GitHub Actions artifacts instead of being
 committed back to `main`.
+
+`component-portfolio-bench` (requires `experimental-components`) compares two
+caller-buffer routes: `--route scalar` uses preserved-stopping component CMG;
+`--route portfolio` prepares direct isolate/pair blocks and stationary PCG on
+the remaining induced graph. It accepts the same repetition/RHS/filter and
+`--suite`/`--seed` arguments as `component-bench`. Compile with the full
+`CMG_BENCH_COMMIT`, freeze that binary, and rotate the two routes in separate
+processes. Both routes allocate output buffers in the workspace timer and include
+all preparation and full-system certification costs in total time. Iterations
+and solution bits may differ; graph/RHS/target fingerprints and independently
+recomputed original residuals identify the scientific comparison. Failures remain
+JSONL records and produce a nonzero exit. No fallback is attempted.
+
+With `component-allocations`, this entry point emits separate setup/workspace
+requested-memory measurements and checks zero warmed caller-buffer allocations.
+It omits timing samples in that build. Never use instrumented binaries for timing
+qualification. The original `component-bench` timing entry point stays unchanged.

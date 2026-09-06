@@ -11,10 +11,16 @@ cmg = { path = "..", features = ["parallel", "profiling"] }
 [features]
 experimental-components = ["cmg/experimental-components"]
 component-allocations = []
+cycle-profiling = ["cmg/cycle-profiling"]
 
 [[bin]]
 name = "component-bench"
 path = "src/bin/component-bench.rs"
+
+[[bin]]
+name = "component-cycle-profile"
+path = "src/bin/component-cycle-profile.rs"
+required-features = ["cycle-profiling"]
 
 [[bin]]
 name = "graph-build"
@@ -67,3 +73,8 @@ path = "src/bin/teaching-supplement.rs"
 [[bin]]
 name = "fixed-topology-sequence"
 path = "src/bin/fixed-topology-sequence.rs"
+
+[[bin]]
+name = "component-portfolio-bench"
+path = "src/bin/component-portfolio-bench.rs"
+required-features = ["experimental-components"]

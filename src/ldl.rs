@@ -423,15 +423,33 @@ impl GroundedLdl {
             ));
         }
 
-        for row in 0..dimension {
-            forward[row] = rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
+        #[cfg(feature = "experimental-components")]
+        {
+            for row in 0..dimension {
+                let value =
+                    rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
+                // Later forward rows need the unscaled value. The existing
+                // second scratch holds D^-1 y until its backward row is solved.
+                forward[row] = value;
+                factor_solution[row] = value / self.diagonal[row];
+            }
+            for row in (0..dimension).rev() {
+                factor_solution[row] -= self.lower.backward_correction(row, factor_solution);
+            }
         }
-        for (value, pivot) in forward.iter_mut().zip(&self.diagonal) {
-            *value /= *pivot;
-        }
-        for row in (0..dimension).rev() {
-            factor_solution[row] =
-                forward[row] - self.lower.backward_correction(row, factor_solution);
+        #[cfg(not(feature = "experimental-components"))]
+        {
+            for row in 0..dimension {
+                forward[row] =
+                    rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
+            }
+            for (value, pivot) in forward.iter_mut().zip(&self.diagonal) {
+                *value /= *pivot;
+            }
+            for row in (0..dimension).rev() {
+                factor_solution[row] =
+                    forward[row] - self.lower.backward_correction(row, factor_solution);
+            }
         }
 
         solution.fill(0.0);
@@ -725,5 +743,79 @@ impl ComponentFactorRows {
             self.row_offsets.push(self.columns.len());
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod scaled_forward_tests {
+    use super::*;
+
+    fn reference(factor: &GroundedLdl, rhs: &[f64]) -> Vec<f64> {
+        let n = factor.active_dimension();
+        let mut forward = vec![0.0; n];
+        let mut backward = vec![0.0; n];
+        for row in 0..n {
+            forward[row] =
+                rhs[factor.permutation[row]] - factor.lower.forward_correction(row, &forward);
+        }
+        for (value, pivot) in forward.iter_mut().zip(&factor.diagonal) {
+            *value /= pivot;
+        }
+        for row in (0..n).rev() {
+            backward[row] = forward[row] - factor.lower.backward_correction(row, &backward);
+        }
+        let mut solution = vec![0.0; factor.vertex_count()];
+        for (i, &vertex) in factor.permutation.iter().enumerate() {
+            solution[vertex] = backward[i];
+        }
+        solution
+    }
+
+    #[test]
+    fn fused_scaling_matches_packed_sparse_and_reused_scratch() {
+        let mut saw_packed = false;
+        let mut saw_sparse = false;
+        for n in [0usize, 1, 2, 7, 65] {
+            for dense in [false, true] {
+                for scale in [1e-100, 1.0, 1e100] {
+                    let edges = (0..n).flat_map(|u| {
+                        ((u + 1)..n)
+                            .filter(move |&v| dense || v == u + 1)
+                            .map(move |v| (u, v, scale * (0.5 + ((u * 7 + v * 11) % 17) as f64)))
+                    });
+                    let graph = Laplacian::from_edges(n + 3, edges).unwrap();
+                    for factor in [
+                        GroundedLdl::factor(&graph).unwrap(),
+                        GroundedLdl::factor_by_component(&graph).unwrap(),
+                    ] {
+                        saw_packed |= matches!(factor.lower, LowerFactor::Packed { .. });
+                        saw_sparse |= matches!(factor.lower, LowerFactor::Sparse { .. });
+                        let mut forward = vec![f64::NAN; factor.active_dimension()];
+                        let mut backward = forward.clone();
+                        let mut actual = vec![f64::NAN; graph.vertex_count()];
+                        for offset in [0, 5, 0] {
+                            let target: Vec<_> = (0..graph.vertex_count())
+                                .map(|v| ((v * 13 + offset) % 31) as f64 - 15.0)
+                                .collect();
+                            let rhs = graph.matvec(&target).unwrap();
+                            let expected = reference(&factor, &rhs);
+                            factor
+                                .solve_into_compatible(
+                                    &rhs,
+                                    &mut actual,
+                                    &mut forward,
+                                    &mut backward,
+                                )
+                                .unwrap();
+                            assert_eq!(
+                                actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                                expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(saw_packed && saw_sparse);
     }
 }
