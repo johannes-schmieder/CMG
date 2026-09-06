@@ -1,10 +1,15 @@
-# Component-aware CMG: first development checkpoint
+# Component-aware CMG: opt-in experiments
 
 This opt-in study addresses [issue #2](https://github.com/johannes-schmieder/CMG/issues/2).
 The branch starts from `main` at `90e1fe0b0c14065155532711246ede6678bb4935`.
 Existing builders, SDDM normalization, automatic routing, and SCC campaigns keep
 their existing behavior. This is a local development prototype, not a promoted
 algorithm or a platform qualification.
+
+The current development recommendation is compact coarse storage with
+`preserve_unpruned_stopping: true`, plus per-component terminal factors. The
+original active-count stopping experiment remains available for comparison:
+the stress screen below found substantial setup regressions in that route.
 
 ## Current approach
 
@@ -20,7 +25,7 @@ Start with two independent changes that retain one global PCG recurrence:
    without a dense allocation. No heavy solver or executor is constructed per
    component.
 
-Both switches are under `experimental-components` and are off by default:
+All experimental options are under `experimental-components` and are off by default:
 
 ```rust
 use cmg::{CmgOptions, CmgPreconditioner, ComponentBuildOptions};
@@ -30,7 +35,7 @@ let preconditioner = CmgPreconditioner::build_component_experiment(
     ComponentBuildOptions {
         prune_coarse_isolates: true,
         factor_terminal_components: true,
-        ..ComponentBuildOptions::default()
+        preserve_unpruned_stopping: true,
     },
 )?;
 // Use the existing certified solve_pcg / caller-workspace / planned interfaces.
@@ -53,7 +58,7 @@ Recursive repeats multiply these scans even when setup and PCG iteration counts
 look ordinary.
 
 For the 4,096-vertex path plus 1,000 independent pairs, the baseline dimensions
-are `6096, 2024, 1256, 1064, 1016, 1004, 1001`. Pruning gives
+are `6096, 2024, 1256, 1064, 1016, 1004, 1001`. Active-count pruning gives
 `6096, 1024, 256`. The baseline's nonterminal cycle-weighted vertex count is
 502,592, of which 484,000 represent isolated vertices. The candidate count is
 10,192 with no isolated vertices at nonterminal coarse levels. This is a work
@@ -88,7 +93,7 @@ threshold. Within each surviving aggregate the summation order is unchanged.
 The compact graph preserves vertex order and positive edge values.
 
 The existing symmetric pre/post damped-Jacobi cycle, coarse component centering,
-and fixed recursive repeat counts remain in use. Build-time pruning changes
+and fixed recursive repeat counts remain in use. Active-count pruning changes
 which terminal is reached and can change repeat counts; equality to the old
 preconditioner is not promised. No inner tolerance-stopped solve, RHS-dependent
 route, timing probe, or flexible preconditioner is introduced. Positivity and
@@ -123,12 +128,13 @@ does not admit total process RSS or every setup allocation.
 
 `component-bench` supplies connected paths/grids, material-plus-pairs,
 material-plus-isolates, two material components, all-pairs, all-triangles, and
-both sides of the direct threshold. It rotates the four arms and records raw
+both sides of the direct threshold. It rotates the selected arms and records raw
 paired samples after two warm-up rounds. Total includes setup, PCG workspace
 allocation, solves, normal certification, and result allocation. Extra external
-verification is performed for every sample. Structural work and retained bytes
-are reported separately; setup peak/RSS and allocation-free execution have not
-been qualified by this harness.
+verification is performed for every sample. The current harness adds a fifth
+arm preserving the original stopping decisions. Structural work and retained
+bytes are reported separately; requested-allocation counters use a separate
+build. Process RSS and allocation-failure recovery remain unqualified.
 
 See `benchmarks/README.md` for the exact command. Small local results are
 development evidence, not production thresholds or cross-platform speed claims.
@@ -194,10 +200,11 @@ qualification, fresh holdout graphs, and SCC execution have not been run.
 - Setup is serial. Existing planned application works, but partial-transfer
   prolongation currently uses a deterministic serial scatter. A single package
   executor still controls any parallel work.
-- Qualify additional weighted, bridge-heavy, dense and heterogeneous graphs,
-  threshold-adjacent material cases, fresh wirings, larger sizes, and multiple
-  RHSs before setting policy. Benchmark a separately compiled baseline as well
-  as the in-binary reference before promotion. Do not start with a giant
+- The local stress and separate-baseline screens below now cover weighted,
+  bridge-heavy, dense, heterogeneous and threshold-adjacent material graphs,
+  two fixed seeds, and multiple RHSs. Larger sizes, more independent graph
+  families, platform qualification and the small connected-path slowdown still
+  need investigation before setting policy. Do not start with a giant
   Cartesian SCC campaign.
 - Assess setup allocation failure/peak accounting and downstream report/API
   consumers before proposing production integration. The generic component
@@ -269,3 +276,125 @@ for ordinary direct terminals. It introduces no fitted threshold, new inner
 solver, RHS-dependent rule or production routing. Compare it with all four
 existing arms on the unchanged sentinels and stress seed before deciding
 whether earlier active-count termination deserves further development.
+
+## Revised local comparison and holdout
+
+Revised numerical source: `297a4a3beac086dfdf5b73707b6f60b45021cfab`. Compare
+against separately compiled `main` at `90e1fe0b0c14065155532711246ede6678bb4935`,
+with identical harness sources, fixture generators, compiler and release
+settings. Both enable `parallel` and `profiling`; the branch additionally enables
+the opt-in component feature. Execution is serial. Each process performs two
+warm-up rounds and one recorded round for every selected fixture. Nine external
+rounds rotate process order among `main`, branch baseline, and the revised
+candidate. The one- and four-RHS runs each cover all 22 fixtures.
+
+The table reports the median of nine paired `main / candidate` total-time ratios,
+including setup, workspace allocation, solves and normal certificates. Ratios
+above one indicate a speedup. The held-out wiring uses seed `20260907`, chosen
+before observing its timings, with the same graph dimensions and weight rules.
+It uses the same nine-round external comparison on all 12 stress fixtures.
+
+| Fixture | Frozen seed, 1 RHS | Frozen seed, 4 RHS | Holdout, 1 RHS | Holdout, 4 RHS |
+|---|---:|---:|---:|---:|
+| Weighted path + pairs | 3.88x | 4.04x | 2.80x | 2.92x |
+| Bridged cliques + pairs | 7.57x | 8.77x | 5.57x | 6.45x |
+| Sparse worker-firm + pairs | 1.31x | 1.34x | 1.34x | 1.35x |
+| Dense worker-firm + pairs | 1.93x | 2.14x | 1.09x | 1.10x |
+| Heterogeneous material | 3.03x | 1.95x | 3.25x | 2.08x |
+| Heterogeneous material + pairs | 1.12x | 1.16x | 1.16x | 1.19x |
+| Original path + pairs | 8.82x | 9.14x | — | — |
+| Original path + isolates | 8.17x | 8.37x | — | — |
+| Original two paths + pairs | 9.65x | 9.78x | — | — |
+| Original grid + pairs | 11.35x | 11.23x | — | — |
+| 349 pairs, below threshold | 192.37x | 72.96x | — | — |
+| Connected path control | 0.98x | 0.97x | — | — |
+| Connected grid control | 1.00x | 1.00x | — | — |
+
+All 162 external invocations succeeded. There were 1,836 recorded samples and
+4,590 original-system certificates across the three arms, plus independently
+recomputed residuals. Iteration counts, residuals, tolerances and known-solution
+relative errors match `main` exactly in every recorded candidate and baseline
+control sample. This supports the storage-only interpretation of pruning; it
+is empirical agreement, not a universal bitwise guarantee for arbitrary inputs.
+
+The connected path's paired candidate/main ratios are 1.023 and 1.029; the
+branch baseline control is also slower at 1.028 and 1.047. Other connected stress
+controls are near parity. These local process comparisons do not establish
+confidence intervals or a tail-regression bound. The dense holdout's much
+smaller gain also shows why graph-family endpoints cannot define a dispatch
+threshold. No production policy has been selected.
+
+Weakly connected systems still inherit the existing solver's forward-accuracy
+limits: the frozen weighted mixture reaches a 5.11% relative solution error at
+the default residual tolerance (2.76% in the held-out wiring). The candidate and
+`main` agree exactly on those errors. Passing residual certificates is not a
+promise of an equally small forward error on ill-conditioned systems.
+
+### Requested allocation results
+
+The separate instrumentation run covered all 22 revised fixtures with four RHSs.
+Every warmed CMG application and caller-buffer PCG loop made zero allocations.
+Every measured additional setup peak was below the conservative build estimate.
+Selected requested setup peaks, in KiB, illustrate the early-factorization
+problem and its removal:
+
+| Fixture | Ordinary baseline | Active-count pruning + blocks | Preserve stopping + blocks |
+|---|---:|---:|---:|
+| Weighted path + pairs | 446.5 | 3,348.5 | 302.5 |
+| Bridged cliques + pairs | 321.2 | 4,322.6 | 180.3 |
+| Sparse worker-firm + pairs | 261.7 | 1,851.0 | 158.4 |
+| Dense worker-firm + pairs | 1,098.0 | 8,769.8 | 896.1 |
+| Original path + pairs | 391.6 | 1,230.9 | 281.0 |
+| Original grid + pairs | 264.2 | 1,357.1 | 129.1 |
+
+Additional live allocations exclude the already constructed input graph, whose
+shared storage is included in the preconditioner's retained-byte report. The
+workspace report counts principal arrays; allocation tracking also sees vector
+headers and metadata (128–1,528 additional bytes in these cases). These are
+different accounting boundaries, not exact RSS measurements. No allocator
+failure injection or total-process budget qualification was performed.
+
+### Reproduction and local evidence
+
+The harness and fixtures are committed; raw local measurements stay outside
+the repository. Each external directory contains invocation commands, order,
+return codes, source and binary identities in `manifest.json`, plus JSONL and
+stderr files. Its `SHA256SUMS` file hashes all those records:
+
+- `/private/tmp/cmg-components-5084161-external/SHA256SUMS`:
+  `998409e7f40c0e710c52aea3f328ee09b7aafa2cbe845dd50c84275714997f04`.
+- `/private/tmp/cmg-components-297a4a3-external/SHA256SUMS`:
+  `18270c5013647f4052839911d1f051c4a51932e64be6bbf7416042a16691729a`.
+- `/private/tmp/cmg-components-297a4a3-holdout/SHA256SUMS`:
+  `546aee84bc6a015261ab31691d808885fed6ed1ae4a6517ca0adcf032cd942d2`.
+
+The initial four-arm stress files are
+`/private/tmp/cmg-components-5084161-stress-rhs1.jsonl` (SHA-256
+`5b460cee8fe75397177bf1f24db6fc9aabdf9dc75a21ea0b1c9c5c41c0c8057a`) and
+`/private/tmp/cmg-components-5084161-stress-rhs4.jsonl` (SHA-256
+`0d8455500a43339b68a3a71080c6c0b00e9fbafcc06e64f281377d5dfec5654e`).
+
+Allocation files `/private/tmp/cmg-components-5084161-alloc-stress-rhs4.jsonl`
+and `...-alloc-sentinels-rhs4.jsonl` have SHA-256 hashes
+`dbed21fd6aa47171fb12a15a3fb11faa5770ad1aeed13d0af364ec06ef8cce15` and
+`d1de78e3ce8b30cbdb918b3b684097d2560943213f27806a60b35dfb7f65ed6a`.
+The corresponding `297a4a3` files have hashes
+`a3345e15dddf25e0a51496ab52d79f017994e231416ab93ec3b1bd3bf345c36d` and
+`c8b95a54006152df2cd5a7aa72442f0cfd7066e19b40fdbc2e27d62d45ef814d`.
+
+The revised timing binary hash is
+`fe7f76990c57d5f7c21ec86b98dd93579e052b14df508d632b8a887285e3006e`;
+the separate main binary hash is
+`54253dbbb9e2c13a3bbfb642a9c4ac2f8703bf895d4e92780566d6e56a31702f`;
+the revised allocation binary hash is
+`d914ecfcc33c1ab25abf2eacda05d6a71b9044878bbcf09f90b83c15889dcea0`.
+
+Validation at revised source: 91 default-feature and 131 all-feature tests pass
+in both debug and release, including 12 component tests. Regression coverage now
+compares compact graphs, stopping reasons, repeats and full cycle applications
+against the ordinary hierarchy, including fill/level guards and empty children.
+Prepared-generation and planned 1/2/4-thread tests cover both pruning policies.
+Root and benchmark Clippy with warnings denied, formatting, private rustdoc,
+all benchmark release targets, fixture determinism/component-count tests, and
+Rust 1.85.0 all-feature compatibility checks pass. Linux, Windows, SCC, larger
+production workloads and automatic integration remain outside this checkpoint.
