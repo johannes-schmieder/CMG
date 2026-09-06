@@ -105,6 +105,16 @@ weighted mixed path and 40,000 independent pairs. The ordinary sentinels and
 stress fixtures retain their original dimensions and seeds. Start the large
 suite with one repetition; preserve any failed cases before increasing repeats.
 
+Add `--profile` to attribute PCG time on the same fixtures to CMG applications,
+matrix-vector products, centering, reductions, vector updates and certification.
+This mode uses the existing phase profiler with one executor thread and checks
+every returned solution bit and diagnostic against both scalar and planned PCG,
+plus a fresh original-system residual. It emits `profile` records after two
+warm-ups and `profile_structure` records for direct terminals. The latter report
+nonzero factors and the full column-scan slots within grounded components.
+Run it separately from allocation instrumentation. Profile timers and fresh
+workspaces change overhead; use ordinary paired measurements to accept speedups.
+
 ## Comparison discipline
 
 1. Build baseline and candidate with the same compiler, features, and CPU settings.

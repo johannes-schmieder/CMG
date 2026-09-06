@@ -16,6 +16,8 @@ use fixtures::Case;
 #[cfg(feature = "component-allocations")]
 #[path = "../requested_allocations.rs"]
 mod allocations;
+#[path = "../component_profile.rs"]
+mod phase_profile;
 
 fn build(graph: &Laplacian, route: usize) -> Result<CmgPreconditioner, CmgError> {
     if route == 0 {
@@ -236,8 +238,10 @@ fn main() {
     let mut suite = "sentinels".to_owned();
     let mut seed = 20260906u64;
     let mut route = None;
+    let mut profile = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--profile" => profile = true,
             "--suite" => suite = args.next().expect("suite value"),
             "--seed" => {
                 seed = args
@@ -276,6 +280,10 @@ fn main() {
         .unwrap_or(1);
     let filter = positional.get(2).map(String::as_str).unwrap_or("");
     assert!(repetitions > 0 && rhs_count > 0);
+    assert!(
+        !profile || !cfg!(feature = "component-allocations"),
+        "run phase profiling separately from allocation instrumentation"
+    );
     let routes = route.map_or_else(
         || {
             if cfg!(feature = "experimental-components") {
@@ -291,7 +299,7 @@ fn main() {
         "baseline-only build"
     );
     println!(
-        "{{\"type\":\"environment\",\"source\":{},\"os\":{},\"arch\":{},\"suite\":{},\"seed\":{seed},\"repetitions\":{repetitions},\"rhs_count\":{rhs_count},\"warmups\":2,\"parallel_execution\":false,\"allocation_tracking\":{}}}",
+        "{{\"type\":\"environment\",\"source\":{},\"os\":{},\"arch\":{},\"suite\":{},\"seed\":{seed},\"repetitions\":{repetitions},\"rhs_count\":{rhs_count},\"warmups\":2,\"parallel_execution\":false,\"phase_profiling\":{profile},\"allocation_tracking\":{}}}",
         json_string(option_env!("CMG_BENCH_COMMIT").unwrap_or("unrecorded")),
         json_string(std::env::consts::OS),
         json_string(std::env::consts::ARCH),
@@ -327,11 +335,20 @@ fn main() {
                 error.emit(case.name, route, None);
                 failures += 1;
             }
+            if profile {
+                if let Err(error) = phase_profile::run(&case, &rhs, route, repetitions) {
+                    error.emit(case.name, route, None);
+                    failures += 1;
+                }
+            }
             #[cfg(feature = "component-allocations")]
             if let Err(error) = allocation_probe(&case, &rhs, route) {
                 error.emit(case.name, route, None);
                 failures += 1;
             }
+        }
+        if profile {
+            continue;
         }
         for round in 0..repetitions + 2 {
             for offset in 0..routes.len() {
