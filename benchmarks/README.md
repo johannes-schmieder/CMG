@@ -95,6 +95,12 @@ timings for performance comparisons. Allocation records include setup peak/live
 requested bytes and counts for warmed caller-buffer application and PCG loops.
 These are requested layout sizes, not process RSS or allocator arena sizes.
 
+Use `--suite large --seed 20260908` for ten fixed local cases up to 97,536
+vertices: connected/mixed paths and grids, sparse/dense bipartite graphs, a
+weighted mixed path and 40,000 independent pairs. The ordinary sentinels and
+stress fixtures retain their original dimensions and seeds. Start the large
+suite with one repetition; preserve any failed cases before increasing repeats.
+
 ## Comparison discipline
 
 1. Build baseline and candidate with the same compiler, features, and CPU settings.

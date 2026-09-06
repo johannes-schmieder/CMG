@@ -422,3 +422,9 @@ still fail. Performance and allocation comparisons use separate committed
 binaries and the frozen fixtures; old evidence remains intact. The sparse
 kernel's linked-column scratch can cost more than dense scratch for sufficiently
 filled factors, so requested peak memory is a separate acceptance measurement.
+
+The additional `large` suite is frozen before measurement at seed `20260908`,
+with ten cases up to 97,536 vertices. Compare one and four RHSs against the
+previous recommended numerical source `297a4a3` using the same new harness.
+Use a one-round pilot followed by three rotated external rounds if every pilot
+solve certifies. This is a bounded local scaling check, not an SCC campaign.

@@ -138,7 +138,16 @@ fn bridged_cliques(name: &'static str, pairs: usize, seed: u64) -> Case {
 }
 
 fn worker_firm(name: &'static str, degree: usize, pairs: usize, seed: u64) -> Case {
-    let side = 521;
+    worker_firm_sized(name, 521, degree, pairs, seed)
+}
+
+fn worker_firm_sized(
+    name: &'static str,
+    side: usize,
+    degree: usize,
+    pairs: usize,
+    seed: u64,
+) -> Case {
     let n = 2 * side;
     let mut state = seed;
     let mut edges = Vec::new();
@@ -199,10 +208,54 @@ pub(crate) fn stress(seed: u64) -> Vec<Case> {
     ]
 }
 
+/// Larger local cases, frozen before the kernel screen at seed 20260908.
+pub(crate) fn large(seed: u64) -> Vec<Case> {
+    vec![
+        paths("large-connected-path", &[65536], 0, 0),
+        paths("large-path-plus-pairs", &[65536], 16000, 0),
+        grid("large-connected-grid", 128, 0),
+        grid("large-grid-plus-pairs", 128, 16000),
+        worker_firm_sized("large-sparse-connected-worker-firm", 8191, 4, 0, seed),
+        worker_firm_sized("large-sparse-worker-firm-plus-pairs", 8191, 4, 16000, seed),
+        worker_firm_sized("large-dense-connected-worker-firm", 8191, 24, 0, seed + 1),
+        worker_firm_sized(
+            "large-dense-worker-firm-plus-pairs",
+            8191,
+            24,
+            16000,
+            seed + 1,
+        ),
+        weighted_path("large-weighted-path-plus-pairs", 65533, 16000, seed + 2),
+        paths("large-all-pairs", &[], 40000, 0),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cmg::Components;
+    #[test]
+    fn large_cases_have_exact_component_counts_and_finite_graphs() {
+        let cases = large(20260908);
+        assert_eq!(cases.len(), 10);
+        for case in cases {
+            let expected = if case.name.ends_with("plus-pairs") {
+                16001
+            } else if case.name == "large-all-pairs" {
+                40000
+            } else {
+                1
+            };
+            assert_eq!(
+                Components::from_laplacian(&case.graph).count(),
+                expected,
+                "{}",
+                case.name
+            );
+            assert!(case.graph.vertex_count() <= 100000);
+            assert!(case.graph.diagonal().iter().all(|x| x.is_finite()));
+        }
+    }
     #[test]
     fn stress_graphs_have_exact_component_counts_and_repeatable_weights() {
         let a = stress(20260906);

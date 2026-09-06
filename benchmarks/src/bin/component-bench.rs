@@ -284,6 +284,7 @@ fn main() {
     let cases = match suite.as_str() {
         "sentinels" => fixtures::sentinels(),
         "stress" => fixtures::stress(seed),
+        "large" => fixtures::large(seed),
         _ => panic!("unknown suite"),
     };
     let mut selected = 0;
