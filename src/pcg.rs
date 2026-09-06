@@ -1,6 +1,8 @@
 //! Certified quotient-space preconditioned conjugate gradients.
 
 use crate::components::ComponentWorkspace;
+#[cfg(feature = "experimental-components")]
+use crate::graph::compensated_add;
 use crate::graph::compensated_sum;
 use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, PcgOptions};
 #[cfg(feature = "parallel")]
@@ -891,9 +893,15 @@ fn solve_pcg_core(
         components
             .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
 
-        let solution_norm = euclidean_norm(&workspace.solution);
+        #[cfg(feature = "experimental-components")]
+        let (solution_norm, recursive_residual_norm) =
+            paired_euclidean_norms(&workspace.solution, &workspace.residual);
+        #[cfg(not(feature = "experimental-components"))]
+        let (solution_norm, recursive_residual_norm) = (
+            euclidean_norm(&workspace.solution),
+            euclidean_norm(&workspace.residual),
+        );
         last_tolerance = allowed_residual(options, rhs_norm, operator_bound, solution_norm);
-        let recursive_residual_norm = euclidean_norm(&workspace.residual);
         let candidate = recursive_residual_norm <= last_tolerance;
         let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
         let mut restarted = false;
@@ -1288,9 +1296,15 @@ fn solve_pcg_with_plan_core(
             executor,
         )?;
 
-        let solution_norm = euclidean_norm_with_executor(&workspace.solution, executor);
+        #[cfg(feature = "experimental-components")]
+        let (solution_norm, recursive_residual_norm) =
+            paired_norms_with_executor(&workspace.solution, &workspace.residual, executor);
+        #[cfg(not(feature = "experimental-components"))]
+        let (solution_norm, recursive_residual_norm) = (
+            euclidean_norm_with_executor(&workspace.solution, executor),
+            euclidean_norm_with_executor(&workspace.residual, executor),
+        );
         last_tolerance = allowed_residual(options, rhs_norm, operator_bound, solution_norm);
-        let recursive_residual_norm = euclidean_norm_with_executor(&workspace.residual, executor);
         let candidate = recursive_residual_norm <= last_tolerance;
         let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
         let mut restarted = false;
@@ -2375,6 +2389,127 @@ fn euclidean_norm(values: &[f64]) -> f64 {
                 scaled * scaled
             }))
             .sqrt()
+    }
+}
+
+/// Compute two independent scaled norms with interleaved arithmetic chains.
+/// Each maximum and compensated sum retains its original element order.
+#[cfg(feature = "experimental-components")]
+fn paired_euclidean_norms(left: &[f64], right: &[f64]) -> (f64, f64) {
+    debug_assert_eq!(left.len(), right.len());
+    let mut left_scale = 0.0_f64;
+    let mut right_scale = 0.0_f64;
+    for (&left, &right) in left.iter().zip(right) {
+        left_scale = left_scale.max(left.abs());
+        right_scale = right_scale.max(right.abs());
+    }
+    if left_scale == 0.0 || right_scale == 0.0 {
+        let norm = |values: &[f64], scale: f64| {
+            if scale == 0.0 {
+                0.0
+            } else {
+                scale
+                    * compensated_sum(values.iter().map(|value| {
+                        let scaled = *value / scale;
+                        scaled * scaled
+                    }))
+                    .sqrt()
+            }
+        };
+        return (norm(left, left_scale), norm(right, right_scale));
+    }
+    let mut left_sum = 0.0;
+    let mut left_correction = 0.0;
+    let mut right_sum = 0.0;
+    let mut right_correction = 0.0;
+    for (&left, &right) in left.iter().zip(right) {
+        let left = left / left_scale;
+        let right = right / right_scale;
+        compensated_add(&mut left_sum, &mut left_correction, left * left);
+        compensated_add(&mut right_sum, &mut right_correction, right * right);
+    }
+    (
+        left_scale * (left_sum + left_correction).sqrt(),
+        right_scale * (right_sum + right_correction).sqrt(),
+    )
+}
+
+#[cfg(all(feature = "parallel", feature = "experimental-components"))]
+pub(crate) fn paired_norms_with_executor(
+    left: &[f64],
+    right: &[f64],
+    executor: &ParallelExecutor,
+) -> (f64, f64) {
+    if executor.thread_count() == 1 {
+        paired_euclidean_norms(left, right)
+    } else {
+        // Preserve the existing fixed-chunk trees for multithreaded solves.
+        (
+            euclidean_norm_with_executor(left, executor),
+            euclidean_norm_with_executor(right, executor),
+        )
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod paired_norm_tests {
+    use super::{euclidean_norm, paired_euclidean_norms};
+
+    #[test]
+    fn paired_norms_preserve_independent_bits_across_scale_and_zero() {
+        for len in [0, 1, 17, 257] {
+            for left_scale in [0.0, 1e-310, 1e-150, 1.0, 1e150, 1e300] {
+                for right_scale in [0.0, 1e-300, 1.0, 1e300] {
+                    let left: Vec<_> = (0..len)
+                        .map(|i| left_scale * (((i * 17) % 23) as f64 - 11.0))
+                        .collect();
+                    let right: Vec<_> = (0..len)
+                        .map(|i| right_scale * (((i * 29) % 31) as f64 - 15.0))
+                        .collect();
+                    let pair = paired_euclidean_norms(&left, &right);
+                    assert_eq!(pair.0.to_bits(), euclidean_norm(&left).to_bits());
+                    assert_eq!(pair.1.to_bits(), euclidean_norm(&right).to_bits());
+                }
+            }
+        }
+        for left in [
+            vec![f64::MAX, f64::MAX],
+            vec![f64::INFINITY, 0.0],
+            vec![f64::NAN, 1.0],
+            vec![0.0, -0.0],
+        ] {
+            let right = [f64::from_bits(1), -f64::from_bits(2)];
+            let pair = paired_euclidean_norms(&left, &right);
+            assert_eq!(pair.0.to_bits(), euclidean_norm(&left).to_bits());
+            assert_eq!(pair.1.to_bits(), euclidean_norm(&right).to_bits());
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn paired_adapter_preserves_each_executor_reduction_tree() {
+        use super::{euclidean_norm_with_executor, paired_norms_with_executor};
+        use crate::{ParallelExecutor, ParallelOptions};
+        let left: Vec<_> = (0..513).map(|i| ((i * 7) % 23) as f64 - 11.0).collect();
+        let right: Vec<_> = (0..513).map(|i| ((i * 13) % 31) as f64 - 15.0).collect();
+        for threads in [1, 2, 4] {
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                min_parallel_len: 1,
+                reduction_chunk_size: 16,
+                ..ParallelOptions::default()
+            })
+            .unwrap();
+            let pair = paired_norms_with_executor(&left, &right, &executor);
+            assert_eq!(
+                pair.0.to_bits(),
+                euclidean_norm_with_executor(&left, &executor).to_bits()
+            );
+            assert_eq!(
+                pair.1.to_bits(),
+                euclidean_norm_with_executor(&right, &executor).to_bits()
+            );
+        }
     }
 }
 

@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use crate::components::ComponentWorkspace;
 use crate::graph::compensated_sum;
+#[cfg(feature = "experimental-components")]
+use crate::pcg::paired_norms_with_executor;
 use crate::pcg::{dot_with_executor, euclidean_norm_with_executor};
 use crate::{
     CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, ParallelCmgPlan, ParallelExecutor,
@@ -388,18 +390,25 @@ pub fn profile_pcg_with_plan(
             )
         })?;
 
-        let solution_norm = measure(&mut profile.norms, || {
-            euclidean_norm_with_executor(&workspace.solution, executor)
+        #[cfg(feature = "experimental-components")]
+        let (solution_norm, recursive_residual_norm) = measure(&mut profile.norms, || {
+            paired_norms_with_executor(&workspace.solution, &workspace.residual, executor)
         });
+        #[cfg(not(feature = "experimental-components"))]
+        let (solution_norm, recursive_residual_norm) = (
+            measure(&mut profile.norms, || {
+                euclidean_norm_with_executor(&workspace.solution, executor)
+            }),
+            measure(&mut profile.norms, || {
+                euclidean_norm_with_executor(&workspace.residual, executor)
+            }),
+        );
         last_tolerance = allowed_residual(
             options,
             initial_residual_norm,
             operator_bound,
             solution_norm,
         );
-        let recursive_residual_norm = measure(&mut profile.norms, || {
-            euclidean_norm_with_executor(&workspace.residual, executor)
-        });
         let candidate = recursive_residual_norm <= last_tolerance;
         let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
         let mut restarted = false;

@@ -608,7 +608,7 @@ fn write_merged_edge(
 }
 
 #[inline]
-fn compensated_add(sum: &mut f64, correction: &mut f64, value: f64) {
+pub(crate) fn compensated_add(sum: &mut f64, correction: &mut f64, value: f64) {
     let next = *sum + value;
     *correction += if sum.abs() >= value.abs() {
         (*sum - next) + value
