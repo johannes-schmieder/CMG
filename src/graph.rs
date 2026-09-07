@@ -309,7 +309,6 @@ impl Laplacian {
     }
 
     /// Remove only zero-degree rows, preserving canonical edge and addition order.
-    #[cfg(feature = "experimental-components")]
     pub(crate) fn without_isolated_vertices(&self) -> Option<(Vec<usize>, Self)> {
         if self.diagonal.iter().all(|&degree| degree > 0.0) {
             return None;
@@ -638,8 +637,6 @@ pub(crate) fn close(left: f64, right: f64, tolerance: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Laplacian;
-
-    #[cfg(feature = "experimental-components")]
     #[test]
     fn compact_isolates_preserves_canonical_values_and_drops_lineage() {
         for edges in [

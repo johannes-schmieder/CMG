@@ -200,8 +200,6 @@ impl Aggregation {
         }
         Ok(())
     }
-
-    #[cfg(feature = "experimental-components")]
     pub(crate) fn restrict_residual_into(
         &self,
         rhs: &[f64],
@@ -450,7 +448,7 @@ mod compact_aggregation_label_tests {
     }
 }
 
-#[cfg(all(test, feature = "experimental-components"))]
+#[cfg(test)]
 mod residual_restriction_tests {
     use super::*;
 

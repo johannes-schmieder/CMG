@@ -1,7 +1,6 @@
 //! Certified quotient-space preconditioned conjugate gradients.
 
 use crate::components::ComponentWorkspace;
-#[cfg(feature = "experimental-components")]
 use crate::graph::compensated_add;
 use crate::graph::compensated_sum;
 use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, PcgOptions};
@@ -765,7 +764,6 @@ fn solve_pcg_core(
 ) -> Result<PcgDiagnostics, CmgError> {
     // Choose one monomorphized loop at entry; connected solves keep the original
     // centering and dot-product call sequence throughout their iterations.
-    #[cfg(feature = "experimental-components")]
     if preconditioner.finest_components().count() > 1 {
         return solve_pcg_core_kernel::<true>(
             graph,
@@ -896,7 +894,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
         &mut workspace.preconditioned,
         &mut workspace.cmg,
     )?;
-    #[cfg(feature = "experimental-components")]
     let mut rho = if FUSED_CENTERING {
         components.center_and_dot_with_workspace(
             &mut workspace.preconditioned,
@@ -904,14 +901,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
             &mut workspace.component,
         )?
     } else {
-        components.center_in_place_with_workspace(
-            &mut workspace.preconditioned,
-            &mut workspace.component,
-        )?;
-        dot(&workspace.residual, &workspace.preconditioned)
-    };
-    #[cfg(not(feature = "experimental-components"))]
-    let mut rho = {
         components.center_in_place_with_workspace(
             &mut workspace.preconditioned,
             &mut workspace.component,
@@ -945,15 +934,8 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
         }
         components
             .center_in_place_with_workspace(&mut workspace.solution, &mut workspace.component)?;
-
-        #[cfg(feature = "experimental-components")]
         let (solution_norm, recursive_residual_norm) =
             paired_euclidean_norms(&workspace.solution, &workspace.residual);
-        #[cfg(not(feature = "experimental-components"))]
-        let (solution_norm, recursive_residual_norm) = (
-            euclidean_norm(&workspace.solution),
-            euclidean_norm(&workspace.residual),
-        );
         last_tolerance = allowed_residual(options, rhs_norm, operator_bound, solution_norm);
         let candidate = recursive_residual_norm <= last_tolerance;
         let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
@@ -1014,7 +996,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
             &mut workspace.preconditioned,
             &mut workspace.cmg,
         )?;
-        #[cfg(feature = "experimental-components")]
         let new_rho = if FUSED_CENTERING {
             components.center_and_dot_with_workspace(
                 &mut workspace.preconditioned,
@@ -1022,14 +1003,6 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
                 &mut workspace.component,
             )?
         } else {
-            components.center_in_place_with_workspace(
-                &mut workspace.preconditioned,
-                &mut workspace.component,
-            )?;
-            dot(&workspace.residual, &workspace.preconditioned)
-        };
-        #[cfg(not(feature = "experimental-components"))]
-        let new_rho = {
             components.center_in_place_with_workspace(
                 &mut workspace.preconditioned,
                 &mut workspace.component,
@@ -1214,7 +1187,6 @@ fn solve_pcg_with_plan_core(
 ) -> Result<PcgDiagnostics, CmgError> {
     // Choose one monomorphized loop at entry; connected solves keep the original
     // centering and dot-product call sequence throughout their iterations.
-    #[cfg(feature = "experimental-components")]
     if preconditioner.finest_components().count() > 1 && executor.thread_count() == 1 {
         return solve_pcg_with_plan_core_kernel::<true>(
             graph,
@@ -1363,7 +1335,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
         options.validation,
         executor,
     )?;
-    #[cfg(feature = "experimental-components")]
     let mut rho = if FUSED_CENTERING {
         components.center_and_dot_with_workspace(
             &mut workspace.preconditioned,
@@ -1371,15 +1342,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
             &mut workspace.component,
         )?
     } else {
-        components.center_in_place_with_workspace_and_executor(
-            &mut workspace.preconditioned,
-            &mut workspace.component,
-            executor,
-        )?;
-        dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
-    };
-    #[cfg(not(feature = "experimental-components"))]
-    let mut rho = {
         components.center_in_place_with_workspace_and_executor(
             &mut workspace.preconditioned,
             &mut workspace.component,
@@ -1425,15 +1387,8 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
             &mut workspace.component,
             executor,
         )?;
-
-        #[cfg(feature = "experimental-components")]
         let (solution_norm, recursive_residual_norm) =
             paired_norms_with_executor(&workspace.solution, &workspace.residual, executor);
-        #[cfg(not(feature = "experimental-components"))]
-        let (solution_norm, recursive_residual_norm) = (
-            euclidean_norm_with_executor(&workspace.solution, executor),
-            euclidean_norm_with_executor(&workspace.residual, executor),
-        );
         last_tolerance = allowed_residual(options, rhs_norm, operator_bound, solution_norm);
         let candidate = recursive_residual_norm <= last_tolerance;
         let scheduled_recompute = iteration % options.residual_recompute_interval == 0;
@@ -1503,7 +1458,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
             options.validation,
             executor,
         )?;
-        #[cfg(feature = "experimental-components")]
         let new_rho = if FUSED_CENTERING {
             components.center_and_dot_with_workspace(
                 &mut workspace.preconditioned,
@@ -1511,15 +1465,6 @@ fn solve_pcg_with_plan_core_kernel<const FUSED_CENTERING: bool>(
                 &mut workspace.component,
             )?
         } else {
-            components.center_in_place_with_workspace_and_executor(
-                &mut workspace.preconditioned,
-                &mut workspace.component,
-                executor,
-            )?;
-            dot_with_executor(&workspace.residual, &workspace.preconditioned, executor)
-        };
-        #[cfg(not(feature = "experimental-components"))]
-        let new_rho = {
             components.center_in_place_with_workspace_and_executor(
                 &mut workspace.preconditioned,
                 &mut workspace.component,
@@ -2542,7 +2487,6 @@ pub(crate) fn euclidean_norm(values: &[f64]) -> f64 {
 
 /// Compute two independent scaled norms with interleaved arithmetic chains.
 /// Each maximum and compensated sum retains its original element order.
-#[cfg(feature = "experimental-components")]
 fn paired_euclidean_norms(left: &[f64], right: &[f64]) -> (f64, f64) {
     debug_assert_eq!(left.len(), right.len());
     let mut left_scale = 0.0_f64;
@@ -2582,7 +2526,7 @@ fn paired_euclidean_norms(left: &[f64], right: &[f64]) -> (f64, f64) {
     )
 }
 
-#[cfg(all(feature = "parallel", feature = "experimental-components"))]
+#[cfg(feature = "parallel")]
 pub(crate) fn paired_norms_with_executor(
     left: &[f64],
     right: &[f64],
@@ -2599,7 +2543,7 @@ pub(crate) fn paired_norms_with_executor(
     }
 }
 
-#[cfg(all(feature = "parallel", feature = "experimental-components"))]
+#[cfg(any(feature = "profiling", all(test, feature = "parallel")))]
 pub(crate) fn center_and_dot_with_executor(
     components: &crate::Components,
     values: &mut [f64],
@@ -2616,7 +2560,7 @@ pub(crate) fn center_and_dot_with_executor(
     }
 }
 
-#[cfg(all(test, feature = "experimental-components"))]
+#[cfg(test)]
 mod paired_norm_tests {
     use super::{euclidean_norm, paired_euclidean_norms};
 

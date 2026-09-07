@@ -56,9 +56,23 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 }
 
 #[test]
-fn connected_and_disabled_paths_preserve_the_original_hierarchy_and_cycle() {
+fn explicit_disabled_policy_retains_unpruned_reference_and_connected_cycle() {
     for graph in [mixed(128, 0), mixed(128, 30)] {
-        let reference = CmgPreconditioner::build(
+        let reference = build(&graph, 8, false, false);
+        assert!(
+            reference
+                .hierarchy()
+                .levels()
+                .iter()
+                .all(|l| l.pruned_transfer().is_none())
+        );
+        let blocks_only = build(&graph, 8, false, true);
+        assert_eq!(reference.hierarchy(), blocks_only.hierarchy());
+        assert_eq!(
+            reference.apply(&vector(&graph, 1)).unwrap(),
+            blocks_only.apply(&vector(&graph, 1)).unwrap()
+        );
+        let ordinary = CmgPreconditioner::build(
             &graph,
             CmgOptions {
                 direct_threshold: 8,
@@ -66,21 +80,22 @@ fn connected_and_disabled_paths_preserve_the_original_hierarchy_and_cycle() {
             },
         )
         .unwrap();
-        let disabled = build(&graph, 8, false, false);
-        assert_eq!(reference.hierarchy(), disabled.hierarchy());
-        assert_eq!(
-            reference.apply(&vector(&graph, 1)).unwrap(),
-            disabled.apply(&vector(&graph, 1)).unwrap()
-        );
         if Components::from_laplacian(&graph).count() == 1 {
-            let enabled = build(&graph, 8, true, true);
-            assert_eq!(reference.hierarchy(), enabled.hierarchy());
-            assert_eq!(reference.terminal_factor(), enabled.terminal_factor());
+            assert_eq!(reference.hierarchy(), ordinary.hierarchy());
+            assert_eq!(reference.terminal_factor(), ordinary.terminal_factor());
             assert_eq!(
                 reference.apply(&vector(&graph, 1)).unwrap(),
-                enabled.apply(&vector(&graph, 1)).unwrap()
+                ordinary.apply(&vector(&graph, 1)).unwrap()
             );
-            assert_eq!(reference.retained_bytes(), enabled.retained_bytes());
+            assert_eq!(reference.retained_bytes(), ordinary.retained_bytes());
+        } else {
+            assert!(
+                ordinary
+                    .hierarchy()
+                    .levels()
+                    .iter()
+                    .any(|l| l.pruned_transfer().is_some())
+            );
         }
     }
 }

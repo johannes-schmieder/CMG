@@ -1,0 +1,15 @@
+[package]
+name = "cmg-component-callers"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+cmg = { path = "../..", default-features = false }
+
+[features]
+default = []
+parallel = ["cmg/parallel"]
+experimental-components = ["cmg/experimental-components"]
+component-allocations = []

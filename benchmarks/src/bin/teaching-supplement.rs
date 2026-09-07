@@ -407,6 +407,10 @@ fn write_aggregations(
             for (vertex, &label) in aggregation.labels().iter().enumerate() {
                 writeln!(file, "{level_index},{vertex},{label}")?;
             }
+        } else if let Some(transfer) = level.pruned_transfer() {
+            for &(vertex, label) in transfer.entries() {
+                writeln!(file, "{level_index},{vertex},{label}")?;
+            }
         }
     }
     Ok(())
@@ -430,6 +434,41 @@ fn write_hierarchy_edges(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod transfer_export_tests {
+    use super::*;
+
+    #[test]
+    fn compact_export_keeps_surviving_rows_and_omits_retired_pairs() {
+        let edges = (0..15)
+            .map(|v| (v, v + 1, 1.0))
+            .chain((0..351).map(|pair| (16 + 2 * pair, 17 + 2 * pair, 1.0)));
+        let graph = Laplacian::from_edges(718, edges).unwrap();
+        let pre = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
+        let first = &pre.hierarchy().levels()[0];
+        assert!(first.pruned_transfer().is_some());
+        assert!(!first.is_terminal());
+        let path = env::temp_dir().join(format!("cmg-transfer-export-{}.csv", std::process::id()));
+        write_aggregations(path.clone(), &pre).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        let mut lines = contents.lines();
+        assert_eq!(lines.next(), Some("level,fine_vertex,coarse_vertex"));
+        let rows = lines
+            .map(|line| line.split(',').collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 16);
+        for (vertex, row) in rows.iter().enumerate() {
+            assert_eq!(row[0], "0");
+            assert_eq!(row[1].parse::<usize>().unwrap(), vertex);
+            assert!(
+                row[2].parse::<usize>().unwrap()
+                    < pre.hierarchy().levels()[1].graph().vertex_count()
+            );
+        }
+    }
 }
 
 fn write_edges(path: PathBuf, graph: &Laplacian, prefix: &str) -> Result<(), Box<dyn Error>> {

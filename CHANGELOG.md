@@ -28,6 +28,12 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Changed
 
+- Default-study candidate: ordinary builders use ordered CMG/PCG kernels,
+  preserved-stopping coarse compaction, and component terminal factors. The
+  standalone grounded factor remains the reference implementation. Hierarchy
+  inspection now exposes `PrunedTransfer` without a feature; `aggregation()` can
+  be absent on a nonterminal compact level. This candidate is on a separate
+  study branch and has not been promoted on main.
 - Planned within-solve PCG uses fixed-order parallel component centering for
   large connected systems, preserving deterministic results across eligible
   multithreaded worker-pool sizes while one worker retains the serial path;

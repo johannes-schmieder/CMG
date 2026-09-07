@@ -156,7 +156,6 @@ pub(crate) struct CenteringPlan {
 impl CenteringPlan {
     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
         let Components { labels, sizes, .. } = Components::from_laplacian(graph);
-        #[cfg(feature = "experimental-components")]
         let labels = labels.into_vec();
         let vertex_count = labels.len();
         let component_count = sizes.len();
@@ -332,15 +331,11 @@ impl CenteringPlan {
 /// Connected-component metadata for a weighted graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Components {
-    #[cfg(not(feature = "experimental-components"))]
-    labels: Vec<usize>,
     // Labels never change length after construction. A boxed slice leaves room
-    // for the experimental layout flag without growing the metadata embedded
+    // for the contiguous layout flag without growing the metadata embedded
     // in every terminal factor (and its containing preconditioner).
-    #[cfg(feature = "experimental-components")]
     labels: Box<[usize]>,
     sizes: Vec<usize>,
-    #[cfg(feature = "experimental-components")]
     contiguous: bool,
 }
 
@@ -378,11 +373,7 @@ impl Components {
             sizes[label] += 1;
         }
         Self {
-            #[cfg(feature = "experimental-components")]
             contiguous: labels.is_sorted(),
-            #[cfg(not(feature = "experimental-components"))]
-            labels,
-            #[cfg(feature = "experimental-components")]
             labels: labels.into_boxed_slice(),
             sizes,
         }
@@ -428,11 +419,7 @@ impl Components {
             sizes[label] += 1;
         }
         Ok(Self {
-            #[cfg(feature = "experimental-components")]
             contiguous: labels.is_sorted(),
-            #[cfg(not(feature = "experimental-components"))]
-            labels,
-            #[cfg(feature = "experimental-components")]
             labels: labels.into_boxed_slice(),
             sizes,
         })
@@ -608,7 +595,6 @@ impl Components {
             ));
         }
         workspace.validate(self.count())?;
-        #[cfg(feature = "experimental-components")]
         if self.contiguous && self.count() > 1 {
             // Every component occupies one slice in label order. Accumulate in
             // registers and subtract one constant per slice, preserving the
@@ -669,7 +655,6 @@ impl Components {
 
     /// Center a vector and accumulate its dot product with `left` in vertex order.
     /// All input checks finish before the first centered value is written.
-    #[cfg(feature = "experimental-components")]
     pub(crate) fn center_and_dot_with_workspace(
         &self,
         values: &mut [f64],
@@ -1023,7 +1008,7 @@ fn union_min_root(parent: &mut [usize], left: usize, right: usize) {
     parent[child] = root;
 }
 
-#[cfg(all(test, feature = "experimental-components"))]
+#[cfg(test)]
 mod contiguous_tests {
     use super::{Components, Laplacian};
 
@@ -1114,7 +1099,7 @@ mod contiguous_tests {
     }
 }
 
-#[cfg(all(test, feature = "experimental-components"))]
+#[cfg(test)]
 mod centered_dot_tests {
     use super::{ComponentWorkspace, Components, Laplacian};
     use crate::{CmgError, graph::compensated_sum};

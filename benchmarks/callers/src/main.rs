@@ -1,5 +1,4 @@
-//! Reusable disconnected-graph sentinels, paired setup/solve measurements and
-//! cycle-work accounting. No SCC submission or automatic production routing.
+//! Matched minimal/parallel caller benchmarks with original-system certificates.
 
 #[cfg(feature = "experimental-components")]
 use cmg::ComponentBuildOptions;
@@ -10,14 +9,22 @@ use cmg::{
 use std::hint::black_box;
 use std::time::Instant;
 
-#[path = "../component_fixtures.rs"]
+#[path = "../../src/component_fixtures.rs"]
 mod fixtures;
 use fixtures::Case;
 #[cfg(feature = "component-allocations")]
-#[path = "../requested_allocations.rs"]
+#[path = "../../src/requested_allocations.rs"]
 mod allocations;
-#[path = "../component_profile.rs"]
-mod phase_profile;
+#[path = "veneto.rs"]
+mod veneto;
+#[cfg(feature = "parallel")]
+use cmg::{ParallelCmgPlan, ParallelExecutor, ParallelOptions};
+
+#[derive(Clone, Copy)]
+struct Caller {
+    kind: &'static str,
+    threads: usize,
+}
 
 fn build(graph: &Laplacian, route: usize) -> Result<CmgPreconditioner, CmgError> {
     if route == 0 {
@@ -57,6 +64,9 @@ struct Sample {
     tolerances: Vec<f64>,
     retained: usize,
     scratch: usize,
+    diagnostics: Vec<Vec<u64>>,
+    plan_bytes: usize,
+    caller_bytes: usize,
     relative_solution_errors: Vec<f64>,
     solution_bit_hashes: Vec<String>,
 }
@@ -66,40 +76,135 @@ fn measure(
     rhs: &[Vec<f64>],
     targets: &[Vec<f64>],
     route: usize,
+    caller: Caller,
 ) -> Result<Sample, Failure> {
     let start = Instant::now();
+    #[cfg(feature = "parallel")]
+    let executor = if caller.kind == "planned" {
+        Some(
+            ParallelExecutor::new(ParallelOptions {
+                threads: caller.threads,
+                ..ParallelOptions::default()
+            })
+            .map_err(|e| Failure::new("executor", e))?,
+        )
+    } else {
+        None
+    };
+    #[cfg(feature = "parallel")]
+    let pre = if let Some(executor) = &executor {
+        if route == 0 {
+            CmgPreconditioner::build_with_executor(
+                black_box(graph),
+                CmgOptions::default(),
+                executor,
+            )
+        } else {
+            build(black_box(graph), route)
+        }
+    } else {
+        build(black_box(graph), route)
+    }
+    .map_err(|e| Failure::new("setup", e))?;
+    #[cfg(not(feature = "parallel"))]
     let pre = build(black_box(graph), route).map_err(|e| Failure::new("setup", e))?;
+    #[cfg(feature = "parallel")]
+    let plan = executor
+        .as_ref()
+        .map(|e| ParallelCmgPlan::build(&pre, e))
+        .transpose()
+        .map_err(|e| Failure::new("plan", e))?;
+    #[cfg(feature = "parallel")]
+    let plan_bytes = plan.as_ref().map_or(0, ParallelCmgPlan::byte_len);
+    #[cfg(not(feature = "parallel"))]
+    let plan_bytes = 0;
     let setup = start.elapsed().as_nanos();
     let start = Instant::now();
     let mut ws = PcgWorkspace::new(&pre);
+    let mut output = if caller.kind == "owned" {
+        Vec::new()
+    } else {
+        vec![vec![0.0; graph.vertex_count()]; rhs.len()]
+    };
+    let mut diagnostics = if caller.kind == "owned" {
+        Vec::new()
+    } else {
+        vec![cmg::PcgDiagnostics::default(); rhs.len()]
+    };
+    let caller_bytes = output
+        .iter()
+        .map(|v| v.capacity() * core::mem::size_of::<f64>())
+        .sum::<usize>()
+        + output.capacity() * core::mem::size_of::<Vec<f64>>()
+        + diagnostics.capacity() * core::mem::size_of::<cmg::PcgDiagnostics>();
     let workspace = start.elapsed().as_nanos();
     let start = Instant::now();
-    let results: Vec<_> = rhs
-        .iter()
-        .map(|b| {
-            solve_pcg_with_workspace(graph, &pre, black_box(b), PcgOptions::default(), &mut ws)
-        })
-        .collect::<Result<_, _>>()
-        .map_err(|e| Failure::new("solve", e))?;
+    let results: Vec<_> = if caller.kind == "owned" {
+        rhs.iter()
+            .map(|b| {
+                solve_pcg_with_workspace(graph, &pre, black_box(b), PcgOptions::default(), &mut ws)
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| Failure::new("solve", e))?
+    } else {
+        for ((b, out), diagnostic) in rhs.iter().zip(&mut output).zip(&mut diagnostics) {
+            #[cfg(feature = "parallel")]
+            if let (Some(plan), Some(executor)) = (&plan, &executor) {
+                *diagnostic = cmg::solve_pcg_with_plan_into_with_workspace(
+                    graph,
+                    &pre,
+                    plan,
+                    black_box(b),
+                    None,
+                    out,
+                    PcgOptions::default(),
+                    &mut ws,
+                    executor,
+                )
+                .map_err(|e| Failure::new("planned-solve", e))?;
+                continue;
+            }
+            *diagnostic = cmg::solve_pcg_into_with_workspace(
+                graph,
+                &pre,
+                black_box(b),
+                None,
+                out,
+                PcgOptions::default(),
+                &mut ws,
+            )
+            .map_err(|e| Failure::new("buffer-solve", e))?;
+        }
+        Vec::new()
+    };
     let solve = start.elapsed().as_nanos();
+    if caller.kind == "owned" {
+        diagnostics = results.iter().map(|r| r.diagnostics()).collect();
+    }
+    let solutions: Vec<_> = if caller.kind == "owned" {
+        results.iter().map(|r| r.solution()).collect()
+    } else {
+        output.iter().map(|r| r.as_slice()).collect()
+    };
     // Independently recompute the original-system residual outside timings.
-    let mut relative_solution_errors = Vec::with_capacity(results.len());
-    for ((result, b), target) in results.iter().zip(rhs).zip(targets) {
-        let ax = graph.matvec(result.solution()).unwrap();
+    let mut relative_solution_errors = Vec::with_capacity(rhs.len());
+    for (((solution, diagnostic), b), target) in
+        solutions.iter().zip(&diagnostics).zip(rhs).zip(targets)
+    {
+        let ax = graph.matvec(solution).unwrap();
         let fresh = b
             .iter()
             .zip(ax)
             .map(|(b, ax)| (b - ax).powi(2))
             .sum::<f64>()
             .sqrt();
-        if !fresh.is_finite() || fresh > result.tolerance() {
+        if !fresh.is_finite() || fresh > diagnostic.tolerance() {
             return Err(Failure {
                 stage: "independent-residual",
-                error: format!("{fresh} > {}", result.tolerance()),
+                error: format!("{fresh} > {}", diagnostic.tolerance()),
             });
         }
-        let error = result
-            .solution()
+        let error = solution
             .iter()
             .zip(target)
             .map(|(x, y)| (x - y).powi(2))
@@ -123,16 +228,30 @@ fn measure(
         workspace,
         solve,
         apply,
-        iterations: results.iter().map(|r| r.iterations()).collect(),
-        residuals: results.iter().map(|r| r.residual_norm()).collect(),
-        tolerances: results.iter().map(|r| r.tolerance()).collect(),
+        iterations: diagnostics.iter().map(|r| r.iterations()).collect(),
+        residuals: diagnostics.iter().map(|r| r.residual_norm()).collect(),
+        tolerances: diagnostics.iter().map(|r| r.tolerance()).collect(),
         retained: pre.retained_bytes(),
         scratch: ws.byte_len(),
-        relative_solution_errors,
-        solution_bit_hashes: results
+        plan_bytes,
+        caller_bytes,
+        diagnostics: diagnostics
             .iter()
-            .map(|r| solution_bit_hash(r.solution()))
+            .map(|d| {
+                vec![
+                    d.iterations() as u64,
+                    d.restarts() as u64,
+                    d.initial_residual_norm().to_bits(),
+                    d.residual_norm().to_bits(),
+                    d.relative_residual().to_bits(),
+                    d.backward_error().to_bits(),
+                    d.tolerance().to_bits(),
+                    d.rhs_projection_norm().to_bits(),
+                ]
+            })
             .collect(),
+        relative_solution_errors,
+        solution_bit_hashes: solutions.iter().map(|r| solution_bit_hash(r)).collect(),
     })
 }
 
@@ -165,14 +284,6 @@ fn print_structure(case: &Case, route: usize) -> Result<(), Failure> {
             .iter()
             .filter(|&&d| d == 0.0)
             .count();
-        let represented = level
-            .aggregation()
-            .map(|a| a.coarse_dimension())
-            .unwrap_or(0);
-        let represented = level
-            .pruned_transfer()
-            .map(|t| t.represented_coarse_dimension())
-            .unwrap_or(represented);
         let active = pre
             .hierarchy()
             .levels()
@@ -180,7 +291,7 @@ fn print_structure(case: &Case, route: usize) -> Result<(), Failure> {
             .map(|l| l.graph().vertex_count())
             .unwrap_or(0);
         println!(
-            "{{\"type\":\"level\",\"case\":\"{}\",\"route\":\"{}\",\"level\":{index},\"vertices\":{},\"edges\":{},\"isolates\":{isolates},\"repeat\":{},\"terminal\":{},\"cycle_or_terminal_visits\":{visits},\"represented_coarse_vertices\":{represented},\"active_coarse_vertices\":{active}}}",
+            "{{\"type\":\"level\",\"case\":\"{}\",\"route\":\"{}\",\"level\":{index},\"vertices\":{},\"edges\":{},\"isolates\":{isolates},\"repeat\":{},\"terminal\":{},\"cycle_or_terminal_visits\":{visits},\"active_coarse_vertices\":{active}}}",
             case.name,
             names(route),
             level.graph().vertex_count(),
@@ -237,10 +348,29 @@ fn main() {
     let mut suite = "sentinels".to_owned();
     let mut seed = 20260906u64;
     let mut route = None;
-    let mut profile = false;
+    let mut caller = Caller {
+        kind: "owned",
+        threads: 1,
+    };
+    let mut input = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--profile" => profile = true,
+            "--caller" => {
+                caller.kind = match args.next().expect("caller").as_str() {
+                    "owned" => "owned",
+                    "buffer" => "buffer",
+                    "planned" => "planned",
+                    _ => panic!("unknown caller"),
+                }
+            }
+            "--threads" => {
+                caller.threads = args
+                    .next()
+                    .expect("threads")
+                    .parse()
+                    .expect("integer threads")
+            }
+            "--input" => input = args.next(),
             "--suite" => suite = args.next().expect("suite value"),
             "--seed" => {
                 seed = args
@@ -279,9 +409,14 @@ fn main() {
         .unwrap_or(1);
     let filter = positional.get(2).map(String::as_str).unwrap_or("");
     assert!(repetitions > 0 && rhs_count > 0);
+    assert!(caller.threads > 0);
     assert!(
-        !profile || !cfg!(feature = "component-allocations"),
-        "run phase profiling separately from allocation instrumentation"
+        caller.kind == "planned" || caller.threads == 1,
+        "threads only apply to planned caller"
+    );
+    assert!(
+        caller.kind != "planned" || cfg!(feature = "parallel"),
+        "planned caller requires parallel feature"
     );
     let routes = route.map_or_else(
         || {
@@ -298,17 +433,23 @@ fn main() {
         "baseline-only build"
     );
     println!(
-        "{{\"type\":\"environment\",\"source\":{},\"os\":{},\"arch\":{},\"suite\":{},\"seed\":{seed},\"repetitions\":{repetitions},\"rhs_count\":{rhs_count},\"warmups\":2,\"parallel_execution\":false,\"phase_profiling\":{profile},\"allocation_tracking\":{}}}",
+        "{{\"type\":\"environment\",\"source\":{},\"os\":{},\"arch\":{},\"suite\":{},\"seed\":{seed},\"repetitions\":{repetitions},\"rhs_count\":{rhs_count},\"warmups\":2,\"caller\":\"{}\",\"threads\":{},\"parallel_feature\":{},\"parallel_execution\":{},\"phase_profiling\":false,\"allocation_tracking\":{}}}",
         json_string(option_env!("CMG_BENCH_COMMIT").unwrap_or("unrecorded")),
         json_string(std::env::consts::OS),
         json_string(std::env::consts::ARCH),
         json_string(&suite),
+        caller.kind,
+        caller.threads,
+        cfg!(feature = "parallel"),
+        caller.kind == "planned",
         cfg!(feature = "component-allocations")
     );
     let cases = match suite.as_str() {
         "sentinels" => fixtures::sentinels(),
         "stress" => fixtures::stress(seed),
         "large" => fixtures::large(seed),
+        "veneto" => veneto::load(input.as_deref().expect("Veneto requires --input"))
+            .expect("valid public Veneto input"),
         _ => panic!("unknown suite"),
     };
     let mut selected = 0;
@@ -329,16 +470,25 @@ fn main() {
             .iter()
             .map(|x| case.graph.matvec(x).unwrap())
             .collect();
+        let mut graph_hash = 0xcbf29ce484222325u64;
+        for e in case.graph.edges() {
+            for value in [e.u() as u64, e.v() as u64, e.weight().to_bits()] {
+                for b in value.to_le_bytes() {
+                    graph_hash = (graph_hash ^ u64::from(b)).wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        println!(
+            "{{\"type\":\"input\",\"case\":{},\"vertices\":{},\"edges\":{},\"graph_hash\":\"{graph_hash:016x}\",\"rhs_hashes\":{:?}}}",
+            json_string(case.name),
+            case.graph.vertex_count(),
+            case.graph.edge_count(),
+            rhs.iter().map(|r| solution_bit_hash(r)).collect::<Vec<_>>()
+        );
         for &route in &routes {
             if let Err(error) = print_structure(&case, route) {
                 error.emit(case.name, route, None);
                 failures += 1;
-            }
-            if profile {
-                if let Err(error) = phase_profile::run(&case, &rhs, route, repetitions) {
-                    error.emit(case.name, route, None);
-                    failures += 1;
-                }
             }
             #[cfg(feature = "component-allocations")]
             if let Err(error) = allocation_probe(&case, &rhs, route) {
@@ -346,13 +496,10 @@ fn main() {
                 failures += 1;
             }
         }
-        if profile {
-            continue;
-        }
         for round in 0..repetitions + 2 {
             for offset in 0..routes.len() {
                 let route = routes[(round + offset) % routes.len()];
-                let s = match measure(&case.graph, &rhs, &targets, route) {
+                let s = match measure(&case.graph, &rhs, &targets, route, caller) {
                     Ok(s) => s,
                     Err(error) => {
                         error.emit(case.name, route, round.checked_sub(2));
@@ -365,7 +512,7 @@ fn main() {
                 }
                 let total = s.setup + s.workspace + s.solve;
                 println!(
-                    "{{\"type\":\"sample\",\"case\":{},\"route\":{},\"round\":{},\"setup_ns\":{},\"workspace_allocation_ns\":{},\"solve_ns\":{},\"total_ns\":{total},\"apply_ns\":{},\"iterations\":{:?},\"residuals\":{:?},\"tolerances\":{:?},\"relative_solution_errors\":{:?},\"solution_bit_hashes\":{:?},\"retained_preconditioner_bytes\":{},\"pcg_workspace_bytes\":{}}}",
+                    "{{\"type\":\"sample\",\"case\":{},\"route\":{},\"round\":{},\"setup_ns\":{},\"workspace_allocation_ns\":{},\"solve_ns\":{},\"total_ns\":{total},\"apply_ns\":{},\"iterations\":{:?},\"residuals\":{:?},\"tolerances\":{:?},\"relative_solution_errors\":{:?},\"solution_bit_hashes\":{:?},\"retained_preconditioner_bytes\":{},\"pcg_workspace_bytes\":{},\"diagnostic_bits\":{:?},\"plan_bytes\":{},\"caller_buffer_bytes\":{}}}",
                     json_string(case.name),
                     json_string(names(route)),
                     round - 2,
@@ -379,7 +526,10 @@ fn main() {
                     s.relative_solution_errors,
                     s.solution_bit_hashes,
                     s.retained,
-                    s.scratch
+                    s.scratch,
+                    s.diagnostics,
+                    s.plan_bytes,
+                    s.caller_bytes
                 );
             }
         }
@@ -464,6 +614,12 @@ fn allocation_probe(case: &Case, rhs: &[Vec<f64>], route: usize) -> Result<(), F
         apply.allocations,
         pcg.allocations
     );
+    if setup.peak_additional > estimate.build_peak_bytes() {
+        return Err(Failure {
+            stage: "memory-estimate",
+            error: "setup peak exceeded conservative bound".to_owned(),
+        });
+    }
     if apply.allocations != 0 || pcg.allocations != 0 {
         return Err(Failure {
             stage: "unexpected-warm-allocation",

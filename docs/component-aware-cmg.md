@@ -1,4 +1,9 @@
-# Component-aware CMG: opt-in experiments
+# Component-aware CMG: experiments and default study
+
+Current status: PR #5 is merged as an opt-in checkpoint. The separate default
+study branch evaluates ordinary builders; main has not adopted those defaults.
+The historical sections below describe their recorded checkpoints. See the
+default-promotion study at the end for the current candidate scope.
 
 This opt-in study addresses [issue #2](https://github.com/johannes-schmieder/CMG/issues/2).
 The branch starts from `main` at `90e1fe0b0c14065155532711246ede6678bb4935`.
@@ -1203,3 +1208,79 @@ identity, source archives, frozen binaries, auditors and validation logs. Every
 archived audited file is rechecked against its recorded checksum. Failed or
 rejected raw evidence is preserved. No main merge, SCC deployment or new cluster
 campaign is part of this work.
+
+## Default-promotion study after the second checkpoint merge
+
+PR #5 merged as `90d06d58edf7de43e6e78855b1b14c4b6311b808`, retaining opt-in
+experiments. The following work is on a separate study branch; it does not
+promote defaults on main. Candidate A makes the retained ordered kernels
+available to ordinary builds without changing hierarchy or factor selection.
+Candidate B additionally uses preserved-stopping pruning and component
+terminal factors consistently across ordinary builders. Cargo defaults stay
+empty and the tiny-component portfolio remains explicitly selected.
+
+Development uses historical fixtures and seed 20260914. Both sources, the matched
+caller harness, matrix and gates are frozen before fresh seed 20260915. Compare
+against both the merged checkpoint and pre-merge `1921d66`, never by multiplying
+ratios from distinct harnesses. The local screen covers original 32 and fresh
+12 cases at 1/4/16 RHSs, owning and buffer paths, minimal and parallel builds,
+public Veneto complete/connected graphs, and one/four-thread prepared callers.
+Nine rotated external rounds use two warmups. Connected controls must establish
+the existing 2% margin; a clear loss beyond 2% elsewhere blocks a broad local
+recommendation. Require a supported gain of at least 5% on a target workload.
+One extension to 21 rounds is allowed for inconclusive controls; unresolved
+results remain unqualified. Allocation and profile runs are separate. No source
+is tuned to fresh qualification data. Default promotion on main and SCC are
+outside this study.
+
+The original full local matrix was amended for runtime after six complete
+configurations and four complete rounds of the first large configuration. The
+legacy mixed path/grid solves made the 16-RHS repetitions project to roughly a
+day of local computation. The interrupted round is excluded and its raw files
+are preserved. All 46 configured cases remain in the serial screen, but
+`large-path-plus-pairs`, `large-grid-plus-pairs`, and
+`large-weighted-path-plus-pairs` are measured only at one RHS. Those three cases
+are omitted from the parallel performance matrix. Remaining primary cells use
+the previous main, checkpoint default, checkpoint preserved-stopping, A, and B
+arms; completed original cells retain all seven arms. Numerical source, margins,
+seeds, and the maximum control extension are unchanged. This is a bounded local
+screen, not completion of the original full qualification matrix.
+
+Candidate B uses preserved-stopping pruning in serial, executor and profiled
+hierarchy builders and component terminal factors in CMG finalization. The
+standalone `GroundedLdl::factor` remains the original reference factor builder.
+The explicit experiment's disabled/prune-only/block-only routes remain independent
+of ordinary defaults. `PrunedTransfer` and its read-only hierarchy accessor are
+available without a feature; callers inspecting `aggregation()` must use
+`is_terminal()` to distinguish terminals from compact partial transfers.
+
+The study also updates local hierarchy consumers. Teaching CSV exports retain
+surviving partial-transfer rows; component diagnostics report represented coarse
+counts without requiring the experiment feature. SCC memory reporters use the
+hierarchy's retained-byte accounting, including partial transfers and avoiding
+lazy native-label materialization. The contraction subphase profiler explicitly
+reports skipped partial-transfer levels and marks its totals incomplete. No SCC
+launcher or remote evidence is changed.
+
+The completed [bounded local study](component-default-study.md) recommends
+keeping main opt-in. A qualifies 157/160 connected controls and B 159/160;
+the remaining controls are inconclusive after the allowed 21 rounds. There are
+no clear losses beyond 2%. B reaches 7.523x [7.398, 8.046] on the complete Veneto
+graph with four RHSs and serial caller buffers, versus the ordinary checkpoint.
+Its performance is close to the checkpoint's already enabled preserved-stopping
+route. The audit accepts 21,084 timing samples and 130,236 residual certificates,
+with no expected numerical or hierarchy mismatches.
+
+The weighted-path stress case also exposes an existing accuracy limitation:
+every source returns the same certified solution with 56.6% relative error
+against the known target. The default residual criterion is not a forward-error
+guarantee. This limitation and the omitted large-case comparisons are recorded
+in the report; no tolerance or numerical source was changed to improve results.
+
+Final consumer work guards the pinned C adapter against unsupported partial
+transfers. Prepared automatic caller checks uncovered an old one-worker routing
+assertion; the separately recorded correction keeps all numerical assertions
+and reruns only the 12 failed caller configurations. All 24 accepted automatic
+caller configurations, 16 fixed-topology configurations and 138 allocation
+records pass. Original failures and the correction provenance remain in the
+evidence package.

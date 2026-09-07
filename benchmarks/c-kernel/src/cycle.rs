@@ -115,6 +115,17 @@ struct ReferenceHierarchy {
 
 impl ReferenceHierarchy {
     fn from_preconditioner(preconditioner: &CmgPreconditioner) -> Result<Self, AnyError> {
+        if preconditioner
+            .hierarchy()
+            .levels()
+            .iter()
+            .any(|level| level.pruned_transfer().is_some())
+        {
+            return Err(io::Error::other(
+                "recursive C comparison does not support compact partial transfers",
+            )
+            .into());
+        }
         if preconditioner.terminal_factor().is_some() {
             return Err(
                 io::Error::other("recursive C comparison requires an iterative terminal").into(),
@@ -461,6 +472,25 @@ fn json_u128(values: &[u128]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_partial_transfers_are_rejected_before_c_conversion() {
+        let mut edges: Vec<_> = (0..15).map(|u| (u, u + 1, 1.0)).collect();
+        edges.extend((16..718).step_by(2).map(|u| (u, u + 1, 1.0)));
+        let graph = Laplacian::from_edges(718, edges).unwrap();
+        let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
+        assert!(
+            preconditioner
+                .hierarchy()
+                .levels()
+                .iter()
+                .any(|level| level.pruned_transfer().is_some())
+        );
+        let error = ReferenceHierarchy::from_preconditioner(&preconditioner)
+            .err()
+            .expect("compact transfers must not reach the C adapter");
+        assert!(error.to_string().contains("compact partial transfers"));
+    }
 
     #[test]
     fn iterative_recursive_cycle_matches_pinned_c() {
