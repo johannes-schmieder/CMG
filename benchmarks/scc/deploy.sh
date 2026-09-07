@@ -29,6 +29,9 @@ archive="$temporary/$source_sha.tar"
 git archive --format=tar --output="$archive" "$source_sha"
 archive_sha=$(shasum -a 256 "$archive" | awk '{print $1}')
 mkdir -p "$temporary/tasks"
+if [[ "$run_id" == *-b2v1-component-default ]]; then
+    python3 benchmarks/scc/component_campaign.py stage-local "$repo_root" "$temporary/component"
+fi
 for kind in smoke baseline routing reuse numa memory accuracy batch matched-edge; do
     python3 benchmarks/scc/tasks/generate_tasks.py "$kind" "$temporary/tasks/$kind.jsonl"
 done
@@ -42,6 +45,9 @@ remote_archive_sha=$(ssh scc "sha256sum '$project_root/source-archives/$source_s
 test "$remote_archive_sha" = "$archive_sha"
 if ! ssh scc "test -d '$project_root/code-b2/$source_sha'"; then
     ssh scc "mkdir '$project_root/code-b2/$source_sha' && tar -xf '$project_root/source-archives/$source_sha.tar' -C '$project_root/code-b2/$source_sha'"
+fi
+if [[ -d "$temporary/component" ]]; then
+    rsync -a "$temporary/component/" "scc:$project_root/runs/$run_id/manifests/component/"
 fi
 rsync -a "$temporary/tasks/" "scc:$project_root/runs/$run_id/manifests/tasks/"
 rsync -a "$temporary/task-manifests.sha256" "scc:$project_root/runs/$run_id/manifests/task-manifests.sha256"
