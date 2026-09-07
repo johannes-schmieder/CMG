@@ -84,8 +84,12 @@ fn forest_solve_on_range(graph: &Laplacian, rhs: &[f64]) -> Option<Vec<f64>> {
     let mut correction = vec![0.0; n];
     for &v in order.iter().rev() {
         if parent[v] != v {
-            let value = sums[v] + correction[v];
-            add(&mut sums[parent[v]], &mut correction[parent[v]], value);
+            // Keep both terms across levels; rounding them together at every
+            // parent discards the compensation on a long path.
+            let high = sums[v];
+            let low = correction[v];
+            add(&mut sums[parent[v]], &mut correction[parent[v]], high);
+            add(&mut sums[parent[v]], &mut correction[parent[v]], low);
         }
     }
     let mut solution = vec![0.0; n];
@@ -266,6 +270,19 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtree_compensation_survives_parent_cancellation() {
+        let graph =
+            Laplacian::from_edges(5, [(0, 1, 1.0), (1, 2, 1e16), (2, 3, 1e16), (3, 4, 1e16)])
+                .unwrap();
+        let rhs = [0.0, -1.0, 1e16, 1.0, -1e16];
+        let solution = forest_solve_on_range(&graph, &rhs).unwrap();
+        // The subtree below vertex 1 has exact zero total current. Collapsing
+        // a child's compensated pair would instead lose the unit at vertex 3.
+        assert!((solution[0] - solution[1]).abs() < 1e-14);
+        assert!((solution[4] - solution[0] + 2.0).abs() < 1e-14);
+    }
 
     #[test]
     fn forest_reference_solves_weighted_branches_pairs_and_isolates() {
