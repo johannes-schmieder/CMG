@@ -4,6 +4,7 @@ use cmg::{
     solve_pcg_with_workspace,
 };
 use std::time::Instant;
+use std::{fs::OpenOptions, io::Write};
 
 #[allow(dead_code)]
 #[path = "../../../src/component_fixtures.rs"]
@@ -40,6 +41,14 @@ fn hash(values: &[f64]) -> String {
 // Independent weighted-forest reference: subtree RHS sums give edge currents;
 // integrating current/weight gives potentials. No CMG hierarchy or Krylov loop.
 fn forest_solve(graph: &Laplacian, rhs: &[f64]) -> Option<Vec<f64>> {
+    let mut centered = rhs.to_vec();
+    Components::from_laplacian(graph)
+        .center_in_place(&mut centered)
+        .unwrap();
+    forest_solve_on_range(graph, &centered)
+}
+
+fn forest_solve_on_range(graph: &Laplacian, rhs: &[f64]) -> Option<Vec<f64>> {
     let n = graph.vertex_count();
     let mut adjacency = vec![Vec::new(); n];
     for edge in graph.edges() {
@@ -72,7 +81,6 @@ fn forest_solve(graph: &Laplacian, rhs: &[f64]) -> Option<Vec<f64>> {
     }
     let components = Components::from_laplacian(graph);
     let mut sums = rhs.to_vec();
-    components.center_in_place(&mut sums).unwrap();
     let mut correction = vec![0.0; n];
     for &v in order.iter().rev() {
         if parent[v] != v {
@@ -133,10 +141,9 @@ fn metrics(graph: &Laplacian, rhs: &[f64], target: &[f64], solution: &[f64]) -> 
 
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    assert_eq!(
-        args.len(),
-        5,
-        "suite case tolerance restart_interval max_iterations"
+    assert!(
+        args.len() == 5 || (args.len() == 7 && args[5] == "--export"),
+        "suite case tolerance restart_interval max_iterations [--export PATH]"
     );
     let suite = &args[0];
     let cases = match suite.as_str() {
@@ -172,10 +179,43 @@ fn main() {
         norm(&rhs),
         graph.operator_norm_bound(),
     );
+    let mut projected_rhs = rhs.clone();
+    let projection_norm = components
+        .project_rhs_in_place(&mut projected_rhs, PcgOptions::default().validation)
+        .unwrap();
+    if args.len() == 7 {
+        let mut centered_rhs = rhs.clone();
+        components.center_in_place(&mut centered_rhs).unwrap();
+        let forest_uniform = forest_solve_on_range(graph, &centered_rhs)
+            .map_or_else(|| "null".to_owned(), |v| format!("{v:?}"));
+        let forest_projected = forest_solve_on_range(graph, &projected_rhs)
+            .map_or_else(|| "null".to_owned(), |v| format!("{v:?}"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&args[6])
+            .unwrap();
+        write!(file, "{{\"source\":\"{source}\",\"vertices\":{},\"rhs\":{rhs:?},\"centered_rhs\":{centered_rhs:?},\"projected_rhs\":{projected_rhs:?},\"target\":{target:?},\"forest_uniform\":{forest_uniform},\"forest_projected\":{forest_projected},\"edges\":[", graph.vertex_count()).unwrap();
+        for (index, edge) in graph.edges().iter().enumerate() {
+            if index != 0 {
+                write!(file, ",").unwrap();
+            }
+            write!(file, "[{},{},{}]", edge.u(), edge.v(), edge.weight()).unwrap();
+        }
+        writeln!(file, "]}}").unwrap();
+        return;
+    }
     let reference = forest_solve(graph, &rhs);
     if let Some(reference) = &reference {
         println!(
             "{{\"type\":\"forest_reference\",{}}}",
+            metrics(graph, &rhs, &target, reference)
+        );
+    }
+    let projected_reference = forest_solve_on_range(graph, &projected_rhs);
+    if let Some(reference) = &projected_reference {
+        println!(
+            "{{\"type\":\"forest_projected_reference\",\"projection_norm\":{projection_norm},{}}}",
             metrics(graph, &rhs, &target, reference)
         );
     }
@@ -202,8 +242,11 @@ fn main() {
             let reference_error = reference
                 .as_ref()
                 .map_or(0.0, |x| norm(&difference(result.solution(), x)) / norm(x));
+            let projected_reference_error = projected_reference
+                .as_ref()
+                .map_or(0.0, |x| norm(&difference(result.solution(), x)) / norm(x));
             println!(
-                "{{\"type\":\"result\",\"status\":\"ok\",\"setup_ns\":{setup_ns},\"solve_ns\":{solve_ns},\"iterations\":{},\"restarts\":{},\"allowed_residual\":{},\"backward_error\":{},\"error_vs_forest\":{reference_error},{}}}",
+                "{{\"type\":\"result\",\"status\":\"ok\",\"setup_ns\":{setup_ns},\"solve_ns\":{solve_ns},\"iterations\":{},\"restarts\":{},\"allowed_residual\":{},\"backward_error\":{},\"error_vs_forest\":{reference_error},\"error_vs_projected_forest\":{projected_reference_error},{}}}",
                 result.iterations(),
                 result.restarts(),
                 result.tolerance(),
