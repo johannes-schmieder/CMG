@@ -2,7 +2,7 @@ name: Rust CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, investigation/component-cmg-accuracy]
     tags: ['v*']
     paths-ignore:
       - '.ci/**'
@@ -74,6 +74,20 @@ jobs:
 
       - name: Component benchmark fixture tests
         run: cargo test --manifest-path benchmarks/Cargo.toml --features experimental-components --bin component-bench
+
+      - name: Accuracy diagnostics on the CI host
+        run: |
+          cargo build --locked --release --manifest-path benchmarks/callers/Cargo.toml --bin accuracy
+          python3 benchmarks/callers/accuracy_screen.py --binary benchmarks/callers/target/release/accuracy --source "$CMG_BENCH_COMMIT" --output "${{ runner.temp }}/cmg-accuracy-ci"
+
+      - name: Retain accuracy diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-accuracy-${{ github.sha }}
+          path: ${{ runner.temp }}/cmg-accuracy-ci
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Teaching transfer export
         run: cargo test --manifest-path benchmarks/Cargo.toml --bin teaching-supplement
