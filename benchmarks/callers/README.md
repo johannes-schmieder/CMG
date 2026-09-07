@@ -36,3 +36,8 @@ Its arguments select suite, exact case, backward-residual tolerance, residual
 recompute interval and iteration cap. It compares the known target with PCG and
 an independent compensated weighted-forest reference where available. Failures
 are retained as result records; diagnostic timings are not performance evidence.
+Append `--export PATH` to write the synthetic inputs and both forest references
+to a new JSON file for higher-precision checks. See
+[`docs/pcg-accuracy.md`](../../docs/pcg-accuracy.md) for the distinction between
+backward-residual certification and forward accuracy. `accuracy_screen.py`
+retains four bounded CI checks and host metadata; it does not qualify performance.
