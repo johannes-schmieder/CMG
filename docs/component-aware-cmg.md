@@ -1237,7 +1237,7 @@ The original full local matrix was amended for runtime after six complete
 configurations and four complete rounds of the first large configuration. The
 legacy mixed path/grid solves made the 16-RHS repetitions project to roughly a
 day of local computation. The interrupted round is excluded and its raw files
-are preserved. All 46 graphs remain in the serial screen, but
+are preserved. All 46 configured cases remain in the serial screen, but
 `large-path-plus-pairs`, `large-grid-plus-pairs`, and
 `large-weighted-path-plus-pairs` are measured only at one RHS. Those three cases
 are omitted from the parallel performance matrix. Remaining primary cells use
@@ -1261,3 +1261,26 @@ hierarchy's retained-byte accounting, including partial transfers and avoiding
 lazy native-label materialization. The contraction subphase profiler explicitly
 reports skipped partial-transfer levels and marks its totals incomplete. No SCC
 launcher or remote evidence is changed.
+
+The completed [bounded local study](component-default-study.md) recommends
+keeping main opt-in. A qualifies 157/160 connected controls and B 159/160;
+the remaining controls are inconclusive after the allowed 21 rounds. There are
+no clear losses beyond 2%. B reaches 7.523x [7.398, 8.046] on the complete Veneto
+graph with four RHSs and serial caller buffers, versus the ordinary checkpoint.
+Its performance is close to the checkpoint's already enabled preserved-stopping
+route. The audit accepts 21,084 timing samples and 130,236 residual certificates,
+with no expected numerical or hierarchy mismatches.
+
+The weighted-path stress case also exposes an existing accuracy limitation:
+every source returns the same certified solution with 56.6% relative error
+against the known target. The default residual criterion is not a forward-error
+guarantee. This limitation and the omitted large-case comparisons are recorded
+in the report; no tolerance or numerical source was changed to improve results.
+
+Final consumer work guards the pinned C adapter against unsupported partial
+transfers. Prepared automatic caller checks uncovered an old one-worker routing
+assertion; the separately recorded correction keeps all numerical assertions
+and reruns only the 12 failed caller configurations. All 24 accepted automatic
+caller configurations, 16 fixed-topology configurations and 138 allocation
+records pass. Original failures and the correction provenance remain in the
+evidence package.

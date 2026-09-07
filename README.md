@@ -276,6 +276,8 @@ cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
   guidance, bottlenecks, and limitations.
 - [Component-aware experiments](docs/component-aware-cmg.md) — opt-in kernel
   qualification and the explicit fixed-matrix tiny-component portfolio.
+- [Component default study](docs/component-default-study.md) — ordinary-caller
+  candidates, local results and the remaining barriers to default promotion.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — code map, repository policy,
   and performance-change discipline.
 - [CMG teaching supplement](docs/teaching/README.md) — a visual, step-by-step
