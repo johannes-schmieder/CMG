@@ -258,7 +258,9 @@ fn main() {
     assert!(planned_difference <= 5.0e-9);
     assert!(auto_difference <= 5.0e-9);
 
-    let expected_execution = if rhs_count == 1 {
+    let expected_execution = if threads == 1 {
+        ParallelPcgExecution::Serial
+    } else if rhs_count == 1 {
         if solver.plan().operator_count() > 0 && bench_graph.edges >= 200_000 {
             ParallelPcgExecution::Planned
         } else {

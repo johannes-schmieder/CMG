@@ -12,3 +12,7 @@ cargo run --release --manifest-path benchmarks/c-kernel/Cargo.toml -- \
 ```
 
 Hosted-runner timings are directional. The benchmark first verifies numerical agreement and exits before timing if the scaled error exceeds `2e-12`.
+
+The recursive-cycle comparison requires an iterative terminal and full
+aggregation maps. The pinned C adapter cannot represent compact partial
+transfers, so such hierarchies are rejected before constructing C descriptors.
