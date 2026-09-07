@@ -27,3 +27,17 @@ the complete graph and its largest connected component. Verify the documented
 SHA-256 before recording evidence; source IDs and outcomes are never printed.
 Record the clean library SHA in `CMG_BENCH_COMMIT` at build time, hash the harness
 and binary, rotate external invocation order, and preserve raw JSONL and failures.
+
+The separate `accuracy` binary diagnoses solution accuracy and restart behavior:
+`CMG_BENCH_COMMIT=COMMITTED_SHA cargo run --release --manifest-path
+benchmarks/callers/Cargo.toml --bin accuracy -- large
+large-weighted-path-plus-pairs 1e-10 25 1000` (on one line).
+Its arguments select suite, exact case, backward-residual tolerance, residual
+recompute interval and iteration cap. It compares the known target with PCG and
+an independent compensated weighted-forest reference where available. Failures
+are retained as result records; diagnostic timings are not performance evidence.
+Append `--export PATH` to write the synthetic inputs and both forest references
+to a new JSON file for higher-precision checks. See
+[`docs/pcg-accuracy.md`](../../docs/pcg-accuracy.md) for the distinction between
+backward-residual certification and forward accuracy. `accuracy_screen.py`
+retains four bounded CI checks and host metadata; it does not qualify performance.
