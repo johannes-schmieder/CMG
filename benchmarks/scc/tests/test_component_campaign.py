@@ -12,7 +12,14 @@ c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
 
 
+QUOTA = '{\n name max_slots_per_host\n enabled TRUE\n limit hosts {*} to slots=$num_proc\n}'
+
+
 class CampaignTests(unittest.TestCase):
+    def setUp(self):
+        mock = patch.object(c, 'host_quota', return_value=QUOTA)
+        mock.start(); self.addCleanup(mock.stop)
+
     def test_frozen_scope_and_omitted_cross_product(self):
         p = c.canonical_plan()
         self.assertEqual(set(p['profiles']), {'e5-2680v4', 'gold-6242'})
@@ -43,11 +50,11 @@ class CampaignTests(unittest.TestCase):
             plan = root / 'manifests/component/component-plan.json'
             c.write(plan, c.canonical_plan())
             outputs = [subprocess.CompletedProcess([], 0, '123.1-1:1\n', ''),
-                       subprocess.CompletedProcess([], 0, 'hard resource_list: exclusive=true\n', '')]
+                       subprocess.CompletedProcess([], 0, 'hard resource_list: cpu_type=E5-2680v4,num_proc=28\n', '')]
             with patch.object(c, 'context', return_value=('a', 'b', Path('/frozen/code'))), patch.object(c, 'verify_accepted'), patch.object(c.subprocess, 'run', side_effect=outputs) as run:
                 c.submit(root, 'smoke', 'e5-2680v4')
                 command = run.call_args_list[0].args[0]
-                self.assertIn('num_proc=28,cpu_type=E5-2680v4,exclusive=true,mem_per_core=3G,h_rt=01:00:00', command)
+                self.assertIn('num_proc=28,cpu_type=E5-2680v4,mem_per_core=3G,h_rt=01:00:00', command)
                 self.assertNotIn('-binding', command)
                 self.assertNotIn('-q', command)
                 self.assertEqual(command[command.index('-pe') + 2], '28')
@@ -89,6 +96,16 @@ class CampaignTests(unittest.TestCase):
             files = {'raw': c.sha(root / 'raw')}; c.verify_files(root, files)
             (root / 'raw').write_text('changed')
             with self.assertRaises(ValueError): c.verify_files(root, files)
+
+    def test_host_quota_must_cover_every_host_and_user(self):
+        self.assertEqual(c.validate_host_quota(QUOTA), QUOTA)
+        for changed in [QUOTA.replace('TRUE', 'FALSE'), QUOTA.replace('hosts {*}', 'users johannes hosts {*}'), QUOTA.replace('$num_proc', '64'), QUOTA.replace('max_slots_per_host', 'different_quota')]:
+            with self.assertRaises(ValueError): c.validate_host_quota(changed)
+
+    def test_unavailable_quota_blocks_submission(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(c, 'context', return_value=('a', 'b', Path('/code'))), patch.object(c, 'verify_accepted'), patch.object(c, 'host_quota', side_effect=ValueError('disabled')), patch.object(c.subprocess, 'run') as run:
+            with self.assertRaises(ValueError): c.submit(Path(temp), 'smoke', 'e5-2680v4')
+            run.assert_not_called()
 
     def test_run_scope_rejected(self):
         for value in ['../run', '20260907T000000Z-abcdef0-b2v1-dispatch', '20260907T000000Z-abcdef0-b2v1-component-default/extra']:

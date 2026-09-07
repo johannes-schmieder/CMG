@@ -111,12 +111,18 @@ or automatic promotion. Earlier accepted and failed campaigns stay immutable.
 
 `component_campaign.py` is the frozen specification. The two profiles are
 Broadwell E5-2680v4 (28 slots) and Cascade Lake Gold-6242 (32 slots). Each benchmark
-allocation requests `exclusive=true` and the exact whole-host CPU/core count.
+allocation reserves the exact whole-host CPU/core count. The launcher requires
+SCC's enabled `max_slots_per_host` resource quota to be exactly
+`limit hosts {*} to slots=$num_proc`, covering all users and every host. Reserving
+all physical host slots therefore prevents another scheduler job from sharing
+the host, across queues. The quota is checked before submission and at the start
+and end of each task. The `exclusive` resource flag is omitted: SCC defines that
+complex but has no configured capacity for it.
 SCC's global configuration does not enable scheduler binding. The launcher
 therefore omits `-binding`, explicitly pins each process and its children to the
 first one or four physical cores of the first socket, verifies the affinity,
 and checks at start/end that `qhost` lists no other scheduler job on that host.
-An exclusive reservation and these checks reduce host contention; they cannot
+The enforced whole-host reservation and these checks reduce host contention; they cannot
 remove operating-system activity or establish performance on all x86 hardware.
 
 Use one fresh `*-b2v1-component-default` run. The existing `deploy.sh` stages the
@@ -138,7 +144,7 @@ reservation after an ambiguous response; inspect its recorded response and queue
 4. Submit both `submit_component.sh submit RUN smoke PROFILE` jobs. The smoke
    includes the expensive path-plus-pairs, 16-RHS/four-worker boundary, ordinary
    owning and buffer callers, and both-source accuracy diagnostics. Each smoke
-   reserves the same exclusive host used by qualification, with a one-hour cap.
+   reserves the same whole-host reservation used by qualification, with a one-hour cap.
 5. Accept **both** smokes using the corresponding `accept` commands before any
    validation submission. A failed smoke stops the campaign.
 6. Submit `submit_component.sh submit RUN validate PROFILE` once per profile.
@@ -174,3 +180,20 @@ complete qacct, source/binary manifests and stage receipts. Summaries must repor
 walltime/maxvmem ranges and distinguish scientific acceptance from performance
 qualification. Do not run the older README's direct-login bootstrap command for
 this campaign.
+
+
+### One operational correction before numerical execution
+
+The first deployment `20260907T055716Z-ed9dc95-b2v1-component-default`
+passed bootstrap 7481907, but smokes 7481918/7481919 remained unstarted.
+The unsupported `exclusive=true` request was isolated with read-only SGE
+verification: possible 28/32-slot assignments appeared when removing only that
+resource. `qhost -F exclusive` reported no capacity records. The active global
+`max_slots_per_host` quota already limits aggregate scheduler slots per host to
+its physical CPU count; this is the reservation mechanism used by the correction.
+The original source, build, submission records and failed collection snapshots
+remain immutable. Cancel only those exact verified-unstarted smokes, then use
+one fresh committed deployment, bootstrap and pair of smokes. No numerical
+source, driver, graph/RHS, CPU profile, affinity, timing design, stopping rule or
+performance gate changes. This is the single authorized operational retest;
+stop and report if it fails. Never alter a queued original request in place.

@@ -114,7 +114,9 @@ def canonical_plan():
             'resources': {'bootstrap_slots': 4, 'bootstrap_memory_per_core': '6G',
                           'benchmark_memory_per_core': '3G', 'smoke_runtime': '01:00:00',
                           'validate_runtime': '06:00:00', 'array_concurrency_per_profile': 2,
-                          'exclusive': True, 'scheduler_binding': False,
+                          'whole_host': True, 'exclusive_resource_requested': False,
+                          'isolation': 'enabled max_slots_per_host quota: hosts {*} to slots=$num_proc',
+                          'scheduler_binding': False,
                           'pinning': 'first one/four physical cores on socket zero within allowed mask'},
             'scope': 'B vs checkpoint; omitted caller cells plus six connected controls and the dense one-RHS control; no default promotion or historical replay'}
 
@@ -228,14 +230,30 @@ def stage_paths(root, stage, profile):
     return label, root / 'manifests' / f'submission-component-{label}.json', root / 'receipts' / f'ACCEPTED-component-{label}.json'
 
 
+def validate_host_quota(text):
+    lines = [' '.join(line.split()) for line in text.splitlines()]
+    require('name max_slots_per_host' in lines and 'enabled TRUE' in lines,
+            'required global host quota is missing or disabled')
+    limits = [line for line in lines if line.startswith('limit ')]
+    require(limits == ['limit hosts {*} to slots=$num_proc'],
+            'host quota is narrowed, changed, or not the physical host CPU limit')
+    return text
+
+
+def host_quota():
+    return validate_host_quota(capture(['qconf', '-srqs', 'max_slots_per_host']))
+
+
 def submit(root, stage, profile):
     _, _, code = context(root)
     plan = canonical_plan()
     label, receipt, accepted = stage_paths(root, stage, profile)
     require(not receipt.exists() and not accepted.exists(), 'submission/acceptance already exists')
     require(not (root / 'output' / f'component-{label}').exists(), 'output namespace exists')
+    quota = None
     if stage != 'bootstrap':
         verify_accepted(root, 'bootstrap', 'all')
+        quota = host_quota()
     if stage == 'validate':
         for name in PROFILES:
             verify_accepted(root, 'smoke', name)
@@ -248,10 +266,13 @@ def submit(root, stage, profile):
     else:
         p = PROFILES[profile]; slots = p['slots']; count = len(plan[stage])
         runtime = plan['resources'][f'{stage}_runtime']
-        qsub += ['-pe', 'omp', str(slots), '-l', f'num_proc={slots},cpu_type={p["cpu_type"]},exclusive=true,mem_per_core=3G,h_rt={runtime}',
+        qsub += ['-pe', 'omp', str(slots), '-l', f'num_proc={slots},cpu_type={p["cpu_type"]},mem_per_core=3G,h_rt={runtime}',
                  '-t', f'1-{count}', '-tc', '2' if stage == 'validate' else '1']
     qsub += [str(code / 'benchmarks/scc/run_component.sh'), root.name, stage, profile]
     write(reservation / 'request.json', {'command': qsub, 'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat()})
+    if quota is not None:
+        with (reservation / 'host-quota.txt').open('x') as stream:
+            stream.write(quota + '\n')
     completed = subprocess.run(qsub, text=True, capture_output=True)
     (reservation / 'qsub.stdout').write_text(completed.stdout)
     (reservation / 'qsub.stderr').write_text(completed.stderr)
@@ -263,10 +284,11 @@ def submit(root, stage, profile):
     (reservation / 'qstat.txt').write_text(snapshot.stdout + snapshot.stderr)
     write(receipt, {'stage': stage, 'profile': profile, 'job_id': job, 'qsub_response': response,
                     'slots': slots, 'tasks': count, 'command': qsub, 'logdir': str(logdir),
-                    'plan_sha256': sha(root / 'manifests/component/component-plan.json')})
+                    'plan_sha256': sha(root / 'manifests/component/component-plan.json'),
+                    'host_quota': quota})
     if stage != 'bootstrap' and snapshot.returncode == 0:
-        require(re.search(r'exclusive=(?:true|1)', snapshot.stdout, re.I),
-                'accepted job snapshot lacks exclusive resource; inspect before proceeding')
+        require('exclusive=' not in snapshot.stdout,
+                'unexpected exclusive resource in submitted job; inspect before proceeding')
     print(response, flush=True)
 
 
@@ -280,6 +302,7 @@ def host_snapshot(path, expected_job):
 
 def hardware(profile):
     p = PROFILES[profile]
+    quota = host_quota()
     require(int(os.environ.get('NSLOTS', '0')) == p['slots'], 'slot mismatch')
     allowed = sorted(os.sched_getaffinity(0))
     require(len(allowed) == p['slots'] == os.cpu_count(), 'whole-host CPU mask/count mismatch')
@@ -299,7 +322,8 @@ def hardware(profile):
     require(len(first) == 4, 'four same-socket physical CPUs unavailable')
     return {'hostname': os.uname().nodename, 'cpu_models': models, 'allowed_cpus': allowed,
             'slots': p['slots'], 'physical': physical, 'benchmark_cpus': first,
-            'exclusive_requested': True, 'scheduler_binding_requested': False,
+            'exclusive_requested': False, 'whole_host_slots_reserved': True,
+            'host_quota': quota, 'scheduler_binding_requested': False,
             'raw_nslots': os.environ.get('NSLOTS'), 'raw_pe': os.environ.get('PE'),
             'raw_sge_binding': os.environ.get('SGE_BINDING'), 'job_id': os.environ['JOB_ID'],
             'task_id': os.environ['SGE_TASK_ID'], 'load_start': os.getloadavg()}
@@ -425,6 +449,7 @@ def benchmark(root, stage, profile, task_id):
             require(all(pair[0]['result'][k] == pair[1]['result'][k] for k in ('solution_hash', 'iterations', 'restarts', 'allowed_residual', 'backward_error')), 'accuracy checkpoint/B mismatch')
             accuracy.append({'case': args, 'results': pair})
         require(accuracy[1]['results'][1]['result']['relative_solution_error'] < accuracy[0]['results'][1]['result']['relative_solution_error'] / 10, 'strict tolerance did not improve difficult weighted case')
+    require(host_quota() == host['host_quota'], 'host quota changed during task')
     host_snapshot(directory / 'scheduler-end.xml', host['job_id'])
     write(directory / 'summary.json', {'stage': stage, 'profile': profile, 'task_id': task_id, 'hostname': host['hostname'],
           'job_id': host['job_id'], 'results': results, 'accuracy': accuracy, 'load_end': os.getloadavg(), 'numerical_checks_passed': True})
