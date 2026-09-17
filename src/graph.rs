@@ -206,6 +206,22 @@ impl Laplacian {
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
+    #[cfg(feature = "parallel")]
+    pub(crate) fn from_compact_edges_with_executor_admitted(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
+        if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
+            // Rayon's unstable sort is in-place. Its scheduling/runtime storage
+            // is explicitly outside the CMG-owned construction budget.
+            executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
+            Self::from_sorted_raw_edges_with_mode::<true>(vertex_count, raw, true)
+        } else {
+            Self::from_compact_edges_admitted(vertex_count, raw)
+        }
+    }
+
     fn from_endpoint_sorted_raw_edges(
         vertex_count: usize,
         raw: Vec<Edge>,

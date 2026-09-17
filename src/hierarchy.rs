@@ -296,6 +296,58 @@ impl CmgHierarchy {
         crate::storage::add(retained, scratch)
     }
 
+    /// New CMG-owned requested layouts for the admitted executor-aware path.
+    /// Includes fixed mapping/gather banks; EXCLUDES Rayon runtime, the borrowed
+    /// executor/graph, allocator/OS storage, factors and later lazy accessors.
+    /// This is not strict combined construction/runtime admission.
+    #[cfg(feature = "parallel")]
+    pub fn executor_construction_cmg_allocation_bound(
+        vertices: usize,
+        edges: usize,
+        options: CmgOptions,
+    ) -> Result<usize, CmgError> {
+        crate::storage::add(
+            Self::serial_construction_allocation_bound(vertices, edges, options)?,
+            crate::storage::bytes::<Option<crate::Edge>>(edges)?,
+        )
+    }
+
+    /// Admit CMG-owned layouts only, retaining the existing parallel thresholds.
+    /// The supplied Rayon runtime remains uncovered and must be allowed by the
+    /// caller's separate policy. No pool is created by this method.
+    #[cfg(feature = "parallel")]
+    pub fn build_with_executor_and_cmg_budget(
+        graph: &Laplacian,
+        options: CmgOptions,
+        executor: &ParallelExecutor,
+        cmg_budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::executor_construction_cmg_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+            )?,
+            cmg_budget_bytes,
+        )?;
+        Self::build_executor_admitted::<false, false>(graph, options, executor)
+    }
+
+    #[cfg(feature = "parallel")]
+    pub(crate) fn build_executor_admitted<const PRUNE: bool, const PRESERVE: bool>(
+        graph: &Laplacian,
+        options: CmgOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
+        Self::build_with_kernels_impl::<false, PRUNE, PRESERVE, true, _, _>(
+            graph,
+            options,
+            crate::forest::build_forest_aggregation_labels_admitted,
+            |aggregation, current| aggregation.contract_with_executor_admitted(current, executor),
+        )
+        .map(|(hierarchy, _)| hierarchy)
+    }
+
     pub(crate) fn serial_allocation_parts(
         n: usize,
         m: usize,

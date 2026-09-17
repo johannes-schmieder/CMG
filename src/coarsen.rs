@@ -430,6 +430,54 @@ impl Aggregation {
         )
     }
 
+    /// Fixed CMG-owned banks; the caller has already admitted the whole build.
+    /// Both banks are provisioned before dispatch. Workers only write disjoint
+    /// slots; no worker-side growing collection or CMG allocation is needed.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn contract_with_executor_admitted(
+        &self,
+        graph: &Laplacian,
+        executor: &ParallelExecutor,
+    ) -> Result<Laplacian, CmgError> {
+        self.validate_contract_graph(graph)?;
+        if graph.edge_count() < PARALLEL_SETUP_MIN_ITEMS
+            || !executor.should_parallel(graph.edge_count())
+        {
+            return self.contract_admitted(graph);
+        }
+        let mut mapped =
+            crate::storage::try_filled(graph.edge_count(), None, "parallel contracted edge slots")?;
+        let mut coarse_edges =
+            crate::storage::try_capacity(graph.edge_count(), "parallel contracted edges")?;
+        executor.install(|| {
+            mapped
+                .par_iter_mut()
+                .zip(graph.edges().par_iter())
+                .try_for_each(|(slot, edge)| {
+                    let (left, right) = match &self.labels {
+                        LabelStorage::Compact(labels) => {
+                            (labels[edge.u()] as usize, labels[edge.v()] as usize)
+                        }
+                        LabelStorage::Native(labels) => (labels[edge.u()], labels[edge.v()]),
+                    };
+                    if left != right {
+                        *slot = Some(Edge::from_internal_parts(left, right, edge.weight())?);
+                    }
+                    Ok::<_, CmgError>(())
+                })
+        })?;
+        // Preserve input order before the unchanged endpoint/weight sorts.
+        // At most m items are appended to capacity m; this cannot grow.
+        for edge in mapped.into_iter().flatten() {
+            coarse_edges.push(edge);
+        }
+        Laplacian::from_compact_edges_with_executor_admitted(
+            self.coarse_dimension(),
+            coarse_edges,
+            executor,
+        )
+    }
+
     fn validate_contract_graph(&self, graph: &Laplacian) -> Result<(), CmgError> {
         if graph.vertex_count() != self.fine_dimension() {
             return Err(CmgError::dimension(

@@ -30,8 +30,14 @@ let component = cmg::ComponentBuildOptions {
     preserve_unpruned_stopping: true,
     factor_terminal_components: true,
 };
-let preconditioner = cmg::CmgPreconditioner::build_component_experiment_with_executor(
-    graph, cmg::CmgOptions::default(), component, executor,
+// This admits CMG-owned storage only. The caller must separately permit the
+// existing executor's uncovered Rayon runtime; strict runtime admission rejects.
+let options = cmg::CmgOptions::default();
+let setup_bytes = cmg::CmgPreconditioner::component_executor_construction_cmg_allocation_bound(
+    graph.vertex_count(), graph.edge_count(), options, component,
+)?;
+let preconditioner = cmg::CmgPreconditioner::build_component_experiment_with_executor_and_cmg_budget(
+    graph, options, component, executor, setup_bytes,
 )?;
 let required = cmg::PcgBatchWorkspace::bank_allocation_bytes(&preconditioner, 4)?;
 let workspaces = cmg::PcgBatchWorkspace::new_bank_with_budget(
@@ -49,7 +55,8 @@ For a later prepared fereg session, the exact sequence is:
    Admit reusable assembly scratch with `PreparedLaplacianWorkspace::new_with_budget`.
 3. Charge live parents/old frames, then create the next numeric frame using
    `assemble_with_workspace_budgeted` and its `numeric_allocation_bytes` query.
-4. Reuse one executor and build the explicit component preconditioner above.
+4. Reserve the queried CMG-owned construction bytes after charging existing
+   parents; reuse one executor and build the explicit preconditioner above.
    Build a `ParallelCmgPlan` only if the existing caller policy requests it.
 5. Prepare a fixed admitted workspace bank and call the existing caller-buffer
    functions. For changing weights, use the explicit retained-preconditioner
@@ -79,9 +86,11 @@ the same plan. Other solver methods retain their existing unbudgeted lazy
 behavior, so skipping this step is not implicit admission.
 
 This is an API integration recipe, **not adoption approval**. The corresponding
-`conservative_component` estimate remains principal-array scoped. Complete
-hierarchy construction and runtime admission are unresolved and strict
-whole-build admission refuses them. See [memory ownership](memory-ownership.md).
+`conservative_component` estimate remains principal-array scoped. The new
+constructor covers CMG-owned hierarchy/factor construction, but runtime admission
+is unresolved and strict whole-build admission still refuses it. The legacy
+unbudgeted constructor does not acquire this coverage automatically. See
+[memory ownership](memory-ownership.md).
 Do not discard fereg's unresolved coverage flags or claim its entire memory
 supplement redundant. Ordinary defaults, active-count stopping, and the tiny
 PCG portfolio remain separate and unchanged. The historical SCC 54-target gain

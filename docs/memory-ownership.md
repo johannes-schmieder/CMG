@@ -3,8 +3,8 @@
 The new capacity reports and narrowly scoped admission APIs supplement, rather
 than redefine, `CmgMemoryEstimate`, `CmgMemoryReport`, and the repeated-PCG
 principal-array interfaces. **A combined executor-aware construction/runtime
-admission is still unavailable.** Explicitly serial hierarchy/preconditioner
-construction and terminal factor construction now have separate finite bounds;
+admission is still unavailable.** Serial and executor-aware CMG-owned
+hierarchy/preconditioner construction and terminal factors have scoped finite bounds;
 they do not change the scope of the old estimate. `complete_build_peak_bytes()` and
 `ParallelExecutor::runtime_allocation_bound()` return `None`; the corresponding
 strict admission methods reject before allocation. Do not use the principal
@@ -71,6 +71,8 @@ caller must reserve them before supplying the remaining incremental budget.
 | Serial hierarchy | `CmgHierarchy::serial_construction_allocation_bound`, `build_serial_with_budget` | retained levels, forest, contraction, report, pruning-stage allowance |
 | Serial ordinary preconditioner | `CmgPreconditioner::serial_construction_allocation_bound`, `build_serial_with_budget` | hierarchy plus centering metadata, repeat bank and direct factor |
 | Serial component preconditioner | `component_serial_construction_allocation_bound`, `build_component_experiment_serial_with_budget` | same construction scope under the explicitly supplied component options |
+| Executor-aware hierarchy/ordinary preconditioner | `executor_construction_cmg_allocation_bound`, `build_with_executor_and_cmg_budget` | CMG-owned construction including fixed parallel mapping banks; **not Rayon runtime** |
+| Executor-aware component preconditioner | `component_executor_construction_cmg_allocation_bound`, `build_component_experiment_with_executor_and_cmg_budget` | same CMG-owned scope with explicit component options; **not Rayon runtime** |
 
 All size arithmetic is checked, including `Layout::array`'s addressable-size
 limit. Budgets are checked before the first covered allocation. Fixed banks use
@@ -264,7 +266,7 @@ abort on true exhaustion. There is no allocator cap, and no promise of complete
 process memory control or of a stable Arc ABI. Peak/failure fixtures must be
 executed on the exact candidate; compilation alone is not validation.
 
-These APIs do not admit ordinary iterator ingestion before a `Laplacian` exists,
+The serial APIs do not admit ordinary iterator ingestion before a `Laplacian` exists,
 parallel `filter_map().collect()` contraction, runtime task queues, profiling
 banks, later lazy accessors, solves or workspaces. For a caller choosing serial
 setup, use the matching bound and serial constructor, then separately admit its
@@ -272,6 +274,43 @@ plan/workspace banks. Choosing serial setup is an explicit downstream policy
 decision, not a recommendation to replace fereg's parallel setup automatically.
 Executor-aware complete construction/runtime admission remains a blocker to
 strictly budgeted parallel adoption.
+
+### Executor-aware CMG-owned construction proof
+
+The new executor-aware methods are explicitly named `cmg_budget`: they do not
+claim runtime coverage. A caller with a strict combined/runtime policy must
+still reject this route. The existing executor, graph and all caller-retained
+parents are borrowed and must already be charged. There is no new pool or
+duplicate hierarchy. Ordinary unbudgeted constructors are unchanged.
+
+The admitted contraction preserves the existing mapping and sorting thresholds.
+Before dispatch it fallibly provisions `Option<Edge>[m]` and `Edge[m]` banks.
+Each worker writes a disjoint input-indexed slot, with no CMG-owned worker
+allocation. Serial gathering appends at most `m` surviving edges in original
+input order into the already reserved bank; the slot bank is then dropped.
+The unchanged endpoint/weight comparator and compensated duplicate summation
+preserve canonical numerical order. Rayon's unstable sort is in-place
+(`rayon-1.12.0/src/slice/sort.rs::par_quicksort`); its recursive join/runtime
+allocations remain outside this scope. Graph compaction and finalization use
+the fallible admitted serial allocation machinery.
+
+Consequently `serial_bound + m*sizeof(Option<Edge>)` is a conservative bound
+for hierarchy or complete preconditioner CMG-owned construction. The serial
+contraction allowance already covers the `Edge[m]` bank and old/new graph
+compaction overlap. Adding the slot bank even to the largest *other* stage
+overcounts sequential storage safely. All additions/layouts reject overflow;
+one-byte-short budgets reject before forest, factor or mapping allocation.
+Factor, pruning, stopping, centering and maximum-level proofs are unchanged.
+Plans and solve banks remain separately admitted operations.
+
+`tests/parallel_construction_admission.rs` checks one/four workers, both sides
+of the map/sort crossover, exact/short budgets, overflow, ordinary/component
+policies, prepared weight changes, ownership overlap and failure of each fixed
+mapping bank before dispatch. An independent process-wide allocator records
+live peaks including runtime activity. Those observations are **not compared
+to a purported whole-runtime bound** or relabelled as CMG-only peaks. Retained
+CMG layouts are checked separately. Serial peak/failure fixtures still cover
+the shared admitted kernels. Execution on the final source remains required.
 
 ## Fill guard proof and remaining construction scopes
 
@@ -315,7 +354,7 @@ certifying a whole-build bound:
 |---|---|
 | Ordinary edge ingestion | iterator-owned input, growing raw edge bank, diagonal, cached endpoint-sort keys, old/new buffers during growth/shrink, Arc finalization |
 | Legacy hierarchy builders outside admitted serial entry points | historical growth and compact-conversion paths are not governed by the new budget |
-| Parallel contraction | retained levels plus dynamically collected result/chunk banks, sort/runtime tasks, graph finalization; serial contraction/pruning are covered only by the new serial APIs |
+| Legacy parallel contraction | dynamically collected result/chunk banks; the new `cmg_budget` path covers fixed CMG banks, but both paths exclude runtime tasks/queues |
 | Legacy LDL entry points | data-dependent growth/stable-sort allocation outside the admitted factor methods; admitted factor scope is covered above |
 | Plans outside scoped entry points | profiled-result banks, concurrent independent callers and Rayon runtime; new ordinary-plan CMG layouts are covered above, not full solver construction |
 | Automatic repeated solves | old workspace bank plus newly allocated descriptors/workspaces, lazy plan setup, owned-result banks and per-chunk Result buffers |
@@ -326,8 +365,8 @@ parents. Replacements and final factor conversion require sums. The existing
 principal estimate does not prove these full overlaps; the downstream
 construction supplement remains incomplete too. The serial and terminal-factor
 APIs now replace their covered growth paths with bounded fallible provisioning.
-A corresponding parallel collection/runtime design and ordinary ingestion
-boundary remain necessary; the serial proof does not transfer to the legacy
+The admitted parallel collection now has fixed CMG-owned banks; a bounded runtime
+design and ordinary ingestion boundary remain necessary. The proof does not transfer to legacy
 or parallel methods just because they share arithmetic. No weak-graph solver
 alternative was removed to simplify the inventory.
 

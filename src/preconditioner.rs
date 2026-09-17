@@ -705,6 +705,101 @@ impl CmgPreconditioner {
         }
     }
 
+    /// New CMG-owned layouts for an admitted executor-aware ordinary build.
+    /// Rayon runtime and the borrowed executor/graph are explicitly excluded;
+    /// all other exclusions of the serial construction bound also apply.
+    #[cfg(feature = "parallel")]
+    pub fn executor_construction_cmg_allocation_bound(
+        vertices: usize,
+        edges: usize,
+        options: CmgOptions,
+    ) -> Result<usize, CmgError> {
+        crate::storage::add(
+            Self::serial_construction_allocation_bound(vertices, edges, options)?,
+            crate::storage::bytes::<Option<crate::Edge>>(edges)?,
+        )
+    }
+
+    /// Admit CMG-owned construction without disabling parallel setup. This
+    /// does NOT admit runtime memory: use only under a separate caller policy
+    /// permitting the existing unbounded Rayon runtime. No new pool is created.
+    #[cfg(feature = "parallel")]
+    pub fn build_with_executor_and_cmg_budget(
+        graph: &Laplacian,
+        options: CmgOptions,
+        executor: &ParallelExecutor,
+        cmg_budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::executor_construction_cmg_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+            )?,
+            cmg_budget_bytes,
+        )?;
+        let hierarchy =
+            CmgHierarchy::build_executor_admitted::<false, false>(graph, options, executor)?;
+        Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
+            GroundedLdl::factor_with_budget(graph, cmg_budget_bytes)
+        })
+    }
+
+    /// Component counterpart of the CMG-owned executor construction bound.
+    /// Covers either pruning/stopping policy, but never the Rayon runtime.
+    #[cfg(all(feature = "parallel", feature = "experimental-components"))]
+    pub fn component_executor_construction_cmg_allocation_bound(
+        vertices: usize,
+        edges: usize,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+    ) -> Result<usize, CmgError> {
+        crate::storage::add(
+            Self::component_serial_construction_allocation_bound(
+                vertices, edges, options, experiment,
+            )?,
+            crate::storage::bytes::<Option<crate::Edge>>(edges)?,
+        )
+    }
+
+    /// Opt-in component setup with a CMG-owned-only budget and existing pool.
+    /// Retains parallel map/sort thresholds, stopping and factor policies.
+    /// Runtime memory remains uncovered; this is not strict parallel admission.
+    #[cfg(all(feature = "parallel", feature = "experimental-components"))]
+    pub fn build_component_experiment_with_executor_and_cmg_budget(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        executor: &ParallelExecutor,
+        cmg_budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::component_executor_construction_cmg_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+                experiment,
+            )?,
+            cmg_budget_bytes,
+        )?;
+        let hierarchy = if !experiment.prune_coarse_isolates {
+            CmgHierarchy::build_executor_admitted::<false, false>(graph, options, executor)?
+        } else if experiment.preserve_unpruned_stopping {
+            CmgHierarchy::build_executor_admitted::<true, true>(graph, options, executor)?
+        } else {
+            CmgHierarchy::build_executor_admitted::<true, false>(graph, options, executor)?
+        };
+        if experiment.factor_terminal_components {
+            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
+                GroundedLdl::factor_by_component_with_budget(graph, cmg_budget_bytes)
+            })
+        } else {
+            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
+                GroundedLdl::factor_with_budget(graph, cmg_budget_bytes)
+            })
+        }
+    }
+
     /// Build an opt-in component experiment with independent setup changes.
     ///
     /// Uses the ordinary certified PCG, workspace, and fixed cycle application
