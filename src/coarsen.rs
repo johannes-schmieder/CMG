@@ -98,6 +98,26 @@ impl Aggregation {
         Self::from_validated_parts(labels, aggregate_count)
     }
 
+    pub(crate) fn from_forest_labels_admitted(
+        labels: Vec<usize>,
+        aggregate_count: usize,
+    ) -> Result<Self, CmgError> {
+        let labels = if aggregate_count <= (u32::MAX as usize).saturating_add(1) {
+            let mut compact =
+                crate::storage::try_capacity(labels.len(), "aggregation compact labels")?;
+            compact.extend(labels.iter().map(|&label| label as u32));
+            LabelStorage::Compact(compact)
+        } else {
+            LabelStorage::Native(labels)
+        };
+        Ok(Self {
+            labels,
+            native_labels: OnceLock::new(),
+            aggregate_count,
+            sizes: OnceLock::new(),
+        })
+    }
+
     fn from_validated_parts(labels: Vec<usize>, aggregate_count: usize) -> Self {
         let compact_limit = (u32::MAX as usize).saturating_add(1);
         let labels = if aggregate_count <= compact_limit {
@@ -323,8 +343,23 @@ impl Aggregation {
 
     /// Form the exact graph Laplacian `R L R^T`.
     pub fn contract(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
+        self.contract_impl::<false>(graph)
+    }
+
+    pub(crate) fn contract_admitted(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
+        self.contract_impl::<true>(graph)
+    }
+
+    fn contract_impl<const ADMITTED: bool>(
+        &self,
+        graph: &Laplacian,
+    ) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;
-        let mut coarse_edges = Vec::with_capacity(graph.edge_count());
+        let mut coarse_edges = if ADMITTED {
+            crate::storage::try_capacity(graph.edge_count(), "contracted edges")?
+        } else {
+            Vec::with_capacity(graph.edge_count())
+        };
         match &self.labels {
             LabelStorage::Compact(labels) => {
                 for edge in graph.edges() {
@@ -345,7 +380,11 @@ impl Aggregation {
                 }
             }
         }
-        Laplacian::from_compact_edges(self.coarse_dimension(), coarse_edges)
+        if ADMITTED {
+            Laplacian::from_compact_edges_admitted(self.coarse_dimension(), coarse_edges)
+        } else {
+            Laplacian::from_compact_edges(self.coarse_dimension(), coarse_edges)
+        }
     }
 
     /// Form `R L R^T` using deterministic parallel edge mapping and sorting.

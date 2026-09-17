@@ -145,8 +145,33 @@ pub(crate) fn prune(
     aggregation: &Aggregation,
     coarse: &Laplacian,
 ) -> Option<(PrunedTransfer, Laplacian)> {
-    let (map, graph) = coarse.without_isolated_vertices()?;
-    let mut entries = Vec::new();
+    prune_impl::<false>(aggregation, coarse).expect("unbudgeted prune allocation")
+}
+
+pub(crate) fn prune_admitted(
+    aggregation: &Aggregation,
+    coarse: &Laplacian,
+) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
+    prune_impl::<true>(aggregation, coarse)
+}
+
+fn prune_impl<const ADMITTED: bool>(
+    aggregation: &Aggregation,
+    coarse: &Laplacian,
+) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
+    let compact = if ADMITTED {
+        coarse.without_isolated_vertices_admitted()?
+    } else {
+        coarse.without_isolated_vertices()
+    };
+    let Some((map, graph)) = compact else {
+        return Ok(None);
+    };
+    let mut entries = if ADMITTED {
+        crate::storage::try_capacity(aggregation.fine_dimension(), "pruned transfer entries")?
+    } else {
+        Vec::new()
+    };
     // The public graph representation already bounds vertex indices to u32.
     for fine in 0..aggregation.fine_dimension() {
         let label = aggregation.label_at(fine);
@@ -154,8 +179,17 @@ pub(crate) fn prune(
             entries.push((fine as u32, map[label] as u32));
         }
     }
-    entries.shrink_to_fit();
-    Some((
+    if ADMITTED {
+        if entries.len() != entries.capacity() {
+            let mut compact =
+                crate::storage::try_capacity(entries.len(), "pruned transfer compaction")?;
+            compact.extend_from_slice(&entries);
+            entries = compact;
+        }
+    } else {
+        entries.shrink_to_fit();
+    }
+    Ok(Some((
         PrunedTransfer {
             fine_dimension: aggregation.fine_dimension(),
             coarse_dimension: graph.vertex_count(),
@@ -163,7 +197,7 @@ pub(crate) fn prune(
             entries,
         },
         graph,
-    ))
+    )))
 }
 
 #[cfg(test)]

@@ -572,6 +572,139 @@ impl CmgPreconditioner {
         Self::from_hierarchy(CmgHierarchy::build(graph, options)?)
     }
 
+    /// New requested layouts for an explicitly serial ordinary build, including
+    /// hierarchy, centering metadata and direct factor construction. Borrowed
+    /// graph/prepared topology, allocator/OS storage, runtime, solve workspaces,
+    /// plans and later lazy aggregation accessors are excluded. Arc layouts are
+    /// counted under the reviewed, non-ABI-stable standard-library model.
+    pub fn serial_construction_allocation_bound(
+        vertices: usize,
+        edges: usize,
+        options: CmgOptions,
+    ) -> Result<usize, CmgError> {
+        Self::serial_construction_bound_impl(vertices, edges, options, false)
+    }
+
+    fn serial_construction_bound_impl(
+        n: usize,
+        m: usize,
+        options: CmgOptions,
+        component_factor: bool,
+    ) -> Result<usize, CmgError> {
+        use crate::storage::{add, arc_bytes, bytes};
+        let options = options.validate()?;
+        let (hierarchy, scratch) = CmgHierarchy::serial_allocation_parts(n, m, options)?;
+        let count = n
+            .checked_mul(options.max_levels)
+            .ok_or(CmgError::AllocationFailed {
+                context: "centering budget overflows",
+            })?;
+        let metadata = add(
+            add(bytes::<[usize; 2]>(count)?, arc_bytes::<Components>()?)?,
+            add(
+                bytes::<CenteringPlan>(options.max_levels - 1)?,
+                bytes::<usize>(options.max_levels)?,
+            )?,
+        )?;
+        // Direct terminals have n < threshold, except the n<=1/empty shortcut.
+        // No other terminal reason factors the graph. Pruning only reduces n.
+        let terminal_n = n.min(options.direct_threshold.saturating_sub(1).max(1));
+        let factor = {
+            #[cfg(feature = "experimental-components")]
+            if component_factor {
+                GroundedLdl::component_construction_allocation_bound(terminal_n, m)?
+            } else {
+                GroundedLdl::construction_allocation_bound(terminal_n)?
+            }
+            #[cfg(not(feature = "experimental-components"))]
+            {
+                let _ = component_factor;
+                GroundedLdl::construction_allocation_bound(terminal_n)?
+            }
+        };
+        let finalization = add(metadata, factor.max(bytes::<[usize; 4]>(n)?))?;
+        add(hierarchy, scratch.max(finalization))
+    }
+
+    /// Admit the explicitly serial ordinary construction path. All vector
+    /// provisioning is fallible; small Arc allocations remain infallible on
+    /// stable Rust. This is not an executor/runtime admission API.
+    pub fn build_serial_with_budget(
+        graph: &Laplacian,
+        options: CmgOptions,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::serial_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+            )?,
+            budget_bytes,
+        )?;
+        let hierarchy = CmgHierarchy::build_serial_with_budget(graph, options, budget_bytes)?;
+        Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
+            GroundedLdl::factor_with_budget(graph, budget_bytes)
+        })
+    }
+
+    /// Counterpart of the ordinary serial bound for opt-in component setup.
+    /// The same hierarchy bound covers either pruning stopping policy; only
+    /// the selected terminal-factor construction changes the factor allowance.
+    #[cfg(feature = "experimental-components")]
+    pub fn component_serial_construction_allocation_bound(
+        vertices: usize,
+        edges: usize,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+    ) -> Result<usize, CmgError> {
+        Self::serial_construction_bound_impl(
+            vertices,
+            edges,
+            options,
+            experiment.factor_terminal_components,
+        )
+    }
+
+    /// Explicitly serial admitted component construction. Does not enable any
+    /// experimental option automatically, create a pool, or change certification.
+    /// It may be used with a prepared numeric graph without duplicating topology.
+    #[cfg(feature = "experimental-components")]
+    pub fn build_component_experiment_serial_with_budget(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::component_serial_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+                experiment,
+            )?,
+            budget_bytes,
+        )?;
+        let hierarchy = if experiment.prune_coarse_isolates {
+            CmgHierarchy::build_pruned_serial_admitted(
+                graph,
+                options,
+                experiment.preserve_unpruned_stopping,
+            )?
+        } else {
+            CmgHierarchy::build_serial_with_budget(graph, options, budget_bytes)?
+        };
+        if experiment.factor_terminal_components {
+            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
+                GroundedLdl::factor_by_component_with_budget(graph, budget_bytes)
+            })
+        } else {
+            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
+                GroundedLdl::factor_with_budget(graph, budget_bytes)
+            })
+        }
+    }
+
     /// Build an opt-in component experiment with independent setup changes.
     ///
     /// Uses the ordinary certified PCG, workspace, and fixed cycle application
@@ -676,6 +809,13 @@ impl CmgPreconditioner {
     }
 
     fn from_hierarchy_with_factor(
+        hierarchy: CmgHierarchy,
+        factor: impl FnOnce(&Laplacian) -> Result<GroundedLdl, CmgError>,
+    ) -> Result<Self, CmgError> {
+        Self::from_hierarchy_with_factor_impl::<false>(hierarchy, factor)
+    }
+
+    fn from_hierarchy_with_factor_impl<const ADMITTED: bool>(
         mut hierarchy: CmgHierarchy,
         factor: impl FnOnce(&Laplacian) -> Result<GroundedLdl, CmgError>,
     ) -> Result<Self, CmgError> {
@@ -685,16 +825,37 @@ impl CmgPreconditioner {
             .ok_or(CmgError::InvalidHierarchy {
                 context: "hierarchy contains no finest level",
             })?;
-        let finest_components = finest.graph().prepared_components().map_or_else(
-            || Arc::new(Components::from_laplacian(finest.graph())),
-            Arc::clone,
-        );
-        let coarse_centering = hierarchy
-            .levels()
-            .iter()
-            .skip(1)
-            .map(|level| CenteringPlan::from_laplacian(level.graph()))
-            .collect();
+        let finest_components = if let Some(components) = finest.graph().prepared_components() {
+            Arc::clone(components)
+        } else if ADMITTED {
+            Arc::new(Components::try_from_endpoints(
+                finest.graph().vertex_count(),
+                finest
+                    .graph()
+                    .edges()
+                    .iter()
+                    .map(|edge| (edge.u(), edge.v())),
+            )?)
+        } else {
+            Arc::new(Components::from_laplacian(finest.graph()))
+        };
+        let coarse_centering = if ADMITTED {
+            let mut plans = crate::storage::try_capacity(
+                hierarchy.levels().len() - 1,
+                "coarse centering plans",
+            )?;
+            for level in hierarchy.levels().iter().skip(1) {
+                plans.push(CenteringPlan::try_from_laplacian(level.graph())?);
+            }
+            plans
+        } else {
+            hierarchy
+                .levels()
+                .iter()
+                .skip(1)
+                .map(|level| CenteringPlan::from_laplacian(level.graph()))
+                .collect()
+        };
         let direct_terminal = if hierarchy.report().terminal_reason() == TerminalReason::Direct {
             let terminal = hierarchy
                 .levels()
@@ -707,11 +868,20 @@ impl CmgPreconditioner {
             None
         };
 
-        let mut repeat_counts: Vec<usize> = hierarchy
-            .levels()
-            .iter()
-            .map(|level| level.repeat())
-            .collect();
+        let mut repeat_counts: Vec<usize> = if ADMITTED {
+            let mut counts = crate::storage::try_capacity(
+                hierarchy.levels().len(),
+                "preconditioner repeat counts",
+            )?;
+            counts.extend(hierarchy.levels().iter().map(|level| level.repeat()));
+            counts
+        } else {
+            hierarchy
+                .levels()
+                .iter()
+                .map(|level| level.repeat())
+                .collect()
+        };
         if hierarchy.levels().len() >= 2 {
             if let Some(factor) = &direct_terminal {
                 let penultimate = hierarchy.levels().len() - 2;

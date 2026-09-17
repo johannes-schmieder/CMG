@@ -2,8 +2,10 @@
 
 The new capacity reports and narrowly scoped admission APIs supplement, rather
 than redefine, `CmgMemoryEstimate`, `CmgMemoryReport`, and the repeated-PCG
-principal-array interfaces. **Complete construction and runtime admission is
-still unavailable.** `complete_build_peak_bytes()` and
+principal-array interfaces. **A combined executor-aware construction/runtime
+admission is still unavailable.** Explicitly serial hierarchy/preconditioner
+construction and terminal factor construction now have separate finite bounds;
+they do not change the scope of the old estimate. `complete_build_peak_bytes()` and
 `ParallelExecutor::runtime_allocation_bound()` return `None`; the corresponding
 strict admission methods reject before allocation. Do not use the principal
 estimate or this allocation inventory as a whole-action memory certificate.
@@ -64,6 +66,11 @@ caller must reserve them before supplying the remaining incremental budget.
 | Fixed RHS bank | `bank_allocation_bytes`, `new_bank_with_budget` | every workspace plus the outer capacity bank |
 | Serial CSR | `CsrLaplacian::construction_allocation_bound`, `from_laplacian_with_budget` | new row/column/weight arrays and simultaneous cursor bank |
 | Parallel plan | `ParallelCmgPlan::construction_allocation_bound`, `build_with_budget` | descriptor banks, earlier retained operators, current serial/parallel CSR temporaries; **not Rayon runtime** |
+| Ordinary terminal factor | `GroundedLdl::construction_allocation_bound`, `factor_with_budget` | components, dense numeric banks, retained factor and conversion overlap |
+| Component terminal factor | `component_construction_allocation_bound`, `factor_by_component_with_budget` | grouping, component-local sparse fill, accumulated factors, compaction/conversion |
+| Serial hierarchy | `CmgHierarchy::serial_construction_allocation_bound`, `build_serial_with_budget` | retained levels, forest, contraction, report, pruning-stage allowance |
+| Serial ordinary preconditioner | `CmgPreconditioner::serial_construction_allocation_bound`, `build_serial_with_budget` | hierarchy plus centering metadata, repeat bank and direct factor |
+| Serial component preconditioner | `component_serial_construction_allocation_bound`, `build_component_experiment_serial_with_budget` | same construction scope under the explicitly supplied component options |
 
 All size arithmetic is checked, including `Layout::array`'s addressable-size
 limit. Budgets are checked before the first covered allocation. Fixed banks use
@@ -137,6 +144,135 @@ all fallible allocation failures, repeated plan initialization and old/new plan
 overlap. Dense parallel CSR numerical identity is checked separately. Runtime
 activity is not silently subtracted from a sampled parallel process peak.
 
+### Terminal-factor construction proof
+
+Both admitted factor APIs check the budget before even component discovery.
+They use fallible exact reservation for every buffer; no Arc or worker is
+created. The stable sort is replaced only in these opt-in APIs by an unstable
+sort with the same unique key (degree, original vertex; additionally component
+for the block variant). Unique original vertex IDs prove identical ordering.
+All LDL arithmetic, pivot checks and packed/sparse selection rules are unchanged.
+
+Let `n` be vertices, `m` edges, `U=sizeof(usize)`, `q=n*(n-1)/2`, and
+`D=sizeof(Vec<f64>)`. Bounds use checked layouts and products, not floating
+fill estimates. Ordinary construction takes the maximum of component discovery
+(`4*n*U`) and the simultaneous factor stage:
+
+* six native metadata banks (component labels/sizes, anchors, permutation,
+  pattern, factor-index), plus `n` anchor flags;
+* two dense row banks: `16*n*n + 2*n*D`, plus `8*n` pivots;
+* sparse conversion: `2*(n+1)*U + n*U + 24*q`, which also bounds the alternative
+  packed conversion. Counts retire before cursors, so one `n*U` allowance
+  suffices for either. Dense rows remain live during conversion.
+
+The component constructor has common parents `P` consisting of four native
+metadata banks; two component-offset banks; two native vertex banks and one
+edge-index bank for grouping; and the accumulated factor's pivots, row offsets,
+column indices and values. Actual fill reservations use
+`sum_c triangular(size_c-1)` and each current block's triangular dimension,
+never a dense matrix across components. The public bound replaces those
+dimensions by `n`, making it conservative even before discovering components.
+To `P`, add the maximum of:
+
+* input reorder: `(n+1)*U + m*U + n*U`;
+* ordered sparse updates: `2*(n+1)*U + m*U + 2*n*U + 16*n + (16+U)*q`;
+* packed conversion or one fallible exact-compaction copy: `8*q`;
+* sparse transpose: `(n+1)*U + n*U + 12*q`.
+
+Finally take the maximum with discovery (`4*n*U`) and ordering preparation
+(`5*n*U+n` flags). Entry banks, row links, and accumulated factors are reserved
+before their pushes; fill cannot exceed strict triangular slots. Compaction
+copies fallibly before releasing the old bank, and the bound includes both.
+This opt-in provisioning can reserve much more than actual sparse fill;
+`CmgStorageReport` reports the resulting real capacities. It is an admission
+bound, not a claim that sparse setup requires these pessimistic bytes.
+
+`tests/factor_admission.rs` independently observes live requested layouts,
+checks exact/one-byte-short admission, compares full factors to the ordinary
+constructors, checks old/new owner overlap, and injects every allocation failure
+on these Arc-free paths. The test includes isolates, paths, cycles, dense blocks
+and a genuine weak bridge with many pairs. This test's numerical identity check
+does not replace the separate coefficient/residual oracle.
+
+### Explicitly serial hierarchy/preconditioner proof
+
+These are opt-in **serial setup** APIs. Existing executor-aware builders keep
+their parallel contraction routing; there is no misleading executor argument
+that is silently ignored. The admitted path shares their hierarchy control
+flow, pruning/stopping choices, forest arithmetic, contraction duplicate sums,
+terminal-factor selection and repeat-count finalization. It changes provisioning,
+not the coarsening or numerical policy. Prepared numeric graphs reuse their
+existing component Arc. No duplicate topology, worker pool or setup is built.
+
+Let `L=options.max_levels`, `G=m*sizeof(Edge)+8*n+A`, where `A` is the reviewed
+sum of `Arc<Vec<Edge>>`, `Arc<Vec<f64>>` and lineage `Arc<()>` allocations.
+Every current/coarse graph has at most `n` vertices and `m` edges. Define the
+retained hierarchy ceiling `H` as:
+
+* `L*sizeof(HierarchyLevel)` plus two report banks `2*L*U`;
+* `(L-1)*G` newly owned graphs (the finest graph is a borrowed Arc clone);
+* `8*n*L` inverse diagonals and `n*L*max(U,8)` transfer storage.
+
+The last term covers compact/native full labels or pruned `(u32,u32)` entries;
+lazy public aggregation-label/size caches are not initialized by construction.
+Each level, including an early terminal with a discarded aggregation, is
+covered. The method does not use the cumulative-fill guard as a hard cap, so
+crossing levels and all supported stopping reasons are included.
+
+Hierarchy peak is `H + max(F, C, M, P)`:
+
+* `F=(4*U+24+sizeof(bool))*n`: heavy and split parents, native-width indegrees,
+  walk, selected weights, two i64 ancestor banks, visited flags. Labeling and
+  low-degree correction are smaller sequential stages. The walk has at most
+  `n` distinct vertices: the maximum-weight/lowest-neighbor forest has no
+  directed cycles longer than two, and the traversal stops before repeating a
+  self/two-cycle endpoint. No general user-supplied functional graph is admitted
+  through this private fixed-capacity kernel.
+* `C=(U+4)*n`: simultaneous native labels and compact conversion.
+* `M=G+m*sizeof(Edge)`: mapped edges coexist with exact canonical compaction,
+  diagonal and Arc finalization. Endpoint and weight sorts use no heap scratch.
+* `P=2*G+2*n*U+16*n`: unpruned/compact children, isolate map, still-live full
+  aggregation and both old/new pruned-transfer entry banks. This deliberately
+  covers a non-suffix isolate removal even when suffix removal shares edges.
+
+The retained ceiling includes all previously completed levels in each stage;
+the common ceiling is added once to the maximum, not substituted for scratch.
+Maximum-level provisioning can be pessimistic, but occurs only on explicitly
+admitted paths. It rejects overflow before allocation. Each Vec has a proved
+fixed capacity; cleanup on any fallible error drops all earlier partial owners.
+
+For complete serial preconditioner setup, define `B` as centering labels/sizes
+(`2*n*L*U`), one finest-component Arc, coarse-plan descriptors (`L-1`), and `L`
+repeat counts. Finalization peak is `H+B+max(4*n*U,T)`, where `T` is the selected
+terminal-factor bound at `min(n,max(1,direct_threshold-1))` and at most `m` edges.
+Only a Direct terminal factors; the other stopping reasons retain diagonal
+iteration. Take the maximum of this finalization stage and hierarchy peak.
+Component discovery/compact conversion fit the `4*n*U` scratch allowance;
+earlier centering plans coexist and are already in `B`. Factor return/conversion
+overlap is included in `T`. Old preconditioners or failed attempts independently
+retained by callers are NOT deducted: reserve their union before this incremental
+budget, and keep them charged until actually dropped.
+
+`tests/hierarchy_admission.rs` exercises every stopping reason, thresholds and
+fill boundaries, ordinary and both component stopping policies, prepared
+changing-weight frames, shared-parent/old-new overlap, zero-allocation reports,
+overflow and independently observed peak layouts. Failure injection explicitly
+skips sizes used by infallible Arc allocations (and coincidentally equal Vec
+sizes); it therefore claims selected-vector failure cleanup, not exhaustive OOM
+recovery. All vectors are fallibly provisioned, but stable `Arc::new` can still
+abort on true exhaustion. There is no allocator cap, and no promise of complete
+process memory control or of a stable Arc ABI. Peak/failure fixtures must be
+executed on the exact candidate; compilation alone is not validation.
+
+These APIs do not admit ordinary iterator ingestion before a `Laplacian` exists,
+parallel `filter_map().collect()` contraction, runtime task queues, profiling
+banks, later lazy accessors, solves or workspaces. For a caller choosing serial
+setup, use the matching bound and serial constructor, then separately admit its
+plan/workspace banks. Choosing serial setup is an explicit downstream policy
+decision, not a recommendation to replace fereg's parallel setup automatically.
+Executor-aware complete construction/runtime admission remains a blocker to
+strictly budgeted parallel adoption.
+
 ## Fill guard proof and remaining construction scopes
 
 The builder adds the current level's nonzeros before comparing the cumulative
@@ -178,10 +314,9 @@ certifying a whole-build bound:
 | Stage | Simultaneous allocations that a full bound must cover |
 |---|---|
 | Ordinary edge ingestion | iterator-owned input, growing raw edge bank, diagonal, cached endpoint-sort keys, old/new buffers during growth/shrink, Arc finalization |
-| Components and forest | retained parents plus parent/root/label/size arrays; heavy-parent/selected-weight vectors; forest split ancestors, indegrees, visited flags and growing path buffers |
-| Contraction and pruning | all retained levels plus mapped edge bank, sort scratch, coarse diagonal, aggregation, isolate map, compact graph and transfer entries; parallel result-collection banks |
-| Ordinary LDL | component/permutation/pattern maps, matrix and lower dense row banks, diagonal and packed/sparse retained conversion simultaneously |
-| Component LDL | component offsets and edge grouping, factor index, one block's sparse column/row links and work arrays, accumulated rows from earlier blocks, final packed or transposed sparse conversion |
+| Legacy hierarchy builders outside admitted serial entry points | historical growth and compact-conversion paths are not governed by the new budget |
+| Parallel contraction | retained levels plus dynamically collected result/chunk banks, sort/runtime tasks, graph finalization; serial contraction/pruning are covered only by the new serial APIs |
+| Legacy LDL entry points | data-dependent growth/stable-sort allocation outside the admitted factor methods; admitted factor scope is covered above |
 | Plans outside scoped entry points | profiled-result banks, concurrent independent callers and Rayon runtime; new ordinary-plan CMG layouts are covered above, not full solver construction |
 | Automatic repeated solves | old workspace bank plus newly allocated descriptors/workspaces, lazy plan setup, owned-result banks and per-chunk Result buffers |
 | Failure/retry | already retained parents, partially built current owners and any separately retained failed attempt; errors do not make those parents disappear |
@@ -189,16 +324,12 @@ certifying a whole-build bound:
 Sequential stages use a maximum only **after** adding their common live
 parents. Replacements and final factor conversion require sums. The existing
 principal estimate does not prove these full overlaps; the downstream
-construction supplement remains incomplete too. A complete fallible build
-arena/provisioning design and a checked capacity model for remaining growth
-paths remain necessary. Ordinary ingestion/forest/contraction currently use
-data-dependent growth and library sort/collection allocation; terminal LDL
-converts among simultaneously live row/column/pattern representations. A full
-implementation must either replace those with fallibly reserved bounded banks
-or carry a stage-specific allocation ledger through every ordinary and component
-builder, including failed partial owners and conversion overlap. This is a broad
-cross-builder change, not a constant multiplier or a consequence of the new
-plan bound. No weak-graph solver alternative was removed to simplify inventory.
+construction supplement remains incomplete too. The serial and terminal-factor
+APIs now replace their covered growth paths with bounded fallible provisioning.
+A corresponding parallel collection/runtime design and ordinary ingestion
+boundary remain necessary; the serial proof does not transfer to the legacy
+or parallel methods just because they share arithmetic. No weak-graph solver
+alternative was removed to simplify the inventory.
 
 ## Runtime scope and lifetime
 
@@ -211,6 +342,20 @@ jobs arrive. Public thread-count/stack options do not provision or cap those
 heaps. Thread spawn adds native runtime resources and TLS outside these layouts.
 Thread joining does not force all process-global deferred reclamation or
 allocator caches to return memory to the OS.
+
+Concretely, rayon-core 1.13.0 `src/registry.rs` constructs private normal and
+broadcast Crossbeam Workers for each thread and a private Injector. In
+crossbeam-deque 0.8.7 `src/deque.rs`, `MIN_CAP=64`; `Worker::push` doubles a full
+buffer, and `resize` allocates a new buffer while deferring the old buffer through
+`guard.defer_unchecked`. crossbeam-epoch 0.9.20 `src/default.rs` uses a
+process-global collector and thread-local participants. An unrelated epoch
+participant can delay reclamation after this pool has joined. Public Rayon
+`ThreadPoolBuilder` exposes neither fixed queue provisioning, allocation hooks,
+per-pool epoch isolation nor a no-growth mode. A finite `threads*constant` claim
+would therefore be unsupported. Implementing a genuinely bounded pool requires
+owning/forking both scheduling and reclamation or replacing execution machinery,
+then separately proving the required scheduling/reduction behavior. This change
+does not introduce that scheduler replacement.
 
 The executor report counts only its CMG-owned join-handle capacity and sets
 `runtime_heap_unbounded=true`. Strict runtime admission rejects before spawning

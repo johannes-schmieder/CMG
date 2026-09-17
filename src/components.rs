@@ -187,6 +187,31 @@ pub(crate) struct CenteringPlan {
 }
 
 impl CenteringPlan {
+    pub(crate) fn try_from_laplacian(graph: &Laplacian) -> Result<Self, CmgError> {
+        let Components { labels, sizes, .. } = Components::try_from_endpoints(
+            graph.vertex_count(),
+            graph.edges().iter().map(|edge| (edge.u(), edge.v())),
+        )?;
+        #[cfg(feature = "experimental-components")]
+        let labels = labels.into_vec();
+        let vertex_count = labels.len();
+        let component_count = sizes.len();
+        let labels = if component_count <= 1 {
+            CenteringLabels::Single
+        } else if component_count <= u32::MAX as usize {
+            let mut compact =
+                crate::storage::try_capacity(labels.len(), "centering compact labels")?;
+            compact.extend(labels.iter().map(|&label| label as u32));
+            CenteringLabels::Compact(compact)
+        } else {
+            CenteringLabels::Native(labels)
+        };
+        Ok(Self {
+            vertex_count,
+            labels,
+            sizes,
+        })
+    }
     pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
         crate::storage::bytes::<[f64; 3]>(self.sizes.len())
     }

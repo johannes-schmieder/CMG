@@ -146,8 +146,11 @@ fn check(graph: &Laplacian, component: bool) {
         );
         assert_eq!(live(), before, "allocation {index} leaked partial owners");
     }
-    println!("FACTOR_ALLOCATION_SUCCESS component={component} vertices={} edges={} bound={bound} peak={peak} fallible_failures={allocations}",
-        graph.vertex_count(), graph.edge_count());
+    println!(
+        "FACTOR_ALLOCATION_SUCCESS component={component} vertices={} edges={} bound={bound} peak={peak} fallible_failures={allocations}",
+        graph.vertex_count(),
+        graph.edge_count()
+    );
 }
 
 #[test]

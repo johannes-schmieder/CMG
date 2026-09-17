@@ -282,6 +282,121 @@ pub struct CmgHierarchy {
 }
 
 impl CmgHierarchy {
+    /// Conservative new requested layouts for explicitly serial hierarchy
+    /// construction, including all retained levels and the largest temporary
+    /// stage. Supports ordinary and pruned component policies. Borrowed graph,
+    /// allocator overhead, runtime, factors and later lazy accessors excluded.
+    /// Arc control blocks follow the reviewed layout model, not a stable ABI.
+    pub fn serial_construction_allocation_bound(
+        vertices: usize,
+        edges: usize,
+        options: CmgOptions,
+    ) -> Result<usize, CmgError> {
+        let (retained, scratch) = Self::serial_allocation_parts(vertices, edges, options)?;
+        crate::storage::add(retained, scratch)
+    }
+
+    pub(crate) fn serial_allocation_parts(
+        n: usize,
+        m: usize,
+        options: CmgOptions,
+    ) -> Result<(usize, usize), CmgError> {
+        use crate::storage::{add, arc_bytes, bytes};
+        let levels = options.validate()?.max_levels;
+        let count = n.checked_mul(levels).ok_or(CmgError::AllocationFailed {
+            context: "hierarchy vertex budget overflows",
+        })?;
+        let arcs = add(
+            add(arc_bytes::<Vec<crate::Edge>>()?, arc_bytes::<Vec<f64>>()?)?,
+            arc_bytes::<()>()?,
+        )?;
+        let graph = add(add(bytes::<crate::Edge>(m)?, bytes::<f64>(n)?)?, arcs)?;
+        let graphs = graph
+            .checked_mul(levels - 1)
+            .ok_or(CmgError::AllocationFailed {
+                context: "hierarchy graph budget overflows",
+            })?;
+        let transfers = bytes::<usize>(count)?.max(bytes::<(u32, u32)>(count)?);
+        let retained = add(
+            add(
+                add(
+                    bytes::<HierarchyLevel>(levels)?,
+                    bytes::<[usize; 2]>(levels)?,
+                )?,
+                graphs,
+            )?,
+            add(bytes::<f64>(count)?, transfers)?,
+        )?;
+        // Heavy parent + split parent + native indegree + walk; selected
+        // weights + two i64 ancestor banks; visited flags. Labeling is smaller.
+        let forest = add(
+            add(bytes::<[usize; 4]>(n)?, bytes::<[i64; 3]>(n)?)?,
+            bytes::<bool>(n)?,
+        )?;
+        let aggregation = add(bytes::<usize>(n)?, bytes::<u32>(n)?)?;
+        let contraction = add(graph, bytes::<crate::Edge>(m)?)?;
+        // Unpruned and compact children, isolate map and old/new transfer
+        // entries coexist. Include the still-live full aggregation as well.
+        let pruning = add(
+            add(add(graph, graph)?, bytes::<[usize; 2]>(n)?)?,
+            bytes::<[(u32, u32); 2]>(n)?,
+        )?;
+        Ok((
+            retained,
+            forest.max(aggregation).max(contraction).max(pruning),
+        ))
+    }
+
+    /// Admit an explicitly serial build before allocating any new owner. Vec
+    /// banks are fallible; stable Rust's small Arc allocations remain infallible.
+    /// This does not dispatch or create workers and does not replace an
+    /// executor-aware build implicitly.
+    pub fn build_serial_with_budget(
+        graph: &Laplacian,
+        options: CmgOptions,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::serial_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+            )?,
+            budget_bytes,
+        )?;
+        Self::build_with_kernels_impl::<false, false, false, true, _, _>(
+            graph,
+            options,
+            crate::forest::build_forest_aggregation_labels_admitted,
+            |aggregation, current| aggregation.contract_admitted(current),
+        )
+        .map(|(hierarchy, _)| hierarchy)
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn build_pruned_serial_admitted(
+        graph: &Laplacian,
+        options: CmgOptions,
+        preserve: bool,
+    ) -> Result<Self, CmgError> {
+        if preserve {
+            Self::build_with_kernels_impl::<false, true, true, true, _, _>(
+                graph,
+                options,
+                crate::forest::build_forest_aggregation_labels_admitted,
+                |aggregation, current| aggregation.contract_admitted(current),
+            )
+            .map(|(hierarchy, _)| hierarchy)
+        } else {
+            Self::build_with_kernels_impl::<false, true, false, true, _, _>(
+                graph,
+                options,
+                crate::forest::build_forest_aggregation_labels_admitted,
+                |aggregation, current| aggregation.contract_admitted(current),
+            )
+            .map(|(hierarchy, _)| hierarchy)
+        }
+    }
     /// Return principal retained heap bytes for every graph, diagonal smoother,
     /// aggregation, and hierarchy report. Allocator bookkeeping is excluded.
     #[must_use]
@@ -318,7 +433,7 @@ impl CmgHierarchy {
         preserve_stopping: bool,
     ) -> Result<Self, CmgError> {
         if preserve_stopping {
-            return Self::build_with_kernels_impl::<false, true, true, _, _>(
+            return Self::build_with_kernels_impl::<false, true, true, false, _, _>(
                 graph,
                 options,
                 build_forest_aggregation_labels,
@@ -326,7 +441,7 @@ impl CmgHierarchy {
             )
             .map(|(hierarchy, _)| hierarchy);
         }
-        Self::build_with_kernels_impl::<false, true, false, _, _>(
+        Self::build_with_kernels_impl::<false, true, false, false, _, _>(
             graph,
             options,
             build_forest_aggregation_labels,
@@ -343,7 +458,7 @@ impl CmgHierarchy {
         executor: &ParallelExecutor,
     ) -> Result<Self, CmgError> {
         if preserve_stopping {
-            Self::build_with_kernels_impl::<false, true, true, _, _>(
+            Self::build_with_kernels_impl::<false, true, true, false, _, _>(
                 graph,
                 options,
                 build_forest_aggregation_labels,
@@ -351,7 +466,7 @@ impl CmgHierarchy {
             )
             .map(|(hierarchy, _)| hierarchy)
         } else {
-            Self::build_with_kernels_impl::<false, true, false, _, _>(
+            Self::build_with_kernels_impl::<false, true, false, false, _, _>(
                 graph,
                 options,
                 build_forest_aggregation_labels,
@@ -404,7 +519,7 @@ impl CmgHierarchy {
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        Self::build_with_kernels_impl::<PROFILE, false, false, _, _>(
+        Self::build_with_kernels_impl::<PROFILE, false, false, false, _, _>(
             graph, options, group, contract,
         )
         .map(|(hierarchy, _)| hierarchy)
@@ -421,13 +536,16 @@ impl CmgHierarchy {
         Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
         Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
     {
-        Self::build_with_kernels_impl::<true, false, false, _, _>(graph, options, group, contract)
+        Self::build_with_kernels_impl::<true, false, false, false, _, _>(
+            graph, options, group, contract,
+        )
     }
 
     fn build_with_kernels_impl<
         const PROFILE: bool,
         const PRUNE: bool,
         const PRESERVE_STOPPING: bool,
+        const ADMITTED: bool,
         Group,
         Contract,
     >(
@@ -455,7 +573,11 @@ impl CmgHierarchy {
             "graph_clone_reference_setup",
             || graph.clone(),
         );
-        let mut levels = Vec::new();
+        let mut levels = if ADMITTED {
+            crate::storage::try_capacity(options.max_levels, "hierarchy levels")?
+        } else {
+            Vec::new()
+        };
         #[cfg(feature = "experimental-components")]
         let mut retired_vertices = 0usize;
         let terminal_reason;
@@ -478,8 +600,8 @@ impl CmgHierarchy {
                     &mut phase_records,
                     level_index,
                     "inverse_diagonal_and_level_finalization",
-                    || make_level(current, None, 0, Some(terminal_reason)),
-                );
+                    || make_level::<ADMITTED>(current, None, 0, Some(terminal_reason)),
+                )?;
                 levels.push(level);
                 break;
             }
@@ -494,8 +616,14 @@ impl CmgHierarchy {
                 &mut phase_records,
                 level_index,
                 "aggregation_construction",
-                || Aggregation::from_forest_labels(labels, aggregate_count),
-            );
+                || {
+                    if ADMITTED {
+                        Aggregation::from_forest_labels_admitted(labels, aggregate_count)
+                    } else {
+                        Ok(Aggregation::from_forest_labels(labels, aggregate_count))
+                    }
+                },
+            )?;
             let coarse_count = aggregation.coarse_dimension();
             let decision_coarse_count = coarse_count;
             #[cfg(feature = "experimental-components")]
@@ -528,8 +656,8 @@ impl CmgHierarchy {
                     &mut phase_records,
                     level_index,
                     "inverse_diagonal_and_level_finalization",
-                    || make_level(current, Some(aggregation), 0, Some(terminal_reason)),
-                );
+                    || make_level::<ADMITTED>(current, Some(aggregation), 0, Some(terminal_reason)),
+                )?;
                 levels.push(level);
                 break;
             }
@@ -542,7 +670,12 @@ impl CmgHierarchy {
             )?;
             #[cfg(feature = "experimental-components")]
             let (coarse, pruned_transfer) = if PRUNE {
-                match crate::component_experiment::prune(&aggregation, &coarse) {
+                let pruned = if ADMITTED {
+                    crate::component_experiment::prune_admitted(&aggregation, &coarse)?
+                } else {
+                    crate::component_experiment::prune(&aggregation, &coarse)
+                };
+                match pruned {
                     Some((transfer, compact)) => {
                         // Isolates contribute zero matrix nonzeros. Keep just
                         // their count for the ordinary vertex stopping checks;
@@ -567,8 +700,8 @@ impl CmgHierarchy {
                 &mut phase_records,
                 level_index,
                 "inverse_diagonal_and_level_finalization",
-                || make_level(current, Some(aggregation), repeat, None),
-            );
+                || make_level::<ADMITTED>(current, Some(aggregation), repeat, None),
+            )?;
             #[cfg(feature = "experimental-components")]
             let level = if let Some(transfer) = pruned_transfer {
                 let mut level = level;
@@ -585,19 +718,27 @@ impl CmgHierarchy {
             &mut phase_records,
             levels.len().saturating_sub(1),
             "hierarchy_report_bookkeeping",
-            || HierarchyBuildReport {
-                terminal_reason,
-                vertex_counts: levels
-                    .iter()
-                    .map(|level| level.graph.vertex_count())
-                    .collect(),
-                matrix_nonzeros: levels
-                    .iter()
-                    .map(|level| level.graph.matrix_nnz())
-                    .collect(),
-                cumulative_coarsened_nonzeros: cumulative_nonzeros,
+            || -> Result<HierarchyBuildReport, CmgError> {
+                let mut vertex_counts = if ADMITTED {
+                    crate::storage::try_capacity(levels.len(), "hierarchy vertex report")?
+                } else {
+                    Vec::with_capacity(levels.len())
+                };
+                let mut matrix_nonzeros = if ADMITTED {
+                    crate::storage::try_capacity(levels.len(), "hierarchy nonzero report")?
+                } else {
+                    Vec::with_capacity(levels.len())
+                };
+                vertex_counts.extend(levels.iter().map(|level| level.graph.vertex_count()));
+                matrix_nonzeros.extend(levels.iter().map(|level| level.graph.matrix_nnz()));
+                Ok(HierarchyBuildReport {
+                    terminal_reason,
+                    vertex_counts,
+                    matrix_nonzeros,
+                    cumulative_coarsened_nonzeros: cumulative_nonzeros,
+                })
             },
-        );
+        )?;
         Ok((Self { levels, report }, phase_records))
     }
 
@@ -630,24 +771,31 @@ impl CmgHierarchy {
     }
 }
 
-fn make_level(
+fn make_level<const ADMITTED: bool>(
     graph: Laplacian,
     aggregation: Option<Aggregation>,
     repeat: usize,
     terminal_reason: Option<TerminalReason>,
-) -> HierarchyLevel {
-    let inverse_diagonal = graph
+) -> Result<HierarchyLevel, CmgError> {
+    let values = graph
         .diagonal()
         .iter()
-        .map(|degree| if *degree > 0.0 { 0.5 / *degree } else { 0.0 })
-        .collect();
-    HierarchyLevel {
+        .map(|degree| if *degree > 0.0 { 0.5 / *degree } else { 0.0 });
+    let inverse_diagonal = if ADMITTED {
+        let mut values_bank =
+            crate::storage::try_capacity(graph.vertex_count(), "hierarchy inverse diagonal")?;
+        values_bank.extend(values);
+        values_bank
+    } else {
+        values.collect()
+    };
+    Ok(HierarchyLevel {
         graph,
         inverse_diagonal,
         transfer: aggregation.map(LevelTransfer::Full),
         repeat,
         terminal_reason,
-    }
+    })
 }
 
 fn repeat_from_nonzeros(fine_nonzeros: usize, coarse_nonzeros: usize) -> usize {

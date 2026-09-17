@@ -183,6 +183,14 @@ impl Laplacian {
         Self::from_endpoint_sorted_raw_edges(vertex_count, raw)
     }
 
+    pub(crate) fn from_compact_edges_admitted(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+    ) -> Result<Self, CmgError> {
+        sort_compact_edge_endpoints(&mut raw);
+        Self::from_sorted_raw_edges_with_mode::<true>(vertex_count, raw, false)
+    }
+
     #[cfg(feature = "parallel")]
     pub(crate) fn from_compact_edges_with_executor(
         vertex_count: usize,
@@ -202,14 +210,14 @@ impl Laplacian {
         vertex_count: usize,
         raw: Vec<Edge>,
     ) -> Result<Self, CmgError> {
-        Self::from_sorted_raw_edges_with_mode(vertex_count, raw, false)
+        Self::from_sorted_raw_edges_with_mode::<false>(vertex_count, raw, false)
     }
 
     fn from_sorted_raw_edges(vertex_count: usize, raw: Vec<Edge>) -> Result<Self, CmgError> {
-        Self::from_sorted_raw_edges_with_mode(vertex_count, raw, true)
+        Self::from_sorted_raw_edges_with_mode::<false>(vertex_count, raw, true)
     }
 
-    fn from_sorted_raw_edges_with_mode(
+    fn from_sorted_raw_edges_with_mode<const ADMITTED: bool>(
         vertex_count: usize,
         mut raw: Vec<Edge>,
         weights_are_sorted: bool,
@@ -219,7 +227,11 @@ impl Laplacian {
         // allocate a separate full-capacity canonical vector. Accumulate the
         // diagonal in the same canonical edge order while each merged edge is
         // already hot, avoiding a second full edge pass.
-        let mut diagonal = vec![0.0; vertex_count];
+        let mut diagonal = if ADMITTED {
+            crate::storage::try_filled(vertex_count, 0.0, "coarse graph diagonal")?
+        } else {
+            vec![0.0; vertex_count]
+        };
         let mut write_index = 0;
         if weights_are_sorted {
             let mut read_index = 0;
@@ -265,7 +277,14 @@ impl Laplacian {
         // vectors may grow beyond the final length. Do not retain that spare
         // capacity in every hierarchy level.
         if raw.capacity() != raw.len() {
-            raw.shrink_to_fit();
+            if ADMITTED {
+                let mut compact =
+                    crate::storage::try_capacity(raw.len(), "coarse edge compaction")?;
+                compact.extend_from_slice(&raw);
+                raw = compact;
+            } else {
+                raw.shrink_to_fit();
+            }
         }
 
         let mut diagonal_nnz = 0_usize;
@@ -320,10 +339,29 @@ impl Laplacian {
     /// Remove only zero-degree rows, preserving canonical edge and addition order.
     #[cfg(feature = "experimental-components")]
     pub(crate) fn without_isolated_vertices(&self) -> Option<(Vec<usize>, Self)> {
+        self.without_isolated_vertices_impl::<false>()
+            .expect("unbudgeted isolate allocation")
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn without_isolated_vertices_admitted(
+        &self,
+    ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
+        self.without_isolated_vertices_impl::<true>()
+    }
+
+    #[cfg(feature = "experimental-components")]
+    fn without_isolated_vertices_impl<const ADMITTED: bool>(
+        &self,
+    ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
         if self.diagonal.iter().all(|&degree| degree > 0.0) {
-            return None;
+            return Ok(None);
         }
-        let mut map = vec![usize::MAX; self.vertex_count];
+        let mut map = if ADMITTED {
+            crate::storage::try_filled(self.vertex_count, usize::MAX, "isolate vertex map")?
+        } else {
+            vec![usize::MAX; self.vertex_count]
+        };
         let mut dimension = 0;
         let mut endpoints_unchanged = true;
         for (vertex, &degree) in self.diagonal.iter().enumerate() {
@@ -339,24 +377,28 @@ impl Laplacian {
         let edges = if endpoints_unchanged {
             Arc::clone(&self.edges)
         } else {
-            Arc::new(
-                self.edges
-                    .iter()
-                    .map(|edge| {
-                        debug_assert!(map[edge.u()] < map[edge.v()]);
-                        debug_assert!(map[edge.v()] < dimension);
-                        Edge::from_compact_parts(
-                            map[edge.u()] as u32,
-                            map[edge.v()] as u32,
-                            edge.weight(),
-                        )
-                    })
-                    .collect(),
-            )
+            let mapped = self.edges.iter().map(|edge| {
+                debug_assert!(map[edge.u()] < map[edge.v()]);
+                debug_assert!(map[edge.v()] < dimension);
+                Edge::from_compact_parts(map[edge.u()] as u32, map[edge.v()] as u32, edge.weight())
+            });
+            let edges = if ADMITTED {
+                let mut edges =
+                    crate::storage::try_capacity(self.edge_count(), "isolate compact edges")?;
+                edges.extend(mapped);
+                edges
+            } else {
+                mapped.collect()
+            };
+            Arc::new(edges)
         };
-        let mut diagonal = Vec::with_capacity(dimension);
+        let mut diagonal = if ADMITTED {
+            crate::storage::try_capacity(dimension, "isolate compact diagonal")?
+        } else {
+            Vec::with_capacity(dimension)
+        };
         diagonal.extend(self.diagonal.iter().copied().filter(|&degree| degree > 0.0));
-        Some((
+        Ok(Some((
             map,
             Self {
                 vertex_count: dimension,
@@ -368,7 +410,7 @@ impl Laplacian {
                 prepared_topology_lineage: None,
                 prepared_components: None,
             },
-        ))
+        )))
     }
 
     /// Return the number of vertices, including isolated vertices.
