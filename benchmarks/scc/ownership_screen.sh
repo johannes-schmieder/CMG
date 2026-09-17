@@ -25,7 +25,7 @@ for variant in baseline candidate; do
     cargo build --locked --offline --release --manifest-path "$driver/Cargo.toml" --features "$features" --target-dir "$driver/time-target" > "$run/logs/screen-build-$variant-time.log" 2>&1
     "$driver/time-target/release/ownership-screen" > "$run/output/screen/$variant-warmup.jsonl"
 done
-for case in path mixed dense weak; do
+for case in path mixed dense weak fallback; do
     cmp "$run/output/screen/inputs-baseline/$case.bin" "$run/output/screen/inputs-candidate/$case.bin"
 done
 for round in 1 2 3 4 5 6 7; do

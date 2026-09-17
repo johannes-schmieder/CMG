@@ -80,6 +80,188 @@ fn fixture(case: &str) -> Laplacian {
     .unwrap()
 }
 
+fn build_pre(
+    graph: &Laplacian,
+    component: bool,
+    executor: &ParallelExecutor,
+    direct_threshold: usize,
+) -> CmgPreconditioner {
+    let options = CmgOptions {
+        direct_threshold,
+        ..Default::default()
+    };
+    if component {
+        let component = ComponentBuildOptions {
+            prune_coarse_isolates: true,
+            preserve_unpruned_stopping: true,
+            factor_terminal_components: true,
+        };
+        #[cfg(feature = "candidate-screen")]
+        {
+            CmgPreconditioner::build_component_experiment_with_executor(
+                graph, options, component, executor,
+            )
+            .unwrap()
+        }
+        #[cfg(not(feature = "candidate-screen"))]
+        {
+            CmgPreconditioner::build_component_experiment(graph, options, component).unwrap()
+        }
+    } else {
+        CmgPreconditioner::build_with_executor(graph, options, executor).unwrap()
+    }
+}
+
+// Frozen additive development case: discard a backward-certified multilevel
+// attempt that fails the caller's stronger residual gate, retire all its owned
+// state, and rebuild a direct alternative. This driver, not CMG/fereg routing,
+// chooses the fallback. Original four timing configurations remain unchanged.
+fn fallback_screen(input_dir: Option<&str>) {
+    const N: usize = 64;
+    const BRIDGE: f64 = 16_777_216.0;
+    const LIMIT: f64 = 1e-8 * std::f64::consts::SQRT_2;
+    let graph = Laplacian::from_edges(
+        N,
+        (1..N).map(|v| (v - 1, v, if v == 32 { 1.0 / BRIDGE } else { 1.0 })),
+    )
+    .unwrap();
+    let mut reference = [0.0; N];
+    for v in (1..N).rev() {
+        reference[v - 1] = reference[v] + if v == 32 { BRIDGE } else { 1.0 };
+    }
+    let mean = reference.iter().sum::<f64>() / N as f64;
+    for x in &mut reference {
+        *x -= mean;
+    }
+    let scale = reference.iter().copied().map(f64::abs).fold(0.0, f64::max);
+    let mut rhs = [0.0; N];
+    rhs[0] = 1.0;
+    rhs[N - 1] = -1.0;
+    let errors = |solution: &[f64]| {
+        let forward = solution
+            .iter()
+            .zip(reference)
+            .map(|(x, r)| (x - r).abs())
+            .fold(0.0, f64::max)
+            / scale;
+        let mut residual = rhs;
+        for v in 1..N {
+            let current = (solution[v - 1] - solution[v]) / if v == 32 { BRIDGE } else { 1.0 };
+            residual[v - 1] -= current;
+            residual[v] += current;
+        }
+        (forward, residual.iter().map(|r| r * r).sum::<f64>().sqrt())
+    };
+    if let Some(dir) = input_dir {
+        use std::io::Write;
+        let mut file = std::fs::File::create_new(format!("{dir}/fallback.bin")).unwrap();
+        file.write_all(&(N as u64).to_le_bytes()).unwrap();
+        for e in graph.edges() {
+            for bits in [e.u() as u64, e.v() as u64, e.weight().to_bits()] {
+                file.write_all(&bits.to_le_bytes()).unwrap();
+            }
+        }
+        for x in rhs.iter().chain(&reference).chain(&[1e-6, LIMIT]) {
+            file.write_all(&x.to_bits().to_le_bytes()).unwrap();
+        }
+    }
+    for component in [false, true] {
+        for threads in [1, 4] {
+            let execution = ParallelOptions {
+                threads,
+                min_parallel_len: 1,
+                reduction_chunk_size: 256,
+                ..Default::default()
+            };
+            let base = live();
+            begin_peak();
+            let start = Instant::now();
+            let executor = ParallelExecutor::new(execution).unwrap();
+            let pre = build_pre(&graph, component, &executor, 8);
+            let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+            let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
+            let mut solution = [0.0; N];
+            let discarded_setup = start.elapsed().as_nanos();
+            let solving = Instant::now();
+            let discarded = solve_pcg_with_plan_into_with_workspace(
+                &graph,
+                &pre,
+                &plan,
+                &rhs,
+                None,
+                &mut solution,
+                PcgOptions::default(),
+                &mut workspace,
+                &executor,
+            )
+            .unwrap();
+            let discarded_solve = solving.elapsed().as_nanos();
+            let checking = Instant::now();
+            let (discarded_forward, discarded_residual) = errors(&solution);
+            assert!(discarded.residual_norm() <= discarded.tolerance());
+            assert!(discarded_residual > LIMIT);
+            let rejection_check = checking.elapsed().as_nanos();
+            let discarded_peak = peak() - base;
+            let retiring = Instant::now();
+            drop((workspace, plan, pre));
+            drop(executor);
+            let discarded_cleanup = retiring.elapsed().as_nanos();
+            let after_discard = live() - base;
+
+            let preparing = Instant::now();
+            let executor = ParallelExecutor::new(execution).unwrap();
+            let pre = build_pre(&graph, component, &executor, N + 1);
+            let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+            let setup = preparing.elapsed().as_nanos();
+            let preparing = Instant::now();
+            let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
+            let workspace_time = preparing.elapsed().as_nanos();
+            let retained = live() - base;
+            let solving = Instant::now();
+            let accepted = solve_pcg_with_plan_into_with_workspace(
+                &graph,
+                &pre,
+                &plan,
+                &rhs,
+                None,
+                &mut solution,
+                PcgOptions {
+                    relative_tolerance: 0.0,
+                    absolute_tolerance: LIMIT,
+                    ..Default::default()
+                },
+                &mut workspace,
+                &executor,
+            )
+            .unwrap();
+            let solve = solving.elapsed().as_nanos();
+            let checking = Instant::now();
+            let (forward, residual) = errors(&solution);
+            assert!(accepted.residual_norm() <= accepted.tolerance());
+            assert!(forward <= 1e-6 && residual <= LIMIT);
+            let acceptance_check = checking.elapsed().as_nanos();
+            let retiring = Instant::now();
+            drop((workspace, plan, pre));
+            let accepted_cleanup = retiring.elapsed().as_nanos();
+            let retiring = Instant::now();
+            drop(executor);
+            let shutdown = retiring.elapsed().as_nanos();
+            let total = start.elapsed().as_nanos();
+            let observed_peak = peak() - base;
+            let after_retirement = live() - base;
+            let hash = solution.iter().fold(0xcbf29ce484222325u64, |h, x| {
+                (h ^ x.to_bits()).wrapping_mul(0x100000001b3)
+            });
+            let iterations = accepted.iterations();
+            let discarded_iterations = discarded.iterations();
+            println!(
+                "{{\"case\":\"fallback\",\"component\":{component},\"workers\":{threads},\"rhs\":1,\"setup_ns\":{setup},\"workspace_ns\":{workspace_time},\"solve_ns\":{solve},\"shutdown_ns\":{shutdown},\"total_ns\":{total},\"discarded_setup_ns\":{discarded_setup},\"discarded_solve_ns\":{discarded_solve},\"rejection_check_ns\":{rejection_check},\"discarded_cleanup_ns\":{discarded_cleanup},\"acceptance_check_ns\":{acceptance_check},\"accepted_cleanup_ns\":{accepted_cleanup},\"peak_requested_increment\":{observed_peak},\"discarded_peak_requested_increment\":{discarded_peak},\"retained_requested_increment\":{retained},\"after_discard_requested_increment\":{after_discard},\"after_retirement_requested_increment\":{after_retirement},\"iterations\":{iterations},\"discarded_iterations\":{discarded_iterations},\"solution_fnv64\":\"{hash:016x}\",\"residual\":{residual:e},\"coefficient_relative_error\":{forward:e},\"discarded_residual\":{discarded_residual:e},\"discarded_coefficient_relative_error\":{discarded_forward:e},\"certified\":true,\"discarded_or_fallback\":\"strict-residual-rejection-then-direct\",\"allocation_instrumentation\":{}}}",
+                cfg!(feature = "screen-allocations")
+            );
+        }
+    }
+}
+
 fn main() {
     // Frozen before measuring: four synthetic graphs, ordinary/explicit
     // component setup, one/four workers, four sequential caller-buffer RHSs.
@@ -209,4 +391,5 @@ fn main() {
             }
         }
     }
+    fallback_screen(input_dir.as_deref());
 }

@@ -1,5 +1,6 @@
 """Validate and summarize a fixed alternating upstream development screen."""
 import json
+import math
 import pathlib
 import statistics
 import sys
@@ -29,11 +30,24 @@ assert old_dependencies == dependencies(pathlib.Path.cwd() / "Cargo.lock")
 
 def read(name):
     rows = [json.loads(line) for line in (root / name).read_text().splitlines()]
-    assert len(rows) == 16
+    assert len(rows) == 20
     values = {(r["case"], r["component"], r["workers"]): r for r in rows}
-    assert len(values) == 16
-    assert {k[0] for k in values} == {"path", "mixed", "dense", "weak"}
-    assert all(r["certified"] and r["rhs"] == 4 for r in rows)
+    expected = {(case, component, workers)
+                for case in ("path", "mixed", "dense", "weak", "fallback")
+                for component in (False, True) for workers in (1, 4)}
+    assert set(values) == expected
+    for row in rows:
+        assert row["certified"] and row["rhs"] == (1 if row["case"] == "fallback" else 4)
+        assert all(math.isfinite(v) for v in row.values() if isinstance(v, float))
+        assert all(v >= 0 for k, v in row.items() if k.endswith("_ns"))
+        if row["case"] == "fallback":
+            assert row["discarded_or_fallback"] == "strict-residual-rejection-then-direct"
+            assert row["discarded_residual"] > 1e-8 * math.sqrt(2)
+            assert row["residual"] <= 1e-8 * math.sqrt(2)
+            assert row["coefficient_relative_error"] <= 1e-6
+            assert sum(v for k, v in row.items() if k.endswith("_ns") and k != "total_ns") <= row["total_ns"]
+        else:
+            assert row["discarded_or_fallback"] == "not_exercised"
     return values
 
 
@@ -42,14 +56,19 @@ candidate = [read("candidate-%d.jsonl" % i) for i in range(1, 8)]
 allocation = {v: read(v + "-alloc.jsonl") for v in ("baseline", "candidate")}
 summary = []
 for key in sorted(baseline[0]):
+    numerical_fields = ["solution_fnv64", "iterations", "residual", "coefficient_relative_error"]
+    if key[0] == "fallback":
+        numerical_fields += ["discarded_iterations", "discarded_residual", "discarded_coefficient_relative_error"]
     for old, new in zip(baseline, candidate):
-        for field in ("solution_fnv64", "iterations", "residual", "coefficient_relative_error"):
+        for field in numerical_fields:
             assert old[key][field] == new[key][field], (key, field)
         for variant, rows in (("baseline", old), ("candidate", new)):
-            assert rows[key]["solution_fnv64"] == allocation[variant][key]["solution_fnv64"]
+            for field in numerical_fields:
+                assert rows[key][field] == allocation[variant][key][field], (key, variant, field)
             assert not rows[key]["allocation_instrumentation"]
+            assert allocation[variant][key]["allocation_instrumentation"]
     phases = {}
-    for field in ("setup_ns", "workspace_ns", "solve_ns", "shutdown_ns", "total_ns"):
+    for field in sorted(f for f in candidate[0][key] if f.endswith("_ns")):
         old = [r[key][field] for r in baseline]
         new = [r[key][field] for r in candidate]
         ratios = [b / a for a, b in zip(old, new)]
@@ -62,18 +81,19 @@ for key in sorted(baseline[0]):
     summary.append({
         "case": key[0], "component": key[1], "workers": key[2],
         "phases": phases,
-        "memory": {v: {field: allocation[v][key][field] for field in ("peak_requested_increment", "retained_requested_increment")} for v in allocation},
+        "memory": {v: {field: value for field, value in allocation[v][key].items() if field.endswith("_requested_increment")} for v in allocation},
         "coefficient_relative_error": candidate[0][key]["coefficient_relative_error"],
     })
 record = {
+    "protocol": "ownership-development-v2-with-discarded-attempt",
     "source": (run / "manifests/source-commit.txt").read_text().strip(),
     "baseline": (run / "manifests/screen-reference/source.txt").read_text().strip(),
-    "pairs": 112,
+    "pairs": 140,
     "numerical_fields_identical": True,
-    "scope": "Seven alternating process pairs; unpinned shared-host development evidence, not component promotion or complete-command fereg evidence. Allocation runs are separate. No discarded/fallback attempt exercised.",
+    "scope": "Seven alternating process pairs; unpinned shared-host development evidence, not component promotion or complete-command fereg evidence. Allocation runs are separate. Original four cases unchanged; added caller-rejected multilevel attempt followed by complete retirement and direct rebuild. Only the added fallback total includes all solver-owned cleanup. Baseline pool drop does not wait for workers; candidate drop does. Runtime allocation observations are not admission proofs.",
     "cases": summary,
 }
 with (root / "summary.json").open("x") as output:
     json.dump(record, output, indent=2)
     output.write("\n")
-print("CMG_OWNERSHIP_SCREEN_VALIDATE_SUCCESS pairs=112")
+print("CMG_OWNERSHIP_SCREEN_VALIDATE_SUCCESS pairs=140")

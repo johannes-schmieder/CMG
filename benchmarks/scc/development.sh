@@ -6,7 +6,7 @@ root=/projectnb/welfgr/cmg-benchmarks
 run_id=${1:?}
 mode=${2:?}
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-development$ ]]
-[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen || "$mode" == oracle || "$mode" == storage || "$mode" == storage-screen ]]
+[[ "$mode" == shutdown || "$mode" == integration || "$mode" == integration-screen || "$mode" == screen || "$mode" == oracle || "$mode" == storage || "$mode" == storage-screen ]]
 run="$root/runs/$run_id"
 mkdir "$run/work/development-started"
 sha=$(cat "$run/manifests/source-commit.txt")
@@ -65,7 +65,7 @@ elif [[ "$mode" == screen ]]; then
     step final-memory-minimal cargo test --locked --offline --test storage_accounting
     step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
 else
-    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor -- --nocapture
+    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor --test residual_contract -- --nocapture
     step minimal cargo test --locked --offline --all-targets
     step parallel cargo test --locked --offline --all-targets --features parallel -- --skip custom_executor_supports_up_to_thirty_two_threads
     step components cargo test --locked --offline --all-targets --features experimental-components
@@ -74,6 +74,12 @@ else
     step docs env RUSTDOCFLAGS=-Dwarnings cargo doc --locked --offline --no-deps --all-features
     step doctests cargo test --locked --offline --doc --all-features
     step msrv cargo +1.85.1 check --locked --offline --all-features --all-targets
+    if [[ "$mode" == integration-screen ]]; then
+        step benchmark-fmt cargo fmt --manifest-path benchmarks/Cargo.toml --all -- --check
+        step benchmark-clippy cargo clippy --locked --offline --manifest-path benchmarks/Cargo.toml --all-features --all-targets -- -D warnings
+        step screen-validator python3 -m unittest discover -s benchmarks/scc/tests -p test_ownership_screen.py -v
+        step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
+    fi
 fi
 find "$CARGO_TARGET_DIR" -type f -perm -0100 -print0 | sort -z | xargs -0 sha256sum > "$run/manifests/development-artifacts.sha256"
 sha256sum --status -c "$run/manifests/source-files-sha256.txt"

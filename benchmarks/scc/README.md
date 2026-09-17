@@ -36,13 +36,28 @@ reference Git archive separately. The compute-node job compiles identical
 harness bytes against both immutable sources, with separate timing and requested
 allocation builds, verifies lockfile dependency correspondence and identical
 binary fixture inputs, then alternates seven baseline/candidate process pairs.
-Its frozen four-case list is connected path, path with pairs/isolates, dense
+Its original frozen four-case list is connected path, path with pairs/isolates, dense
 worker-firm with pairs, and a tiny weighted bridge, each with ordinary/explicit
 component construction and one/four workers. Four caller-buffer solves reuse
 each hierarchy and workspace. Output includes setup, workspace, solve, joined
-shutdown, total time and separate allocation observations. It does not exercise
-fallback attempts or qualify a production dispatch policy. Full sources,
+shutdown, total time and separate allocation observations. Version 2 adds a
+fifth, separately reported case: the frozen dyadic bridge, whose first
+multilevel attempt passes the native backward certificate but fails a stricter
+caller residual gate. It measures rejected setup, solve, independent gate check,
+complete bank/pool retirement, direct rebuild, solve, acceptance check and final
+cleanup. The caller-buffer output is stack storage; input parents are excluded.
+Ordinary/component and one/four workers yield 20 configurations and 140 pairs.
+Only this added case's total includes all solver-owned cleanup. Neither version
+qualifies an automatic production fallback policy. Baseline pool drop has a
+different lifetime endpoint: it returns without joining workers. Full sources,
 artifacts, input hashes, raw JSONL and validation summary remain in the run.
+
+`integration-screen` performs the full bounded integration matrix first, then
+benchmark formatting/Clippy and the version-2 screen in the same allocation.
+Deploy with the reference archive. A failing accuracy test stops the job;
+timings cannot override it. Keep the historical default-policy bridge diagnosis
+separate from the explicit absolute-residual regression described in
+[`residual-contract.md`](../../docs/residual-contract.md).
 
 The separate `oracle` development mode uses the same reference-archive deploy
 but runs only the frozen 64-vertex dyadic weak-bridge diagnosis, not performance
