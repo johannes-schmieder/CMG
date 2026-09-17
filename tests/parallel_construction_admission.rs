@@ -123,10 +123,14 @@ fn check(graph: &Laplacian, executor: &ParallelExecutor, options: CmgOptions) {
         .is_err()
     );
     assert_eq!(CALLS.with(Cell::get), calls);
+    // Compare the same construction stage. Preconditioner finalization replaces
+    // the penultimate repeat using terminal-factor nonzeros; a standalone
+    // hierarchy still uses coarse-graph nonzeros. The exact preconditioner
+    // comparison above separately checks that finalization is preserved.
     assert_eq!(
         CmgHierarchy::build_with_executor_and_cmg_budget(graph, options, executor, hierarchy_bound)
             .unwrap(),
-        *pre.hierarchy()
+        CmgHierarchy::build_with_executor(graph, options, executor).unwrap()
     );
     println!(
         "PARALLEL_CMG_CONSTRUCTION_SUCCESS vertices={} edges={} workers={} cmg_bound={bound} retained_new={retained} observed_process_peak_increment={peak} runtime_included_in_observation=true runtime_admitted=false",
