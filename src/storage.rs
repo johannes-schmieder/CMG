@@ -132,6 +132,25 @@ pub(crate) fn bytes<T>(count: usize) -> Result<usize, CmgError> {
         })
 }
 
+pub(crate) fn try_capacity<T>(count: usize, context: &'static str) -> Result<Vec<T>, CmgError> {
+    bytes::<T>(count)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| CmgError::AllocationFailed { context })?;
+    Ok(values)
+}
+
+pub(crate) fn try_filled<T: Clone>(
+    count: usize,
+    value: T,
+    context: &'static str,
+) -> Result<Vec<T>, CmgError> {
+    let mut values = try_capacity(count, context)?;
+    values.resize(count, value);
+    Ok(values)
+}
+
 pub(crate) fn admit(required_bytes: usize, budget_bytes: usize) -> Result<(), CmgError> {
     if required_bytes > budget_bytes {
         Err(CmgError::MemoryBudgetExceeded {

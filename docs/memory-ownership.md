@@ -60,6 +60,8 @@ caller must reserve them before supplying the remaining incremental budget.
 | Numeric generation | `numeric_allocation_bytes`, `assemble_with_workspace_budgeted` | canonical edges, diagonal, two Arc<Vec> blocks, fresh numeric lineage |
 | One batch workspace | `PcgBatchWorkspace::allocation_bytes`, `new_with_budget` | PCG, CMG and component scratch, gather/guess arrays, nested descriptor banks |
 | Fixed RHS bank | `bank_allocation_bytes`, `new_bank_with_budget` | every workspace plus the outer capacity bank |
+| Serial CSR | `CsrLaplacian::construction_allocation_bound`, `from_laplacian_with_budget` | new row/column/weight arrays and simultaneous cursor bank |
+| Parallel plan | `ParallelCmgPlan::construction_allocation_bound`, `build_with_budget` | descriptor banks, earlier retained operators, current serial/parallel CSR temporaries; **not Rayon runtime** |
 
 All size arithmetic is checked, including `Layout::array`'s addressable-size
 limit. Budgets are checked before the first covered allocation. Fixed banks use
@@ -88,6 +90,50 @@ centering scratch, dimension metadata and the outer banks. Two additional
 vectors stage batch RHSs/guesses. Independent allocation tests check exact and
 one-byte-short budgets, overlap, zero reporting allocations, spare capacities,
 overflow and every injected allocation failure in fixed-bank construction.
+
+### CSR and plan construction proof
+
+CSR construction now fallibly reserves its known-size banks before filling;
+prefix sums reuse the counts as scatter cursors. Serial peak is retained row
+offsets, columns and weights plus `usize[n]` cursors. The compact/native offset
+choice depends on `2*m`, independently of the compact/native column choice
+depending on `n`. Both choices use checked layouts even for dimensions too large
+to allocate in tests. Existing graph/lineage allocations are borrowed, not new.
+
+Parallel construction preserves its density/thread/length routing and row
+partition. Let `R` be row-offset bytes, `U=sizeof(usize)`, `N=(n+1)*U`, `E=m*U`,
+`C` the new retained CSR layouts and `B` the exact row-fill descriptor bank.
+The bound takes the maximum of sequential stages:
+
+* counting/first prefix sum: `R + 3*n*U`;
+* auxiliary prefix sums: `R + 2*N + 2*n*U`;
+* incoming-edge scatter: `R + 2*N + n*U + E`;
+* row fill: `C + 2*N + E + B`.
+
+The row-fill descriptor count is `ceil(n / work_chunk_len(n))`; its capacity is
+reserved once rather than grown. All CMG-owned allocations occur on the caller
+before parallel fill. Rayon task/queue allocations remain explicitly uncovered;
+the presence of a finite CMG-owned layout bound does not certify that runtime.
+
+Plan construction reserves both level descriptor banks first, then builds levels
+in their original order. At each eligible level, add its construction bound to
+both descriptor banks and all earlier retained operators; take the maximum
+across levels. Shared lineage clones allocate nothing. Partial failure drops all
+earlier operators and both banks. The profiling-only result adds its own profile
+bank and is outside this admitted entry point. Old plans remain separately live.
+
+`ParallelPcgSolver::plan_construction_allocation_bound` and
+`try_plan_with_budget` expose the same boundary inside the solver's existing
+lazy-plan owner. After initialization the required incremental bytes are zero.
+This avoids a second plan/pool. It does not change automatic routing or impose
+admission on other, unbudgeted solver methods. Callers must initialize the plan
+at their admitted preparation boundary before relying on allocation-free reuse.
+
+Independent allocator fixtures check the serial CSR and eligible serial-CSR
+plan peaks against these formulas, one-byte-short rejection before allocation,
+all fallible allocation failures, repeated plan initialization and old/new plan
+overlap. Dense parallel CSR numerical identity is checked separately. Runtime
+activity is not silently subtracted from a sampled parallel process peak.
 
 ## Fill guard proof and remaining construction scopes
 
@@ -134,7 +180,7 @@ certifying a whole-build bound:
 | Contraction and pruning | all retained levels plus mapped edge bank, sort scratch, coarse diagonal, aggregation, isolate map, compact graph and transfer entries; parallel result-collection banks |
 | Ordinary LDL | component/permutation/pattern maps, matrix and lower dense row banks, diagonal and packed/sparse retained conversion simultaneously |
 | Component LDL | component offsets and edge grouping, factor index, one block's sparse column/row links and work arrays, accumulated rows from earlier blocks, final packed or transposed sparse conversion |
-| Plans | retained hierarchy and earlier operators plus current row offsets, endpoint indices, counts/offsets, directed CSR values, lineage and operator descriptor banks |
+| Plans outside scoped entry points | profiled-result banks, concurrent independent callers and Rayon runtime; new ordinary-plan CMG layouts are covered above, not full solver construction |
 | Automatic repeated solves | old workspace bank plus newly allocated descriptors/workspaces, lazy plan setup, owned-result banks and per-chunk Result buffers |
 | Failure/retry | already retained parents, partially built current owners and any separately retained failed attempt; errors do not make those parents disappear |
 
@@ -142,9 +188,15 @@ Sequential stages use a maximum only **after** adding their common live
 parents. Replacements and final factor conversion require sums. The existing
 principal estimate does not prove these full overlaps; the downstream
 construction supplement remains incomplete too. A complete fallible build
-arena/provisioning design and a checked capacity model for every growth path
-remain necessary. No weak-graph solver alternative was removed to simplify
-this inventory.
+arena/provisioning design and a checked capacity model for remaining growth
+paths remain necessary. Ordinary ingestion/forest/contraction currently use
+data-dependent growth and library sort/collection allocation; terminal LDL
+converts among simultaneously live row/column/pattern representations. A full
+implementation must either replace those with fallibly reserved bounded banks
+or carry a stage-specific allocation ledger through every ordinary and component
+builder, including failed partial owners and conversion overlap. This is a broad
+cross-builder change, not a constant multiplier or a consequence of the new
+plan bound. No weak-graph solver alternative was removed to simplify inventory.
 
 ## Runtime scope and lifetime
 

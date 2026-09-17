@@ -2,6 +2,7 @@
 
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
+use crate::storage::{add, bytes, try_capacity, try_filled};
 use crate::{CmgError, Laplacian};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -148,6 +149,105 @@ impl PartialEq for CsrLaplacian {
 }
 
 impl CsrLaplacian {
+    /// Upper bound on new CMG-owned requested layouts during serial CSR
+    /// construction. Includes retained arrays and overlapping cursor scratch;
+    /// excludes borrowed graph/lineage, allocator overhead and inline roots.
+    pub fn construction_allocation_bound(vertices: usize, edges: usize) -> Result<usize, CmgError> {
+        add(
+            Self::retained_allocation_bytes(vertices, edges)?,
+            bytes::<usize>(vertices)?,
+        )
+    }
+
+    pub(crate) fn retained_allocation_bytes(
+        vertices: usize,
+        edges: usize,
+    ) -> Result<usize, CmgError> {
+        let directed = edges.checked_mul(2).ok_or(CmgError::AllocationFailed {
+            context: "CSR directed-entry count overflows",
+        })?;
+        let offsets = add(vertices, 1)?;
+        let rows = if directed <= u32::MAX as usize {
+            bytes::<u32>(offsets)?
+        } else {
+            bytes::<usize>(offsets)?
+        };
+        let columns = if vertices <= u32::MAX as usize {
+            bytes::<u32>(directed)?
+        } else {
+            bytes::<usize>(directed)?
+        };
+        add(add(rows, columns)?, bytes::<f64>(directed)?)
+    }
+
+    /// Admit all new serial CSR layouts before allocating. Shared graph lineage
+    /// is borrowed, not newly allocated. Existing graphs/operators remain the
+    /// caller's separately charged parents.
+    pub fn from_laplacian_with_budget(
+        graph: &Laplacian,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::construction_allocation_bound(graph.vertex_count(), graph.edge_count())?,
+            budget_bytes,
+        )?;
+        Self::from_laplacian(graph)
+    }
+
+    /// CMG-owned construction layouts for the unchanged executor routing.
+    /// Rayon runtime allocations, allocator overhead and existing parents are
+    /// explicitly excluded; this is not whole-action/runtime admission.
+    #[cfg(feature = "parallel")]
+    pub fn construction_allocation_bound_with_executor(
+        graph: &Laplacian,
+        executor: &ParallelExecutor,
+    ) -> Result<usize, CmgError> {
+        let n = graph.vertex_count();
+        let m = graph.edge_count();
+        if !Self::uses_parallel_construction(graph, executor) {
+            return Self::construction_allocation_bound(n, m);
+        }
+        let directed = m.checked_mul(2).ok_or(CmgError::AllocationFailed {
+            context: "CSR directed-entry count overflows",
+        })?;
+        let rows = if directed <= u32::MAX as usize {
+            bytes::<u32>(add(n, 1)?)?
+        } else {
+            bytes::<usize>(add(n, 1)?)?
+        };
+        let native_offsets = bytes::<usize>(add(n, 1)?)?;
+        let two_offsets = add(native_offsets, native_offsets)?;
+        // Counts convert in-place to cursors. Account for the outgoing count
+        // bank until its prefix sum returns, then for incoming edge scatter.
+        let counting = add(rows, bytes::<[usize; 3]>(n)?)?;
+        let offsets = add(add(rows, two_offsets)?, bytes::<[usize; 2]>(n)?)?;
+        let incoming = add(
+            add(add(rows, two_offsets)?, bytes::<usize>(n)?)?,
+            bytes::<usize>(m)?,
+        )?;
+        let blocks = n.div_ceil(executor.work_chunk_len(n));
+        let descriptors = if n <= u32::MAX as usize {
+            bytes::<RowFillBlock<'_, u32>>(blocks)?
+        } else {
+            bytes::<RowFillBlock<'_, usize>>(blocks)?
+        };
+        let filling = add(
+            add(
+                add(Self::retained_allocation_bytes(n, m)?, two_offsets)?,
+                bytes::<usize>(m)?,
+            )?,
+            descriptors,
+        )?;
+        Ok(counting.max(offsets).max(incoming).max(filling))
+    }
+
+    #[cfg(feature = "parallel")]
+    fn uses_parallel_construction(graph: &Laplacian, executor: &ParallelExecutor) -> bool {
+        executor.thread_count() > 1
+            && executor.should_parallel(graph.edge_count())
+            && graph.edge_count() >= graph.vertex_count().saturating_mul(4)
+    }
+
     /// Freeze a canonical edge-list Laplacian into deterministic row storage.
     pub fn from_laplacian(graph: &Laplacian) -> Result<Self, CmgError> {
         Self::from_laplacian_impl::<false>(graph).map(|(operator, _)| operator)
@@ -175,11 +275,7 @@ impl CsrLaplacian {
         graph: &Laplacian,
         executor: &ParallelExecutor,
     ) -> Result<(Self, CsrBuildProfile), CmgError> {
-        let dense_enough = graph.edge_count() >= graph.vertex_count().saturating_mul(4);
-        if executor.thread_count() <= 1
-            || !executor.should_parallel(graph.edge_count())
-            || !dense_enough
-        {
+        if !Self::uses_parallel_construction(graph, executor) {
             return Self::from_laplacian_impl::<PROFILE>(graph);
         }
         Self::from_laplacian_parallel_impl::<PROFILE>(graph, executor)
@@ -201,17 +297,17 @@ impl CsrLaplacian {
 
         let (row_counts, incoming_counts, outgoing_counts) =
             measure_build_phase::<PROFILE, _>(&mut profile.row_counts_nanoseconds, || {
-                let mut row_counts = vec![0_usize; vertex_count];
-                let mut incoming_counts = vec![0_usize; vertex_count];
-                let mut outgoing_counts = vec![0_usize; vertex_count];
+                let mut row_counts = try_filled(vertex_count, 0_usize, "CSR row counts")?;
+                let mut incoming_counts = try_filled(vertex_count, 0_usize, "CSR incoming counts")?;
+                let mut outgoing_counts = try_filled(vertex_count, 0_usize, "CSR outgoing counts")?;
                 for edge in graph.edges() {
                     row_counts[edge.u()] += 1;
                     row_counts[edge.v()] += 1;
                     outgoing_counts[edge.u()] += 1;
                     incoming_counts[edge.v()] += 1;
                 }
-                (row_counts, incoming_counts, outgoing_counts)
-            });
+                Ok::<_, CmgError>((row_counts, incoming_counts, outgoing_counts))
+            })?;
         let (row_offsets, incoming_offsets, outgoing_offsets, mut incoming_next) =
             measure_build_phase::<PROFILE, _>(&mut profile.row_offsets_nanoseconds, || {
                 let (row_offsets, _) = row_offsets_and_cursors(row_counts, directed_entries)?;
@@ -241,8 +337,8 @@ impl CsrLaplacian {
 
         let mut incoming_edges =
             measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                vec![0_usize; edge_count]
-            });
+                try_filled(edge_count, 0_usize, "CSR incoming edges")
+            })?;
         measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
             for (edge_index, edge) in graph.edges().iter().enumerate() {
                 let position = incoming_next[edge.v()];
@@ -254,13 +350,13 @@ impl CsrLaplacian {
 
         let mut weights =
             measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                vec![0.0; directed_entries]
-            });
+                try_filled(directed_entries, 0.0, "CSR weights")
+            })?;
         let columns = if vertex_count <= u32::MAX as usize {
             let mut columns =
                 measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                    vec![0_u32; directed_entries]
-                });
+                    try_filled(directed_entries, 0_u32, "CSR compact columns")
+                })?;
             measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
                 fill_compact_rows_parallel(
                     graph,
@@ -271,14 +367,14 @@ impl CsrLaplacian {
                     &mut columns,
                     &mut weights,
                     executor,
-                );
-            });
+                )
+            })?;
             ColumnIndices::Compact(columns)
         } else {
             let mut columns =
                 measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                    vec![0_usize; directed_entries]
-                });
+                    try_filled(directed_entries, 0_usize, "CSR native columns")
+                })?;
             measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
                 fill_native_rows_parallel(
                     graph,
@@ -289,8 +385,8 @@ impl CsrLaplacian {
                     &mut columns,
                     &mut weights,
                     executor,
-                );
-            });
+                )
+            })?;
             ColumnIndices::Native(columns)
         };
 
@@ -330,13 +426,13 @@ impl CsrLaplacian {
 
         let row_counts =
             measure_build_phase::<PROFILE, _>(&mut profile.row_counts_nanoseconds, || {
-                let mut counts = vec![0_usize; vertex_count];
+                let mut counts = try_filled(vertex_count, 0_usize, "CSR row counts")?;
                 for edge in graph.edges() {
                     counts[edge.u()] += 1;
                     counts[edge.v()] += 1;
                 }
-                counts
-            });
+                Ok::<_, CmgError>(counts)
+            })?;
         let (row_offsets, mut next) =
             measure_build_phase::<PROFILE, _>(&mut profile.row_offsets_nanoseconds, || {
                 row_offsets_and_cursors(row_counts, directed_entries)
@@ -353,13 +449,13 @@ impl CsrLaplacian {
 
         let mut weights =
             measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                vec![0.0; directed_entries]
-            });
+                try_filled(directed_entries, 0.0, "CSR weights")
+            })?;
         let columns = if vertex_count <= u32::MAX as usize {
             let mut columns =
                 measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                    vec![0_u32; directed_entries]
-                });
+                    try_filled(directed_entries, 0_u32, "CSR compact columns")
+                })?;
             measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
                 for edge in graph.edges() {
                     let left = next[edge.u()];
@@ -377,8 +473,8 @@ impl CsrLaplacian {
         } else {
             let mut columns =
                 measure_build_phase::<PROFILE, _>(&mut profile.allocation_nanoseconds, || {
-                    vec![0_usize; directed_entries]
-                });
+                    try_filled(directed_entries, 0_usize, "CSR native columns")
+                })?;
             measure_build_phase::<PROFILE, _>(&mut profile.scatter_nanoseconds, || {
                 for edge in graph.edges() {
                     let left = next[edge.u()];
@@ -635,7 +731,7 @@ fn row_offsets_and_cursors(
     // exact shape needed by the scatter cursors. Rewriting it in place avoids
     // allocating and initializing a second per-row `Vec<usize>`.
     if directed_entries <= u32::MAX as usize {
-        let mut offsets = Vec::with_capacity(counts.len() + 1);
+        let mut offsets = try_capacity(add(counts.len(), 1)?, "CSR compact row offsets")?;
         offsets.push(0_u32);
         let mut running = 0_usize;
         for count in &mut counts {
@@ -654,7 +750,7 @@ fn row_offsets_and_cursors(
         }
         Ok((RowOffsets::Compact(offsets), counts))
     } else {
-        let mut offsets = Vec::with_capacity(counts.len() + 1);
+        let mut offsets = try_capacity(add(counts.len(), 1)?, "CSR native row offsets")?;
         offsets.push(0_usize);
         let mut running = 0_usize;
         for count in &mut counts {
@@ -676,7 +772,7 @@ fn native_offsets_and_cursors(
     mut counts: Vec<usize>,
     expected_entries: usize,
 ) -> Result<(Vec<usize>, Vec<usize>), CmgError> {
-    let mut offsets = Vec::with_capacity(counts.len() + 1);
+    let mut offsets = try_capacity(add(counts.len(), 1)?, "CSR auxiliary row offsets")?;
     offsets.push(0);
     let mut running = 0_usize;
     for count in &mut counts {
@@ -711,8 +807,11 @@ fn row_fill_blocks<'a, Column>(
     weights: &'a mut [f64],
     row_offsets: &RowOffsets,
     rows_per_block: usize,
-) -> Vec<RowFillBlock<'a, Column>> {
-    let mut blocks = Vec::new();
+) -> Result<Vec<RowFillBlock<'a, Column>>, CmgError> {
+    let mut blocks = try_capacity(
+        row_offsets.row_count().div_ceil(rows_per_block),
+        "CSR fill blocks",
+    )?;
     let mut remaining_columns = columns;
     let mut remaining_weights = weights;
     let mut first_row = 0_usize;
@@ -742,7 +841,7 @@ fn row_fill_blocks<'a, Column>(
     }
     debug_assert!(remaining_columns.is_empty());
     debug_assert!(remaining_weights.is_empty());
-    blocks
+    Ok(blocks)
 }
 
 #[cfg(feature = "parallel")]
@@ -756,9 +855,9 @@ fn fill_compact_rows_parallel(
     columns: &mut [u32],
     weights: &mut [f64],
     executor: &ParallelExecutor,
-) {
+) -> Result<(), CmgError> {
     let rows_per_block = executor.work_chunk_len(graph.vertex_count());
-    let blocks = row_fill_blocks(columns, weights, row_offsets, rows_per_block);
+    let blocks = row_fill_blocks(columns, weights, row_offsets, rows_per_block)?;
     executor.install(|| {
         blocks.into_par_iter().for_each(|block| {
             fill_compact_row_block(
@@ -772,6 +871,7 @@ fn fill_compact_rows_parallel(
             );
         });
     });
+    Ok(())
 }
 
 #[cfg(feature = "parallel")]
@@ -785,9 +885,9 @@ fn fill_native_rows_parallel(
     columns: &mut [usize],
     weights: &mut [f64],
     executor: &ParallelExecutor,
-) {
+) -> Result<(), CmgError> {
     let rows_per_block = executor.work_chunk_len(graph.vertex_count());
-    let blocks = row_fill_blocks(columns, weights, row_offsets, rows_per_block);
+    let blocks = row_fill_blocks(columns, weights, row_offsets, rows_per_block)?;
     executor.install(|| {
         blocks.into_par_iter().for_each(|block| {
             fill_native_row_block(
@@ -801,6 +901,7 @@ fn fill_native_rows_parallel(
             );
         });
     });
+    Ok(())
 }
 
 #[cfg(feature = "parallel")]

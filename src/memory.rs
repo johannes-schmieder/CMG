@@ -63,8 +63,10 @@ impl CmgMemoryEstimate {
         }
     }
 
-    /// Estimate a complete hierarchy, optional parallel plan, and reusable
-    /// workspace pool with checked arithmetic.
+    /// Estimate principal arrays for the hierarchy, optional parallel plan and
+    /// reusable workspace pool with checked arithmetic. This excludes complete
+    /// descriptor/Arc/runtime storage and construction overlap; it is not
+    /// whole-action admission. See `complete_build_peak_bytes`.
     pub fn conservative(
         problem: CmgProblemSize,
         cmg_options: CmgOptions,
@@ -202,31 +204,38 @@ impl CmgMemoryEstimate {
         })
     }
 
-    /// Return conservative peak bytes during hierarchy and plan construction.
+    /// Return the legacy principal-array construction estimate, not a complete
+    /// hierarchy/plan/action peak. Unmodeled temporaries, containers and runtime
+    /// storage require separate coverage; see `complete_build_peak_bytes`.
     #[must_use]
     pub const fn build_peak_bytes(self) -> usize {
         self.build_peak_bytes
     }
 
-    /// Return conservative immutable solver bytes after construction.
+    /// Return conservative principal-array immutable solver bytes, excluding
+    /// full container/Arc/runtime ownership.
     #[must_use]
     pub const fn retained_solver_bytes(self) -> usize {
         self.retained_solver_bytes
     }
 
-    /// Return conservative bytes required by one PCG workspace.
+    /// Return conservative principal-array bytes for one PCG workspace, not all
+    /// nested container capacities. Use `PcgWorkspace::allocation_bytes` for the
+    /// scoped requested-layout query.
     #[must_use]
     pub const fn workspace_bytes_each(self) -> usize {
         self.workspace_bytes_each
     }
 
-    /// Return conservative retained bytes for the reusable workspace pool.
+    /// Return conservative principal-array bytes for the reusable workspace
+    /// pool, excluding outer/nested descriptors and coexistence during growth.
     #[must_use]
     pub const fn workspace_pool_bytes(self) -> usize {
         self.workspace_pool_bytes
     }
 
-    /// Return conservative complete retained bytes after construction.
+    /// Return the sum of retained principal-array estimates, not complete owned
+    /// storage. Use `CmgStorageReport` for the covered live capacity union.
     #[must_use]
     pub const fn total_retained_bytes(self) -> usize {
         self.total_retained_bytes
@@ -262,38 +271,45 @@ impl CmgMemoryReport {
         }
     }
 
-    /// Return exact immutable preconditioner bytes.
+    /// Return the immutable preconditioner's principal-array report, excluding
+    /// full container/Arc/runtime ownership.
     #[must_use]
     pub const fn preconditioner_bytes(self) -> usize {
         self.preconditioner_bytes
     }
 
-    /// Return exact bytes retained by an initialized parallel plan.
+    /// Return principal-array bytes retained by an initialized parallel plan,
+    /// excluding descriptors, shared Arc blocks and any spare capacity.
     #[must_use]
     pub const fn parallel_plan_bytes(self) -> usize {
         self.parallel_plan_bytes
     }
 
-    /// Return exact bytes required by one PCG workspace.
+    /// Return principal-array bytes required by one PCG workspace, excluding
+    /// nested descriptor banks and spare capacity.
     #[must_use]
     pub const fn workspace_bytes_each(self) -> usize {
         self.workspace_bytes_each
     }
 
-    /// Return exact retained bytes in the supplied reusable workspace pool.
+    /// Return principal-array bytes in the supplied reusable workspace pool,
+    /// excluding nested/outer descriptor banks and spare capacity.
     #[must_use]
     pub const fn workspace_pool_bytes(self) -> usize {
         self.workspace_pool_bytes
     }
 
-    /// Return exact complete retained bytes for solver, plan, and workspaces.
+    /// Return the sum of principal-array reports for solver, plan and workspaces,
+    /// not complete retained ownership. Use `CmgStorageReport` for the covered
+    /// live capacity union and retain its explicit runtime exclusion.
     #[must_use]
     pub const fn total_retained_bytes(self) -> usize {
         self.total_retained_bytes
     }
 }
 
-/// Conservative memory estimate for repeated prepared-topology PCG solves.
+/// Conservative principal-array estimate for repeated prepared-topology PCG.
+/// Not a complete construction, retained ownership or runtime admission bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepeatedPcgMemoryEstimate {
     prepared_topology_bytes: usize,
@@ -483,7 +499,8 @@ impl RepeatedPcgMemoryEstimate {
         self.workspace_pool_bytes
     }
 
-    /// Return conservative solver-retained bytes, excluding caller data arrays.
+    /// Return conservative solver-retained principal-array bytes, excluding
+    /// caller arrays and complete container/Arc/runtime storage.
     #[must_use]
     pub const fn total_solver_retained_bytes(self) -> usize {
         self.total_solver_retained_bytes
@@ -495,7 +512,9 @@ impl RepeatedPcgMemoryEstimate {
         self.caller_logical_bytes
     }
 
-    /// Return conservative peak bytes during preparation and solver construction.
+    /// Return the legacy principal-array preparation/construction estimate,
+    /// not a complete action peak. Full temporary overlap, descriptor/Arc banks
+    /// and runtime allocations require separate coverage.
     #[must_use]
     pub const fn build_peak_bytes(self) -> usize {
         self.build_peak_bytes

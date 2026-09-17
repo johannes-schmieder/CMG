@@ -79,6 +79,127 @@ fn report(roots: &[&dyn CmgStorage]) -> usize {
 }
 
 #[test]
+fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
+    let graph = Laplacian::from_edges(64, (1..64).map(|i| (i - 1, i, 1.0))).unwrap();
+    let bound = CsrLaplacian::construction_allocation_bound(64, 63).unwrap();
+    let calls = CALLS.with(Cell::get);
+    assert!(CsrLaplacian::from_laplacian_with_budget(&graph, bound - 1).is_err());
+    assert_eq!(CALLS.with(Cell::get), calls);
+    let before = live();
+    PEAK.with(|p| p.set(before));
+    let csr = CsrLaplacian::from_laplacian_with_budget(&graph, bound).unwrap();
+    let observed_peak = (PEAK.with(Cell::get) - before) as usize;
+    assert_eq!(observed_peak, bound);
+    assert_eq!(
+        report(&[&graph, &csr]) - report(&[&graph]),
+        (live() - before) as usize
+    );
+    drop(csr);
+    assert_eq!(live(), before);
+    for index in 0..4 {
+        FAIL.with(|f| f.set(Some(index)));
+        let result = CsrLaplacian::from_laplacian_with_budget(&graph, bound);
+        FAIL.with(|f| f.set(None));
+        assert!(matches!(result, Err(CmgError::AllocationFailed { .. })));
+        assert_eq!(live(), before);
+    }
+    assert!(CsrLaplacian::construction_allocation_bound(usize::MAX, 0).is_err());
+    assert!(CsrLaplacian::construction_allocation_bound(1, usize::MAX).is_err());
+    println!(
+        "CSR_ALLOCATION_SUCCESS bound={bound} observed_peak={observed_peak} fallible_failures=4"
+    );
+
+    #[cfg(feature = "parallel")]
+    {
+        // Eligible planned operators, but CSR density below the parallel-fill
+        // threshold. No runtime work is dispatched, so this independent caller
+        // allocator observation exactly isolates the claimed CMG-owned scope.
+        let graph = Laplacian::from_edges(
+            400,
+            (0..400).flat_map(|v| {
+                [
+                    (v % 20 != 19).then_some((v, v + 1, 1.0)),
+                    (v < 380).then_some((v, v + 20, 1.0)),
+                ]
+                .into_iter()
+                .flatten()
+            }),
+        )
+        .unwrap();
+        let pre = CmgPreconditioner::build(
+            &graph,
+            CmgOptions {
+                max_levels: 2,
+                direct_threshold: 8,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 2,
+            min_parallel_len: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let bound = ParallelCmgPlan::construction_allocation_bound(&pre, &executor).unwrap();
+        let before = live();
+        let calls = CALLS.with(Cell::get);
+        assert!(ParallelCmgPlan::build_with_budget(&pre, &executor, bound - 1).is_err());
+        assert_eq!(CALLS.with(Cell::get), calls);
+        PEAK.with(|p| p.set(before));
+        let plan = ParallelCmgPlan::build_with_budget(&pre, &executor, bound).unwrap();
+        assert_eq!(plan.operator_count(), 1);
+        let observed_peak = (PEAK.with(Cell::get) - before) as usize;
+        assert_eq!(observed_peak, bound);
+        assert_eq!(
+            report(&[&pre, &plan]) - report(&[&pre]),
+            (live() - before) as usize
+        );
+        // Holding an old plan charges both descriptor/operator banks, but shared
+        // lineage only once. No clone/replacement is hidden by admission.
+        let old_and_parent = report(&[&pre, &plan]);
+        let before_new = live();
+        let new = ParallelCmgPlan::build_with_budget(&pre, &executor, bound).unwrap();
+        assert_eq!(
+            report(&[&pre, &plan, &new]) - old_and_parent,
+            (live() - before_new) as usize
+        );
+        drop((plan, new));
+        assert_eq!(live(), before);
+        let mut failures = 0;
+        for index in 0..20 {
+            FAIL.with(|f| f.set(Some(index)));
+            let result = ParallelCmgPlan::build_with_budget(&pre, &executor, bound);
+            FAIL.with(|f| f.set(None));
+            let success = result.is_ok();
+            drop(result);
+            assert_eq!(live(), before, "partial plan leaked at allocation {index}");
+            if success {
+                break;
+            }
+            failures += 1;
+        }
+        assert_eq!(failures, 6); // two descriptor banks and four serial CSR banks
+        let solver =
+            ParallelPcgSolver::from_preconditioner(pre, executor, ParallelPcgPolicy::default())
+                .unwrap();
+        assert_eq!(solver.plan_construction_allocation_bound().unwrap(), bound);
+        assert!(solver.try_plan_with_budget(bound - 1).is_err());
+        assert_eq!(
+            solver.try_plan_with_budget(bound).unwrap().operator_count(),
+            1
+        );
+        assert_eq!(solver.plan_construction_allocation_bound().unwrap(), 0);
+        let calls = CALLS.with(Cell::get);
+        assert_eq!(solver.try_plan_with_budget(0).unwrap().operator_count(), 1);
+        assert_eq!(CALLS.with(Cell::get), calls);
+        println!(
+            "PLAN_ALLOCATION_SUCCESS bound={bound} observed_peak={observed_peak} fallible_failures={failures}"
+        );
+    }
+}
+
+#[test]
 fn independent_capacity_admission_overlap_and_failure_checks() {
     let endpoints: Vec<_> = (1..85)
         .filter(|i| i % 11 != 0)

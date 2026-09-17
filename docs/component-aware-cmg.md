@@ -68,9 +68,19 @@ parents together; the solver's executor makes the uncovered runtime scope
 visible. Fereg's owned-result route also needs its returned result bank counted
 outside the workspace report.
 
+When its existing policy needs a plan, query
+`solver.plan_construction_allocation_bound()` and initialize with
+`solver.try_plan_with_budget(remaining_cmg_layout_budget)` at the preparation
+boundary. These cover new CMG plan/CSR layouts, not Rayon queues or the retained
+parents. A standalone low-level caller can use the corresponding
+`ParallelCmgPlan::construction_allocation_bound` / `build_with_budget` pair.
+After initialization the solver query returns zero and budgeted access reuses
+the same plan. Other solver methods retain their existing unbudgeted lazy
+behavior, so skipping this step is not implicit admission.
+
 This is an API integration recipe, **not adoption approval**. The corresponding
 `conservative_component` estimate remains principal-array scoped. Complete
-hierarchy/plan construction and runtime admission are unresolved and strict
+hierarchy construction and runtime admission are unresolved and strict
 whole-build admission refuses them. See [memory ownership](memory-ownership.md).
 Do not discard fereg's unresolved coverage flags or claim its entire memory
 supplement redundant. Ordinary defaults, active-count stopping, and the tiny

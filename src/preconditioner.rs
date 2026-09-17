@@ -213,6 +213,55 @@ pub struct ParallelCmgPlan {
 
 #[cfg(feature = "parallel")]
 impl ParallelCmgPlan {
+    /// Peak new CMG-owned requested layouts for plan construction, including
+    /// descriptor banks, retained earlier operators and current CSR scratch.
+    /// Borrowed hierarchy/lineage, Rayon runtime and allocator/OS storage are
+    /// excluded. This is not a complete action/runtime admission bound.
+    pub fn construction_allocation_bound(
+        preconditioner: &CmgPreconditioner,
+        executor: &ParallelExecutor,
+    ) -> Result<usize, CmgError> {
+        use crate::storage::{add, bytes};
+        let levels = preconditioner.hierarchy.levels();
+        let mut retained = add(
+            bytes::<Option<CsrLaplacian>>(levels.len())?,
+            bytes::<Arc<()>>(levels.len())?,
+        )?;
+        let mut peak = retained;
+        for level in levels {
+            if Self::level_is_eligible(level, executor) {
+                let graph = level.graph();
+                peak = peak.max(add(
+                    retained,
+                    CsrLaplacian::construction_allocation_bound_with_executor(graph, executor)?,
+                )?);
+                retained = add(
+                    retained,
+                    CsrLaplacian::retained_allocation_bytes(
+                        graph.vertex_count(),
+                        graph.edge_count(),
+                    )?,
+                )?;
+            }
+        }
+        Ok(peak)
+    }
+
+    /// Admit new CMG-owned plan layouts before allocating, without changing
+    /// operator eligibility or parallel setup. Requires separate admission of
+    /// live parents/old plans and a policy for the uncovered Rayon runtime.
+    pub fn build_with_budget(
+        preconditioner: &CmgPreconditioner,
+        executor: &ParallelExecutor,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::construction_allocation_bound(preconditioner, executor)?,
+            budget_bytes,
+        )?;
+        Self::build(preconditioner, executor)
+    }
+
     pub(crate) fn eligible_operator_count(
         preconditioner: &CmgPreconditioner,
         executor: &ParallelExecutor,
@@ -240,25 +289,19 @@ impl ParallelCmgPlan {
         preconditioner: &CmgPreconditioner,
         executor: &ParallelExecutor,
     ) -> Result<Self, CmgError> {
-        let level_operators = preconditioner
-            .hierarchy
-            .levels()
-            .iter()
-            .map(|level| {
-                let graph = level.graph();
-                if Self::level_is_eligible(level, executor) {
-                    CsrLaplacian::from_laplacian_with_executor(graph, executor).map(Some)
-                } else {
-                    Ok(None)
-                }
-            })
-            .collect::<Result<Vec<_>, CmgError>>()?;
-        let level_lineages = preconditioner
-            .hierarchy
-            .levels()
-            .iter()
-            .map(|level| Arc::clone(level.graph().lineage()))
-            .collect();
+        let levels = preconditioner.hierarchy.levels();
+        let mut level_operators = crate::storage::try_capacity(levels.len(), "plan operators")?;
+        let mut level_lineages = crate::storage::try_capacity(levels.len(), "plan lineages")?;
+        for level in levels {
+            let graph = level.graph();
+            let operator = if Self::level_is_eligible(level, executor) {
+                Some(CsrLaplacian::from_laplacian_with_executor(graph, executor)?)
+            } else {
+                None
+            };
+            level_operators.push(operator);
+            level_lineages.push(Arc::clone(graph.lineage()));
+        }
         Ok(Self {
             level_operators,
             level_lineages,

@@ -298,6 +298,25 @@ impl ParallelPcgSolver {
         self.ensure_plan()
     }
 
+    /// New CMG-owned plan layouts still needed by this solver (zero if already
+    /// initialized). Does not include retained parents or Rayon runtime memory.
+    pub fn plan_construction_allocation_bound(&self) -> Result<usize, CmgError> {
+        if self.plan.get().is_some() {
+            Ok(0)
+        } else {
+            ParallelCmgPlan::construction_allocation_bound(&self.preconditioner, &self.executor)
+        }
+    }
+
+    /// Initialize this solver's existing lazy plan with a scoped CMG-owned
+    /// layout budget; no second plan or pool is created. Once initialized,
+    /// subsequent calls allocate nothing and accept a zero incremental budget.
+    /// Runtime/OS synchronization resources and already retained owners must be
+    /// covered separately. Other unbudgeted methods still permit lazy setup.
+    pub fn try_plan_with_budget(&self, budget_bytes: usize) -> Result<&ParallelCmgPlan, CmgError> {
+        self.ensure_plan_with_budget(Some(budget_bytes))
+    }
+
     /// Return the package-owned executor.
     #[must_use]
     pub const fn executor(&self) -> &ParallelExecutor {
@@ -492,6 +511,13 @@ impl ParallelPcgSolver {
     }
 
     fn ensure_plan(&self) -> Result<&ParallelCmgPlan, CmgError> {
+        self.ensure_plan_with_budget(None)
+    }
+
+    fn ensure_plan_with_budget(
+        &self,
+        budget_bytes: Option<usize>,
+    ) -> Result<&ParallelCmgPlan, CmgError> {
         if let Some(plan) = self.plan.get() {
             return Ok(plan);
         }
@@ -502,7 +528,11 @@ impl ParallelPcgSolver {
         if let Some(plan) = self.plan.get() {
             return Ok(plan);
         }
-        let plan = ParallelCmgPlan::build(&self.preconditioner, &self.executor)?;
+        let plan = if let Some(budget) = budget_bytes {
+            ParallelCmgPlan::build_with_budget(&self.preconditioner, &self.executor, budget)?
+        } else {
+            ParallelCmgPlan::build(&self.preconditioner, &self.executor)?
+        };
         if self.plan.set(plan).is_err() {
             return Err(CmgError::InvalidHierarchy {
                 context: "parallel CMG plan was initialized concurrently",
