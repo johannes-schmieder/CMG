@@ -64,9 +64,13 @@ impl ParallelOptions {
 ///
 /// This type is available only with the `parallel` Cargo feature. It never
 /// configures or relies on Rayon's process-wide global pool.
+/// Destruction waits for every worker, including thread-local destructors.
+/// Only internal scoped kernels can run on this pool; callers cannot transfer
+/// ownership of the executor into a worker task.
 #[cfg(feature = "parallel")]
 pub struct ParallelExecutor {
-    pool: rayon::ThreadPool,
+    pool: Option<rayon::ThreadPool>,
+    workers: JoinedWorkers,
     threads: usize,
     options: ParallelOptions,
 }
@@ -86,6 +90,22 @@ impl core::fmt::Debug for ParallelExecutor {
 impl ParallelExecutor {
     /// Construct an isolated thread pool with the requested execution policy.
     pub fn new(options: ParallelOptions) -> Result<Self, CmgError> {
+        Self::with_spawn(options, |thread| {
+            let mut builder = std::thread::Builder::new();
+            if let Some(name) = thread.name() {
+                builder = builder.name(name.to_owned());
+            }
+            if let Some(size) = thread.stack_size() {
+                builder = builder.stack_size(size);
+            }
+            builder.spawn(|| thread.run())
+        })
+    }
+
+    fn with_spawn(
+        options: ParallelOptions,
+        mut spawn: impl FnMut(rayon::ThreadBuilder) -> std::io::Result<std::thread::JoinHandle<()>>,
+    ) -> Result<Self, CmgError> {
         let options = options.validate()?;
         let threads = if options.threads == 0 {
             std::thread::available_parallelism()
@@ -94,15 +114,21 @@ impl ParallelExecutor {
         } else {
             options.threads
         };
+        let mut workers = JoinedWorkers::new(threads)?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .thread_name(|index| format!("cmg-worker-{index}"))
+            .spawn_handler(|thread| {
+                workers.handles.push(spawn(thread)?);
+                Ok(())
+            })
             .build()
             .map_err(|error| CmgError::ParallelRuntime {
                 message: error.to_string(),
             })?;
         Ok(Self {
-            pool,
+            pool: Some(pool),
+            workers,
             threads,
             options,
         })
@@ -151,7 +177,10 @@ impl ParallelExecutor {
         Operation: FnOnce() -> Output + Send,
         Output: Send,
     {
-        self.pool.install(operation)
+        self.pool
+            .as_ref()
+            .expect("live CMG executor")
+            .install(operation)
     }
 
     pub(crate) fn should_parallel(&self, length: usize) -> bool {
@@ -163,5 +192,150 @@ impl ParallelExecutor {
         let quotient = length / target_chunks;
         let remainder = usize::from(length % target_chunks != 0);
         quotient.saturating_add(remainder).max(1)
+    }
+}
+
+// ThreadPool::drop signals termination but does not join. Rayon's failed-build
+// guard also signals termination before our handle bank unwinds. Keep this bank
+// alive until after that signal, including on partial startup failure.
+#[cfg(feature = "parallel")]
+struct JoinedWorkers {
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "parallel")]
+impl JoinedWorkers {
+    fn new(threads: usize) -> Result<Self, CmgError> {
+        let mut handles = Vec::new();
+        handles
+            .try_reserve_exact(threads)
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "executor worker handles",
+            })?;
+        Ok(Self { handles })
+    }
+
+    fn join(&mut self) {
+        for handle in self.handles.drain(..) {
+            // Do not panic again while cleaning up a caller panic. The private
+            // scoped-only install API prevents self/peer joins: no public task
+            // can own the executor. Do not expose asynchronous spawn/install
+            // without redesigning this invariant.
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(feature = "parallel")]
+impl Drop for JoinedWorkers {
+    fn drop(&mut self) {
+        self.join();
+    }
+}
+
+#[cfg(feature = "parallel")]
+impl Drop for ParallelExecutor {
+    fn drop(&mut self) {
+        drop(self.pool.take());
+        self.workers.join();
+    }
+}
+
+#[cfg(all(test, feature = "parallel"))]
+mod lifetime_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct Exit(Arc<AtomicUsize>);
+    impl Drop for Exit {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    thread_local! { static EXIT: RefCell<Option<Exit>> = const { RefCell::new(None) }; }
+
+    fn observed(
+        threads: usize,
+        fail_at: Option<usize>,
+        completed: Arc<AtomicUsize>,
+    ) -> Result<ParallelExecutor, CmgError> {
+        let mut started = 0;
+        ParallelExecutor::with_spawn(
+            ParallelOptions {
+                threads,
+                ..Default::default()
+            },
+            move |thread| {
+                if Some(started) == fail_at {
+                    return Err(std::io::Error::other("injected startup failure"));
+                }
+                started += 1;
+                let completed = Arc::clone(&completed);
+                std::thread::Builder::new().spawn(move || {
+                    EXIT.with(|slot| *slot.borrow_mut() = Some(Exit(completed)));
+                    thread.run();
+                })
+            },
+        )
+    }
+
+    #[test]
+    fn retirement_waits_for_actual_workers_and_tls_across_pool_sizes() {
+        for threads in [1, 4, 1, 8, 2, 4, 1] {
+            let completed = Arc::new(AtomicUsize::new(0));
+            let executor = observed(threads, None, Arc::clone(&completed)).unwrap();
+            assert_eq!(executor.install(rayon::current_num_threads), threads);
+            assert_eq!(executor.workers.handles.len(), threads);
+            // Final ownership stays outside the pool. All entries are its real
+            // workers; the completion counter runs in their TLS destructors.
+            assert!(
+                !executor
+                    .workers
+                    .handles
+                    .iter()
+                    .any(|h| h.thread().id() == std::thread::current().id())
+            );
+            drop(executor);
+            assert_eq!(completed.load(Ordering::SeqCst), threads);
+        }
+    }
+
+    #[test]
+    fn partial_startup_joins_before_returning_error() {
+        for failed_index in [0, 1, 3] {
+            let completed = Arc::new(AtomicUsize::new(0));
+            assert!(observed(4, Some(failed_index), Arc::clone(&completed)).is_err());
+            assert_eq!(completed.load(Ordering::SeqCst), failed_index);
+        }
+    }
+
+    #[test]
+    fn scoped_panic_unwinds_and_joins_without_second_panic() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let result = std::panic::catch_unwind({
+            let completed = Arc::clone(&completed);
+            move || {
+                let executor = observed(4, None, completed).unwrap();
+                executor.install(|| panic!("scoped kernel panic"));
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(completed.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn join_error_does_not_double_panic() {
+        let result = std::panic::catch_unwind(|| {
+            let mut workers = JoinedWorkers::new(1).unwrap();
+            workers
+                .handles
+                .push(std::thread::spawn(|| panic!("worker panic")));
+            panic!("caller panic");
+        });
+        assert!(result.is_err());
     }
 }

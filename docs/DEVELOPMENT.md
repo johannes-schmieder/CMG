@@ -29,6 +29,28 @@ Keep durable files only when they serve production code, correctness/regression 
 
 The public API is re-exported from `src/lib.rs`; implementation details should remain private unless a stable user-facing need exists.
 
+### Executor lifetime
+
+`ParallelExecutor` owns its worker join handles. Retirement drops the Rayon pool
+first (signalling termination), then joins every successfully started worker,
+including during partial construction and caller unwinding. Joining includes
+thread-local destructors; an exit callback or a sampled thread count would not
+establish that boundary. Join errors are consumed to avoid a second panic.
+
+The pool and its `install` method must remain private. All dispatched work is
+internal and scoped, borrows the executor, and completes before its caller can
+drop it. Public methods accept numerical data, not worker callbacks. Exposing
+asynchronous tasks or callbacks that can own the final executor would invalidate
+this invariant and could deadlock a worker joining itself or a dependent peer.
+The lifetime tests exercise actual pool workers and thread-local completion on
+normal retirement, partial startup, changing pool sizes and unwinding.
+
+Rayon-core 1.13.0's registry construction uses a termination guard on failure;
+`ThreadPool::drop` only signals termination. Neither that implementation nor
+joining establishes a byte bound on Rayon/crossbeam queues, allocator caches,
+thread stacks or arbitrary third-party TLS. Retirement is a lifetime boundary,
+not a whole-process memory guarantee.
+
 ## Correctness invariants
 
 Performance work must preserve deterministic canonical graph construction, exact Laplacian symmetry, component-wise compatibility checks, pinned stationary CMG hierarchy/repeat semantics, deterministic grounding/normalization, final residual/backward-error verification against the original system, and hierarchy metadata unless the algorithm is deliberately changed and separately reviewed.
