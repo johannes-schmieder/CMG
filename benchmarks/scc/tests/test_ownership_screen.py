@@ -61,7 +61,9 @@ class OwnershipScreenTests(unittest.TestCase):
                     )
             result = subprocess.run(
                 [sys.executable, str(VALIDATOR), str(run), lane],
-                cwd=REPO, capture_output=True, text=True, check=False,
+                # SCC's system Python is 3.6; capture_output/text arrived in 3.7.
+                cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True, check=False,
             )
             summary = output / "summary.json"
             if result.returncode == 0:
