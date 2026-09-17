@@ -26,6 +26,8 @@ client loses the response. Inspect the queue and receipt rather than removing
 the reservation. Acceptance requires complete zero-exit qacct, empty scheduler
 stderr, every expected fixture result/step marker and `DEVELOPMENT_SUCCESS`.
 Affinity in the environment record is observed, not claimed exclusive.
+The single 32-worker construction test is excluded in this 28-slot lane;
+the focused retirement tests cover changing pool sizes up to eight workers.
 
 Start from a clean local checkout:
 

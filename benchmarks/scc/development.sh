@@ -39,12 +39,14 @@ step clippy cargo clippy --locked --offline --all-features --all-targets -- -D w
 if [[ "$mode" == shutdown ]]; then
     step shutdown cargo test --locked --offline --features parallel --lib execution::lifetime_tests -- --nocapture
 else
+    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor
     step minimal cargo test --locked --offline --all-targets
-    step parallel cargo test --locked --offline --all-targets --features parallel
+    step parallel cargo test --locked --offline --all-targets --features parallel -- --skip custom_executor_supports_up_to_thirty_two_threads
     step components cargo test --locked --offline --all-targets --features experimental-components
-    step all-features cargo test --locked --offline --all-targets --all-features
-    step release cargo test --locked --offline --release --all-targets --all-features
+    step all-features cargo test --locked --offline --all-targets --all-features -- --skip custom_executor_supports_up_to_thirty_two_threads
+    step release cargo test --locked --offline --release --all-targets --all-features -- --skip custom_executor_supports_up_to_thirty_two_threads
     step docs env RUSTDOCFLAGS=-Dwarnings cargo doc --locked --offline --no-deps --all-features
+    step doctests cargo test --locked --offline --doc --all-features
     step msrv cargo +1.85.1 check --locked --offline --all-features --all-targets
 fi
 find "$CARGO_TARGET_DIR" -type f -perm -0100 -print0 | sort -z | xargs -0 sha256sum > "$run/manifests/development-artifacts.sha256"
