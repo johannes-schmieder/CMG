@@ -182,7 +182,7 @@ fn independent_capacity_admission_overlap_and_failure_checks() {
     let aggregation = Aggregation::new(labels, 2).unwrap();
     assert_eq!(
         report(&[&aggregation]),
-        (live() - before) as usize + labels_bytes
+        (live() - before + labels_bytes as isize) as usize
     );
     let old = report(&[&aggregation]);
     let _ = aggregation.labels();
