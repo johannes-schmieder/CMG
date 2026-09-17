@@ -14,6 +14,19 @@ verifiable.
 
 ## Deploy and smoke-test
 
+For bounded library development, deploy a clean source with `deploy.sh` under
+a fresh `-b2v1-development` run ID, then use `submit_development.sh RUN_ID
+shutdown|integration` from that deployment. This reserves 28 slots for at most
+30 minutes, uses four build jobs and serial test execution, and never starts a
+MATLAB build or a historical campaign. `shutdown` runs the worker lifetime
+fixtures; `integration` runs the library feature matrix, lint, docs and MSRV
+checks. The immutable source is checked before submission and before/after
+execution. A reservation prevents duplicate submission, including when the
+client loses the response. Inspect the queue and receipt rather than removing
+the reservation. Acceptance requires complete zero-exit qacct, empty scheduler
+stderr, every expected fixture result/step marker and `DEVELOPMENT_SUCCESS`.
+Affinity in the environment record is observed, not claimed exclusive.
+
 Start from a clean local checkout:
 
 ```bash
