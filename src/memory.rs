@@ -32,6 +32,24 @@ pub struct CmgMemoryEstimate {
 }
 
 impl CmgMemoryEstimate {
+    /// A complete CMG-owned construction peak is not yet proven. Principal
+    /// arrays omit setup/container overlaps, and parallel runtime queues have
+    /// no admitted bound. Never treat `build_peak_bytes` as a whole-action cap.
+    pub const fn complete_build_peak_bytes(self) -> Option<usize> {
+        None
+    }
+
+    /// Reject a whole-build budget until complete coverage is available. This
+    /// fails before allocation and never substitutes a sampled multiplier.
+    pub fn admit_complete_build(self, budget_bytes: usize) -> Result<(), CmgError> {
+        match self.complete_build_peak_bytes() {
+            Some(bytes) => crate::storage::admit(bytes, budget_bytes),
+            None => Err(CmgError::InvalidHierarchy {
+                context: "complete CMG construction memory coverage is unavailable",
+            }),
+        }
+    }
+
     /// Estimate a complete hierarchy, optional parallel plan, and reusable
     /// workspace pool with checked arithmetic.
     pub fn conservative(
@@ -56,27 +74,39 @@ impl CmgMemoryEstimate {
             checked_mul(problem.canonical_edges, 2, "initial matrix nonzeros")?,
             "initial matrix nonzeros",
         )?;
-        let hierarchy_nnz = checked_ceil_product(
+        // The guard checks *after* including a level. A terminal can also be
+        // reached before that check. In either case one additional level, at
+        // most as large as the finest, must be covered (see ownership proof).
+        let level_nnz_bound = checked_mul(
+            initial_nnz,
+            cmg_options.max_levels,
+            "hierarchy level nonzeros",
+        )?;
+        let fill_nnz_bound = checked_ceil_product(
             initial_nnz,
             cmg_options.max_hierarchy_nnz_factor,
             "hierarchy nonzeros",
-        )?;
+        )
+        .and_then(|limit| checked_add(limit, initial_nnz, "hierarchy crossing level"));
+        // A very large valid fill factor may overflow the floating threshold;
+        // the independent checked level bound still applies.
+        let hierarchy_nnz =
+            fill_nnz_bound.map_or(level_nnz_bound, |fill| fill.min(level_nnz_bound));
         let level_vertices = checked_mul(
             problem.vertices,
             cmg_options.max_levels,
             "hierarchy vertices",
-        )?
-        .min(checked_add(
-            problem.vertices,
-            hierarchy_nnz,
-            "hierarchy vertex/nonzero bound",
-        )?);
+        )?;
 
         // Edge storage, graph diagonals, smoother diagonals, compact
         // aggregation labels, reports, and conservative component metadata.
         let hierarchy_bytes = checked_sum(&[
             checked_mul(hierarchy_nnz, 8, "hierarchy sparse storage")?,
-            checked_mul(level_vertices, 24, "hierarchy vertex storage")?,
+            checked_mul(
+                level_vertices,
+                8 + 5 * usize_bytes,
+                "hierarchy vertex storage",
+            )?,
             checked_mul(cmg_options.max_levels, usize_bytes * 4, "hierarchy reports")?,
         ])?;
         let direct = cmg_options.direct_threshold.min(problem.vertices);
@@ -110,13 +140,16 @@ impl CmgMemoryEstimate {
             checked_mul(level_vertices, usize_bytes * 4, "parallel plan row scratch")?,
         ])?;
         let workspace_bytes_each = checked_sum(&[
-            checked_mul(problem.vertices, 64, "PCG finest vectors")?,
-            checked_mul(level_vertices, 80, "recursive CMG workspace")?,
+            checked_mul(
+                problem.vertices,
+                152 + 2 * usize_bytes,
+                "PCG finest vectors and component scratch",
+            )?,
+            checked_mul(level_vertices, 48, "recursive CMG workspace")?,
             checked_mul(direct, 24, "terminal workspace")?,
         ])?;
         let requested_concurrency = parallel_options
-            .threads
-            .max(1)
+            .resolved_threads()
             .min(problem.right_hand_sides);
         if let Some(budget_bytes) = parallel_options.workspace_memory_budget_bytes {
             if budget_bytes < workspace_bytes_each {
@@ -321,8 +354,7 @@ impl RepeatedPcgMemoryEstimate {
             "repeated PCG workspace",
         )?;
         let requested_concurrency = parallel_options
-            .threads
-            .max(1)
+            .resolved_threads()
             .min(problem.right_hand_sides);
         if let Some(budget_bytes) = parallel_options.workspace_memory_budget_bytes {
             if budget_bytes < workspace_bytes_each {
@@ -652,8 +684,12 @@ fn checked_ceil_product(
     factor: f64,
     context: &'static str,
 ) -> Result<usize, CmgError> {
-    let product = (value as f64) * factor;
-    if !product.is_finite() || product > usize::MAX as f64 {
+    // Round outward to cover conversion and multiplication rounding in the
+    // builder's floating fill comparison, including integer-to-f64 rounding
+    // of its cumulative count. next_up is written via bits for Rust 1.85.
+    let upward = |x: f64| f64::from_bits(x.to_bits() + 1);
+    let product = upward(upward(value as f64) * factor);
+    if !product.is_finite() || product >= usize::MAX as f64 {
         return Err(CmgError::InvalidHierarchy { context });
     }
     Ok(product.ceil() as usize)

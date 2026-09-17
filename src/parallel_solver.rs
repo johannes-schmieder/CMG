@@ -147,6 +147,9 @@ pub struct ParallelPcgWorkspace {
     workspaces: Vec<PcgWorkspace>,
 }
 
+crate::storage::storage_fields!(ParallelPcgWorkspace, workspaces);
+crate::storage::storage_fields!(ParallelPcgSolver, preconditioner, plan, executor);
+
 impl ParallelPcgWorkspace {
     /// Allocate one workspace; the pool expands on demand for batch execution.
     #[must_use]

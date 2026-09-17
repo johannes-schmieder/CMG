@@ -7,6 +7,15 @@ use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 use rayon::prelude::*;
 use std::sync::Arc;
 
+crate::storage::storage_fields!(
+    Laplacian,
+    edges,
+    diagonal,
+    lineage,
+    prepared_topology_lineage,
+    prepared_components
+);
+
 /// A canonical undirected weighted edge with `u < v` and positive weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edge {

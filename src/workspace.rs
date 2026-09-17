@@ -3,6 +3,23 @@
 use crate::components::{CenteringPlan, CenteringWorkspace, ComponentWorkspace};
 use crate::{CmgError, CmgHierarchy, Components, GroundedLdl};
 
+crate::storage::storage_fields!(
+    LevelWorkspace,
+    residual,
+    coarse_rhs,
+    coarse_correction,
+    factor_forward,
+    factor_solution
+);
+crate::storage::storage_fields!(
+    CmgWorkspace,
+    levels,
+    component_workspace,
+    centering_workspaces,
+    dimensions,
+    projected_rhs
+);
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LevelWorkspace {
     pub(crate) residual: Vec<f64>,
@@ -23,6 +40,40 @@ pub struct CmgWorkspace {
 }
 
 impl CmgWorkspace {
+    pub(crate) fn allocation_bytes(
+        hierarchy: &CmgHierarchy,
+        direct_terminal: Option<&GroundedLdl>,
+        finest_components: &Components,
+        coarse_centering: &[CenteringPlan],
+    ) -> Result<usize, CmgError> {
+        use crate::storage::{add, bytes};
+        let levels = hierarchy.levels();
+        let mut total = add(
+            bytes::<LevelWorkspace>(levels.len())?,
+            bytes::<usize>(levels.len())?,
+        )?;
+        total = add(total, bytes::<CenteringWorkspace>(coarse_centering.len())?)?;
+        total = add(total, bytes::<f64>(levels[0].graph().vertex_count())?)?;
+        total = add(
+            total,
+            ComponentWorkspace::allocation_bytes(finest_components.count())?,
+        )?;
+        for plan in coarse_centering {
+            total = add(total, plan.workspace_allocation_bytes()?)?;
+        }
+        for (index, level) in levels.iter().enumerate() {
+            total = add(total, bytes::<f64>(level.graph().vertex_count())?)?;
+            let coarse = levels
+                .get(index + 1)
+                .map_or(0, |l| l.graph().vertex_count());
+            total = add(total, bytes::<[f64; 2]>(coarse)?)?;
+        }
+        add(
+            total,
+            bytes::<[f64; 2]>(direct_terminal.map_or(0, GroundedLdl::active_dimension))?,
+        )
+    }
+
     #[cfg(feature = "parallel")]
     pub(crate) fn required_bytes(
         hierarchy: &CmgHierarchy,

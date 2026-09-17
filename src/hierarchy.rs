@@ -6,6 +6,22 @@ use crate::forest::build_forest_aggregation_labels;
 use crate::{Aggregation, CmgError, CmgOptions, Laplacian};
 use std::time::Instant;
 
+crate::storage::storage_fields!(CmgHierarchy, levels, report);
+crate::storage::storage_fields!(HierarchyBuildReport, vertex_counts, matrix_nonzeros);
+crate::storage::storage_fields!(HierarchyLevel, graph, inverse_diagonal, transfer);
+impl crate::storage::Storage for LevelTransfer {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        match self {
+            Self::Full(v) => crate::storage::Storage::visit(v, visitor),
+            #[cfg(feature = "experimental-components")]
+            Self::Pruned(v) => crate::storage::Storage::visit(v, visitor),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HierarchyPhaseRecord {
     pub(crate) level: usize,

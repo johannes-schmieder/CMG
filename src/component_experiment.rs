@@ -2,6 +2,8 @@
 
 use crate::{Aggregation, CmgError, Laplacian};
 
+crate::storage::storage_fields!(PrunedTransfer, entries);
+
 /// Independent experimental changes, for attribution against the ordinary builder.
 ///
 /// These options change setup only. Every resulting preconditioner is fixed

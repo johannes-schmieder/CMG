@@ -5,6 +5,22 @@ use crate::components::ComponentWorkspace;
 use crate::graph::compensated_add;
 use crate::graph::compensated_sum;
 use crate::{CmgError, CmgPreconditioner, CmgWorkspace, Laplacian, PcgOptions};
+
+crate::storage::storage_fields!(
+    PcgWorkspace,
+    projected_rhs,
+    solution,
+    residual,
+    preconditioned,
+    direction,
+    matrix_direction,
+    component,
+    cmg
+);
+#[cfg(not(feature = "parallel"))]
+crate::storage::storage_fields!(PcgBatchWorkspace, pcg, rhs, guess);
+#[cfg(feature = "parallel")]
+crate::storage::storage_fields!(PcgBatchWorkspace, pcg, rhs, guess, outcome);
 #[cfg(feature = "parallel")]
 use crate::{ParallelCmgPlan, ParallelExecutor, ParallelOptions};
 #[cfg(feature = "parallel")]
@@ -100,6 +116,65 @@ pub struct PcgBatchWorkspace {
 }
 
 impl PcgBatchWorkspace {
+    /// Requested heap layouts for one new batch workspace, including all nested
+    /// descriptor banks. Excludes the inline root and the borrowed preconditioner.
+    pub fn allocation_bytes(preconditioner: &CmgPreconditioner) -> Result<usize, CmgError> {
+        use crate::storage::{add, bytes};
+        let n = preconditioner.hierarchy().levels()[0]
+            .graph()
+            .vertex_count();
+        add(
+            PcgWorkspace::allocation_bytes(preconditioner)?,
+            bytes::<[f64; 2]>(n)?,
+        )
+    }
+
+    /// Admit all requested layouts before allocating a workspace. The budget is
+    /// incremental: callers reserve simultaneous parents/old banks separately.
+    /// Allocator overhead is excluded; allocation failure is returned normally.
+    pub fn new_with_budget(
+        preconditioner: &CmgPreconditioner,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(Self::allocation_bytes(preconditioner)?, budget_bytes)?;
+        Self::new(preconditioner)
+    }
+
+    /// Requested layouts for a bank, including its outer descriptor allocation.
+    pub fn bank_allocation_bytes(
+        preconditioner: &CmgPreconditioner,
+        count: usize,
+    ) -> Result<usize, CmgError> {
+        let payload = Self::allocation_bytes(preconditioner)?
+            .checked_mul(count)
+            .ok_or(CmgError::AllocationFailed {
+                context: "PCG bank size overflows",
+            })?;
+        crate::storage::add(payload, crate::storage::bytes::<Self>(count)?)
+    }
+
+    /// Prepare a complete fixed bank fallibly after admission, without lazy
+    /// growth or replacing an existing bank. On failure partial banks are dropped.
+    pub fn new_bank_with_budget(
+        preconditioner: &CmgPreconditioner,
+        count: usize,
+        budget_bytes: usize,
+    ) -> Result<Vec<Self>, CmgError> {
+        crate::storage::admit(
+            Self::bank_allocation_bytes(preconditioner, count)?,
+            budget_bytes,
+        )?;
+        let mut bank = Vec::new();
+        bank.try_reserve_exact(count)
+            .map_err(|_| CmgError::AllocationFailed {
+                context: "PCG batch workspace bank",
+            })?;
+        for _ in 0..count {
+            bank.push(Self::new(preconditioner)?);
+        }
+        Ok(bank)
+    }
+
     /// Allocate a workspace for contiguous or strided batch solves.
     pub fn new(preconditioner: &CmgPreconditioner) -> Result<Self, CmgError> {
         let dimension = preconditioner.hierarchy().levels()[0]
@@ -464,6 +539,20 @@ fn try_zeroed(len: usize, context: &'static str) -> Result<Vec<f64>, CmgError> {
 }
 
 impl PcgWorkspace {
+    /// Requested heap layouts including CMG/component scratch and descriptor banks.
+    pub fn allocation_bytes(preconditioner: &CmgPreconditioner) -> Result<usize, CmgError> {
+        use crate::storage::{add, bytes};
+        let n = preconditioner.hierarchy().levels()[0]
+            .graph()
+            .vertex_count();
+        add(
+            add(
+                bytes::<[f64; 6]>(n)?,
+                ComponentWorkspace::allocation_bytes(preconditioner.finest_components().count())?,
+            )?,
+            preconditioner.workspace_allocation_bytes()?,
+        )
+    }
     #[cfg(feature = "parallel")]
     pub(crate) fn required_bytes(preconditioner: &CmgPreconditioner) -> usize {
         let dimension = preconditioner.hierarchy().levels()[0]

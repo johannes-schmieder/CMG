@@ -4,6 +4,17 @@ use crate::graph::compensated_sum;
 use crate::{CmgError, Components, Edge, Laplacian};
 use std::sync::Arc;
 
+crate::storage::storage_fields!(
+    PreparedLaplacianTopology,
+    canonical_keys,
+    group_offsets,
+    group_input_indices,
+    input_to_canonical,
+    components,
+    lineage
+);
+crate::storage::storage_fields!(PreparedLaplacianWorkspace, duplicate_weights);
+
 /// Canonical, validated graph structure reusable across numeric weight frames.
 #[derive(Debug, Clone)]
 pub struct PreparedLaplacianTopology {
@@ -19,6 +30,69 @@ pub struct PreparedLaplacianTopology {
 }
 
 impl PreparedLaplacianTopology {
+    /// Requested-layout upper bound for `prepare_with_budget`, including the
+    /// indexed input, all maps, union/find scratch, and Arc blocks. Caller
+    /// endpoint storage and allocator overhead are excluded. No executor is used.
+    pub fn preparation_allocation_bound(
+        vertices: usize,
+        input_edges: usize,
+    ) -> Result<usize, CmgError> {
+        use crate::storage::{add, arc_bytes, bytes};
+        let offsets = input_edges
+            .checked_add(1)
+            .ok_or(CmgError::AllocationFailed {
+                context: "prepared offset size overflows",
+            })?;
+        let mut total = bytes::<(u64, usize)>(input_edges)?;
+        total = add(total, bytes::<u64>(input_edges)?)?;
+        total = add(total, bytes::<usize>(offsets)?)?;
+        total = add(total, bytes::<[usize; 2]>(input_edges)?)?;
+        total = add(total, bytes::<[usize; 4]>(vertices)?)?;
+        add(add(total, arc_bytes::<Components>()?)?, arc_bytes::<()>()?)
+    }
+
+    /// Admit before reading/allocating topology data. The slice fixes the input
+    /// length; arbitrary iterator size hints cannot bypass this bound.
+    pub fn prepare_with_budget(
+        vertices: usize,
+        endpoints: &[(usize, usize)],
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::preparation_allocation_bound(vertices, endpoints.len())?,
+            budget_bytes,
+        )?;
+        Self::prepare(vertices, endpoints.iter().copied())
+    }
+
+    /// New numeric graph layouts; existing topology and assembly scratch are
+    /// borrowed and must be charged separately, as must an older live frame.
+    pub fn numeric_allocation_bytes(&self) -> Result<usize, CmgError> {
+        use crate::storage::{add, arc_bytes, bytes};
+        let payload = add(
+            bytes::<Edge>(self.canonical_keys.len())?,
+            bytes::<f64>(self.vertex_count)?,
+        )?;
+        add(
+            add(
+                add(payload, arc_bytes::<Vec<Edge>>()?)?,
+                arc_bytes::<Vec<f64>>()?,
+            )?,
+            arc_bytes::<()>()?,
+        )
+    }
+
+    /// Assemble with a pre-allocation incremental requested-layout budget.
+    /// Includes the new graph's owned Arc blocks, but not shared topology blocks.
+    pub fn assemble_with_workspace_budgeted(
+        &self,
+        weights: &[f64],
+        workspace: &mut PreparedLaplacianWorkspace,
+        budget_bytes: usize,
+    ) -> Result<Laplacian, CmgError> {
+        crate::storage::admit(self.numeric_allocation_bytes()?, budget_bytes)?;
+        self.assemble_with_workspace(weights, workspace)
+    }
     /// Validate and canonicalize undirected endpoints once.
     pub fn prepare<I>(vertex_count: usize, endpoints: I) -> Result<Self, CmgError>
     where
@@ -262,6 +336,19 @@ pub struct PreparedLaplacianWorkspace {
 }
 
 impl PreparedLaplacianWorkspace {
+    /// Requested duplicate-weight scratch layout for the supplied topology.
+    pub fn allocation_bytes(topology: &PreparedLaplacianTopology) -> Result<usize, CmgError> {
+        crate::storage::bytes::<f64>(topology.maximum_duplicate_count)
+    }
+
+    /// Admit duplicate-weight scratch before its fallible allocation.
+    pub fn new_with_budget(
+        topology: &PreparedLaplacianTopology,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(Self::allocation_bytes(topology)?, budget_bytes)?;
+        Self::new(topology)
+    }
     /// Allocate scratch compatible with a prepared topology.
     pub fn new(topology: &PreparedLaplacianTopology) -> Result<Self, CmgError> {
         let mut duplicate_weights = Vec::new();

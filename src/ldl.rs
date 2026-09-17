@@ -2,6 +2,40 @@
 
 use crate::{CmgError, Components, Laplacian, ValidationOptions};
 
+crate::storage::storage_fields!(
+    GroundedLdl,
+    components,
+    anchors,
+    permutation,
+    lower,
+    diagonal
+);
+impl crate::storage::Storage for LowerFactor {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        match self {
+            Self::Packed { values } => values.visit(visitor),
+            Self::Sparse {
+                row_offsets,
+                columns,
+                row_values,
+                column_offsets,
+                rows,
+                column_values,
+            } => {
+                row_offsets.visit(visitor)?;
+                columns.visit(visitor)?;
+                row_values.visit(visitor)?;
+                column_offsets.visit(visitor)?;
+                rows.visit(visitor)?;
+                column_values.visit(visitor)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum LowerFactor {
     Packed {

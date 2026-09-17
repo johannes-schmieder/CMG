@@ -34,6 +34,7 @@ mod preconditioner;
 mod prepared;
 mod sddm;
 mod sddm_solver;
+mod storage;
 mod workspace;
 
 #[cfg(feature = "cycle-profiling")]
@@ -102,6 +103,7 @@ pub use preconditioner::{
 pub use prepared::{PreparedLaplacianTopology, PreparedLaplacianWorkspace};
 pub use sddm::{SddmAugmentation, SddmMatrix};
 pub use sddm_solver::{SddmResult, SddmSolver, SddmWorkspace, solve_sddm};
+pub use storage::{CmgStorage, CmgStorageReport};
 pub use workspace::CmgWorkspace;
 
 /// Return the pinned upstream CMG commit used as the behavioral reference.

@@ -110,6 +110,34 @@ pub struct CsrLaplacian {
     source_lineage: Arc<()>,
 }
 
+#[cfg(feature = "parallel")]
+crate::storage::storage_fields!(CsrLaplacian, row_offsets, columns, weights, source_lineage);
+#[cfg(not(feature = "parallel"))]
+crate::storage::storage_fields!(CsrLaplacian, row_offsets, columns, weights);
+
+impl crate::storage::Storage for RowOffsets {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        match self {
+            Self::Compact(v) => crate::storage::Storage::visit(v, visitor),
+            Self::Native(v) => crate::storage::Storage::visit(v, visitor),
+        }
+    }
+}
+impl crate::storage::Storage for ColumnIndices {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        match self {
+            Self::Compact(v) => crate::storage::Storage::visit(v, visitor),
+            Self::Native(v) => crate::storage::Storage::visit(v, visitor),
+        }
+    }
+}
+
 impl PartialEq for CsrLaplacian {
     fn eq(&self, other: &Self) -> bool {
         self.vertex_count == other.vertex_count

@@ -465,7 +465,26 @@ pub struct CmgPreconditioner {
     repeat_counts: Vec<usize>,
 }
 
+crate::storage::storage_fields!(
+    CmgPreconditioner,
+    hierarchy,
+    finest_components,
+    coarse_centering,
+    direct_terminal,
+    repeat_counts
+);
+#[cfg(feature = "parallel")]
+crate::storage::storage_fields!(ParallelCmgPlan, level_operators, level_lineages);
+
 impl CmgPreconditioner {
+    pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
+        CmgWorkspace::allocation_bytes(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+        )
+    }
     #[cfg(feature = "parallel")]
     pub(crate) fn workspace_bytes(&self) -> usize {
         CmgWorkspace::required_bytes(

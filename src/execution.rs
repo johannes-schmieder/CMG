@@ -36,6 +36,16 @@ impl Default for ParallelOptions {
 }
 
 impl ParallelOptions {
+    pub(crate) fn resolved_threads(self) -> usize {
+        if self.threads == 0 {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+        } else {
+            self.threads
+        }
+    }
+
     /// Validate the execution options without creating a thread pool.
     pub fn validate(self) -> Result<Self, CmgError> {
         if self.min_parallel_len == 0 {
@@ -88,6 +98,27 @@ impl core::fmt::Debug for ParallelExecutor {
 
 #[cfg(feature = "parallel")]
 impl ParallelExecutor {
+    /// Rayon/crossbeam runtime heap currently has no source-proven finite
+    /// admission bound. Worker handles are counted by `CmgStorageReport`, but
+    /// queues, deferred reclamation, native thread resources and TLS are not.
+    pub const fn runtime_allocation_bound() -> Option<usize> {
+        None
+    }
+
+    /// Attempt strict runtime-heap admission before pool construction. Currently
+    /// returns an uncovered-scope error for every finite budget. Use `new` only
+    /// when the caller's policy explicitly permits unbounded runtime storage.
+    pub fn new_with_memory_budget(
+        options: ParallelOptions,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        options.validate()?;
+        let required = Self::runtime_allocation_bound().ok_or(CmgError::InvalidHierarchy {
+            context: "Rayon runtime memory coverage is unavailable",
+        })?;
+        crate::storage::admit(required, budget_bytes)?;
+        Self::new(options)
+    }
     /// Construct an isolated thread pool with the requested execution policy.
     pub fn new(options: ParallelOptions) -> Result<Self, CmgError> {
         Self::with_spawn(options, |thread| {
@@ -107,13 +138,7 @@ impl ParallelExecutor {
         mut spawn: impl FnMut(rayon::ThreadBuilder) -> std::io::Result<std::thread::JoinHandle<()>>,
     ) -> Result<Self, CmgError> {
         let options = options.validate()?;
-        let threads = if options.threads == 0 {
-            std::thread::available_parallelism()
-                .map(usize::from)
-                .unwrap_or(1)
-        } else {
-            options.threads
-        };
+        let threads = options.resolved_threads();
         let mut workers = JoinedWorkers::new(threads)?;
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -201,6 +226,29 @@ impl ParallelExecutor {
 #[cfg(feature = "parallel")]
 struct JoinedWorkers {
     handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "parallel")]
+impl crate::storage::Storage for std::thread::JoinHandle<()> {
+    fn visit(
+        &self,
+        _: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        Ok(())
+    }
+    fn leaf() -> bool {
+        true
+    }
+}
+#[cfg(feature = "parallel")]
+impl crate::storage::Storage for ParallelExecutor {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        crate::storage::Storage::visit(&self.workers.handles, visitor)?;
+        crate::storage::runtime(visitor)
+    }
 }
 
 #[cfg(feature = "parallel")]

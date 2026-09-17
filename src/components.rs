@@ -3,6 +3,33 @@
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
 use crate::{CmgError, Laplacian, ValidationOptions};
+
+crate::storage::storage_fields!(
+    ComponentWorkspace,
+    sums,
+    corrections,
+    scales,
+    scale_corrections,
+    means,
+    projection_corrections,
+    representatives
+);
+crate::storage::storage_fields!(CenteringWorkspace, sums, corrections, means);
+crate::storage::storage_fields!(CenteringPlan, labels, sizes);
+crate::storage::storage_fields!(Components, labels, sizes);
+
+impl crate::storage::Storage for CenteringLabels {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        match self {
+            Self::Single => Ok(()),
+            Self::Compact(v) => crate::storage::Storage::visit(v, visitor),
+            Self::Native(v) => crate::storage::Storage::visit(v, visitor),
+        }
+    }
+}
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -18,6 +45,12 @@ pub(crate) struct ComponentWorkspace {
 }
 
 impl ComponentWorkspace {
+    pub(crate) fn allocation_bytes(count: usize) -> Result<usize, CmgError> {
+        crate::storage::add(
+            crate::storage::bytes::<[f64; 6]>(count)?,
+            crate::storage::bytes::<usize>(count)?,
+        )
+    }
     fn new(component_count: usize) -> Self {
         Self {
             sums: vec![0.0; component_count],
@@ -154,6 +187,9 @@ pub(crate) struct CenteringPlan {
 }
 
 impl CenteringPlan {
+    pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
+        crate::storage::bytes::<[f64; 3]>(self.sizes.len())
+    }
     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
         let Components { labels, sizes, .. } = Components::from_laplacian(graph);
         #[cfg(feature = "experimental-components")]

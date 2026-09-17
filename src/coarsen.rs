@@ -7,6 +7,19 @@ use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 use rayon::prelude::*;
 use std::sync::OnceLock;
 
+crate::storage::storage_fields!(Aggregation, labels, native_labels, sizes);
+impl crate::storage::Storage for LabelStorage {
+    fn visit(
+        &self,
+        visitor: &mut dyn FnMut(crate::storage::Allocation) -> Result<(), CmgError>,
+    ) -> Result<(), CmgError> {
+        match self {
+            Self::Compact(v) => crate::storage::Storage::visit(v, visitor),
+            Self::Native(v) => crate::storage::Storage::visit(v, visitor),
+        }
+    }
+}
+
 /// A zero-based partition of fine vertices into coarse aggregates.
 #[derive(Debug, Clone)]
 enum LabelStorage {
