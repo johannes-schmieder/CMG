@@ -1,6 +1,34 @@
 //! Component-grounded, static-degree-ordered LDL^T terminal solver.
 
+use crate::storage::{add, bytes, try_capacity, try_filled};
 use crate::{CmgError, Components, Laplacian, ValidationOptions};
+
+fn strict_slots(dimension: usize) -> Result<usize, CmgError> {
+    dimension
+        .checked_mul(dimension.saturating_sub(1))
+        .map(|value| value / 2)
+        .ok_or(CmgError::AllocationFailed {
+            context: "terminal triangular size overflows",
+        })
+}
+
+fn dense_bank(dimension: usize) -> Result<Vec<Vec<f64>>, CmgError> {
+    let mut rows = try_capacity(dimension, "terminal dense row descriptors")?;
+    for _ in 0..dimension {
+        rows.push(try_filled(dimension, 0.0, "terminal dense row")?);
+    }
+    Ok(rows)
+}
+
+#[cfg(feature = "experimental-components")]
+fn compact_fallibly<T: Copy>(values: Vec<T>) -> Result<Vec<T>, CmgError> {
+    if values.len() == values.capacity() {
+        return Ok(values);
+    }
+    let mut compact = try_capacity(values.len(), "terminal compact conversion")?;
+    compact.extend_from_slice(&values);
+    Ok(compact)
+}
 
 crate::storage::storage_fields!(
     GroundedLdl,
@@ -52,7 +80,7 @@ enum LowerFactor {
 }
 
 impl LowerFactor {
-    fn from_dense(lower: &[Vec<f64>]) -> Self {
+    fn from_dense(lower: &[Vec<f64>]) -> Result<Self, CmgError> {
         let dimension = lower.len();
         let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
         let strict_nonzeros = lower
@@ -67,9 +95,9 @@ impl LowerFactor {
             .saturating_add(2 * (dimension + 1).saturating_mul(core::mem::size_of::<usize>()));
 
         if dimension <= u32::MAX as usize && sparse_bytes < packed_bytes {
-            let mut row_offsets = Vec::with_capacity(dimension + 1);
-            let mut columns = Vec::with_capacity(strict_nonzeros);
-            let mut row_values = Vec::with_capacity(strict_nonzeros);
+            let mut row_offsets = try_capacity(add(dimension, 1)?, "terminal sparse row offsets")?;
+            let mut columns = try_capacity(strict_nonzeros, "terminal sparse columns")?;
+            let mut row_values = try_capacity(strict_nonzeros, "terminal sparse row values")?;
             row_offsets.push(0);
             for (row, values) in lower.iter().enumerate() {
                 for (column, value) in values[..row].iter().copied().enumerate() {
@@ -83,29 +111,34 @@ impl LowerFactor {
 
             Self::from_sparse_rows(row_offsets, columns, row_values)
         } else {
-            let mut values = Vec::with_capacity(packed_slots);
+            let mut values = try_capacity(packed_slots, "terminal packed values")?;
             for (row, dense_row) in lower.iter().enumerate() {
                 values.extend_from_slice(&dense_row[..row]);
             }
-            Self::Packed { values }
+            Ok(Self::Packed { values })
         }
     }
 
-    fn from_sparse_rows(row_offsets: Vec<usize>, columns: Vec<u32>, row_values: Vec<f64>) -> Self {
+    fn from_sparse_rows(
+        row_offsets: Vec<usize>,
+        columns: Vec<u32>,
+        row_values: Vec<f64>,
+    ) -> Result<Self, CmgError> {
         let dimension = row_offsets.len() - 1;
         let strict_nonzeros = columns.len();
-        let mut column_counts = vec![0_usize; dimension];
+        let mut column_counts = try_filled(dimension, 0_usize, "terminal column counts")?;
         for &column in &columns {
             column_counts[column as usize] += 1;
         }
-        let mut column_offsets = Vec::with_capacity(dimension + 1);
+        let mut column_offsets = try_capacity(add(dimension, 1)?, "terminal column offsets")?;
         column_offsets.push(0);
         for count in column_counts {
             column_offsets.push(column_offsets.last().copied().unwrap_or(0) + count);
         }
-        let mut next = column_offsets[..dimension].to_vec();
-        let mut rows = vec![0_u32; strict_nonzeros];
-        let mut column_values = vec![0.0; strict_nonzeros];
+        let mut next = try_capacity(dimension, "terminal column cursors")?;
+        next.extend_from_slice(&column_offsets[..dimension]);
+        let mut rows = try_filled(strict_nonzeros, 0_u32, "terminal transposed rows")?;
+        let mut column_values = try_filled(strict_nonzeros, 0.0, "terminal transposed values")?;
         for row in 0..dimension {
             for index in row_offsets[row]..row_offsets[row + 1] {
                 let column = columns[index] as usize;
@@ -116,14 +149,14 @@ impl LowerFactor {
             }
         }
 
-        Self::Sparse {
+        Ok(Self::Sparse {
             row_offsets,
             columns,
             row_values,
             column_offsets,
             rows,
             column_values,
-        }
+        })
     }
 
     fn forward_correction(&self, row: usize, forward: &[f64]) -> f64 {
@@ -224,9 +257,107 @@ pub struct GroundedLdl {
 }
 
 impl GroundedLdl {
+    /// Upper bound on all new requested heap layouts during ordinary terminal
+    /// construction, including component discovery, both dense row banks and
+    /// simultaneous packed/sparse conversion. Borrowed graph/allocator overhead
+    /// is excluded. The bound uses vertex count, not an empirical multiplier.
+    pub fn construction_allocation_bound(vertices: usize) -> Result<usize, CmgError> {
+        let n = vertices;
+        let square = n.checked_mul(n).ok_or(CmgError::AllocationFailed {
+            context: "terminal square size overflows",
+        })?;
+        let q = strict_slots(n)?;
+        // Retained component labels/sizes, anchors, permutation, pattern and
+        // factor index: at most six native arrays; is_anchor is a boolean bank.
+        let metadata = add(bytes::<[usize; 6]>(n)?, bytes::<bool>(n)?)?;
+        let dense = add(bytes::<[f64; 2]>(square)?, bytes::<[Vec<f64>; 2]>(n)?)?;
+        let conversion = add(
+            add(bytes::<[usize; 2]>(add(n, 1)?)?, bytes::<usize>(n)?)?,
+            bytes::<(u32, u32, f64, f64)>(q)?,
+        )?;
+        let factoring = add(add(add(metadata, dense)?, bytes::<f64>(n)?)?, conversion)?;
+        Ok(factoring.max(bytes::<[usize; 4]>(n)?))
+    }
+
+    /// Admit before the first owned allocation, then use fallible known-size
+    /// buffers and the unchanged ordinary LDL arithmetic/order. This covers
+    /// terminal construction only, not its parent hierarchy or runtime.
+    pub fn factor_with_budget(graph: &Laplacian, budget_bytes: usize) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::construction_allocation_bound(graph.vertex_count())?,
+            budget_bytes,
+        )?;
+        Self::factor_impl::<false, true>(graph)
+    }
+
+    /// Upper bound for the bounded component-factor constructor. Worst-case
+    /// fill is triangular in vertices; actual provisioning uses the sum of
+    /// per-component triangular sizes and one current block, not one dense
+    /// matrix across disconnected components. Runtime/borrowed parents excluded.
+    #[cfg(feature = "experimental-components")]
+    pub fn component_construction_allocation_bound(
+        vertices: usize,
+        edges: usize,
+    ) -> Result<usize, CmgError> {
+        let n = vertices;
+        let q = strict_slots(n)?;
+        let offset = bytes::<usize>(add(n, 1)?)?;
+        let metadata = bytes::<[usize; 4]>(n)?;
+        let grouping = add(
+            add(add(offset, offset)?, bytes::<[usize; 2]>(n)?)?,
+            bytes::<usize>(edges)?,
+        )?;
+        let factors = add(
+            add(bytes::<f64>(n)?, offset)?,
+            add(bytes::<u32>(q)?, bytes::<f64>(q)?)?,
+        )?;
+        let parents = add(add(metadata, grouping)?, factors)?;
+        // Input reorder is sequential with the ordered-sparse numeric bank.
+        let input = add(add(offset, bytes::<usize>(edges)?)?, bytes::<usize>(n)?)?;
+        let numeric = add(
+            add(add(offset, offset)?, bytes::<usize>(edges)?)?,
+            add(
+                add(bytes::<[usize; 2]>(n)?, bytes::<[f64; 2]>(n)?)?,
+                add(bytes::<(u32, u32, f64)>(q)?, bytes::<usize>(q)?)?,
+            )?,
+        )?;
+        // Existing row banks coexist with exact compaction, packed conversion,
+        // or transposed sparse banks; maximum, not sum, of those alternatives.
+        let packed_or_compact = bytes::<f64>(q)?;
+        let transposed = add(
+            add(offset, bytes::<usize>(n)?)?,
+            add(bytes::<u32>(q)?, bytes::<f64>(q)?)?,
+        )?;
+        let preparation = add(bytes::<[usize; 5]>(n)?, bytes::<bool>(n)?)?;
+        Ok(add(
+            parents,
+            input.max(numeric).max(packed_or_compact).max(transposed),
+        )?
+        .max(preparation)
+        .max(bytes::<[usize; 4]>(n)?))
+    }
+
+    /// Budgeted component factorization, retaining sparse ordered updates and
+    /// component-local construction. All owned allocation paths are fallible;
+    /// the upfront bound includes capacity and old/new conversion overlap.
+    #[cfg(feature = "experimental-components")]
+    pub fn factor_by_component_with_budget(
+        graph: &Laplacian,
+        budget_bytes: usize,
+    ) -> Result<Self, CmgError> {
+        crate::storage::admit(
+            Self::component_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+            )?,
+            budget_bytes,
+        )?;
+        Self::factor_impl::<true, true>(graph)
+    }
+
     /// Factor the graph Laplacian after grounding one vertex per component.
     pub fn factor(graph: &Laplacian) -> Result<Self, CmgError> {
-        Self::factor_impl::<false>(graph)
+        Self::factor_impl::<false, false>(graph)
     }
 
     /// Factor disconnected blocks independently, preserving each block's
@@ -238,26 +369,34 @@ impl GroundedLdl {
     /// without one solver allocation per component.
     #[cfg(feature = "experimental-components")]
     pub fn factor_by_component(graph: &Laplacian) -> Result<Self, CmgError> {
-        Self::factor_impl::<true>(graph)
+        Self::factor_impl::<true, false>(graph)
     }
 
-    fn factor_impl<const BLOCKS: bool>(graph: &Laplacian) -> Result<Self, CmgError> {
+    fn factor_impl<const BLOCKS: bool, const ADMITTED: bool>(
+        graph: &Laplacian,
+    ) -> Result<Self, CmgError> {
         let vertex_count = graph.vertex_count();
-        let components = Components::from_laplacian(graph);
+        let components = if ADMITTED {
+            Components::try_from_endpoints(
+                vertex_count,
+                graph.edges().iter().map(|e| (e.u(), e.v())),
+            )?
+        } else {
+            Components::from_laplacian(graph)
+        };
 
-        let mut anchors = vec![0; components.count()];
+        let mut anchors = try_filled(components.count(), 0, "terminal anchors")?;
         for (vertex, &component) in components.labels().iter().enumerate() {
             anchors[component] = vertex;
         }
-        let mut is_anchor = vec![false; vertex_count];
+        let mut is_anchor = try_filled(vertex_count, false, "terminal anchor flags")?;
         for &anchor in &anchors {
             is_anchor[anchor] = true;
         }
 
-        let active_vertices: Vec<usize> = (0..vertex_count)
-            .filter(|vertex| !is_anchor[*vertex])
-            .collect();
-        let mut pattern_nonzeros = vec![0_usize; vertex_count];
+        let mut active_vertices = try_capacity(vertex_count, "terminal permutation")?;
+        active_vertices.extend((0..vertex_count).filter(|vertex| !is_anchor[*vertex]));
+        let mut pattern_nonzeros = try_filled(vertex_count, 0_usize, "terminal pattern counts")?;
         for &vertex in &active_vertices {
             // Every active grounded row retains its positive diagonal.
             pattern_nonzeros[vertex] = 1;
@@ -272,17 +411,22 @@ impl GroundedLdl {
         let mut permutation = active_vertices;
         #[cfg(feature = "experimental-components")]
         if BLOCKS {
-            permutation.sort_by_key(|&vertex| {
+            let key = |&vertex: &usize| {
                 (
                     components.labels()[vertex],
                     pattern_nonzeros[vertex],
                     vertex,
                 )
-            });
+            };
+            if ADMITTED {
+                permutation.sort_unstable_by_key(key);
+            } else {
+                permutation.sort_by_key(key);
+            }
             drop(is_anchor);
             drop(pattern_nonzeros);
             let (lower, diagonal, factor_nonzeros) =
-                factor_components(graph, &components, &permutation)?;
+                factor_components::<ADMITTED>(graph, &components, &permutation)?;
             return Ok(Self {
                 vertex_count,
                 components,
@@ -293,15 +437,20 @@ impl GroundedLdl {
                 factor_nonzeros,
             });
         }
-        permutation.sort_by_key(|&vertex| (pattern_nonzeros[vertex], vertex));
+        let key = |&vertex: &usize| (pattern_nonzeros[vertex], vertex);
+        if ADMITTED {
+            permutation.sort_unstable_by_key(key);
+        } else {
+            permutation.sort_by_key(key);
+        }
         let dimension = permutation.len();
 
         // Assemble the ordered grounded matrix directly. The previous path
         // first materialized the full graph matrix and then copied the active
         // permutation into this second dense buffer. Direct assembly removes
         // one vertex_count^2 allocation and its complete permutation scan.
-        let mut matrix = vec![vec![0.0; dimension]; dimension];
-        let mut factor_index = vec![usize::MAX; vertex_count];
+        let mut matrix = dense_bank(dimension)?;
+        let mut factor_index = try_filled(vertex_count, usize::MAX, "terminal factor index")?;
         for (factor_vertex, &original_vertex) in permutation.iter().enumerate() {
             factor_index[original_vertex] = factor_vertex;
             matrix[factor_vertex][factor_vertex] = graph.diagonal()[original_vertex];
@@ -324,7 +473,7 @@ impl GroundedLdl {
             .map(|(row, values)| values[..row].iter().filter(|value| **value != 0.0).count())
             .sum::<usize>();
         let factor_nonzeros = dimension.saturating_add(strict_nonzeros);
-        let lower = LowerFactor::from_dense(&dense_lower);
+        let lower = LowerFactor::from_dense(&dense_lower)?;
 
         Ok(Self {
             vertex_count,
@@ -499,8 +648,8 @@ fn factor_dense(
     permutation: &[usize],
 ) -> Result<(Vec<Vec<f64>>, Vec<f64>), CmgError> {
     let dimension = permutation.len();
-    let mut dense_lower = vec![vec![0.0; dimension]; dimension];
-    let mut diagonal = vec![0.0; dimension];
+    let mut dense_lower = dense_bank(dimension)?;
+    let mut diagonal = try_filled(dimension, 0.0, "terminal diagonal")?;
     for (row, values) in dense_lower.iter_mut().enumerate() {
         values[row] = 1.0;
     }
@@ -533,7 +682,7 @@ fn factor_dense(
 }
 
 #[cfg(feature = "experimental-components")]
-fn factor_components(
+fn factor_components<const ADMITTED: bool>(
     graph: &Laplacian,
     components: &Components,
     permutation: &[usize],
@@ -548,7 +697,7 @@ fn factor_components(
                     value: pivot,
                 });
             }
-            vec![pivot]
+            try_filled(1, pivot, "terminal singleton pivot")?
         } else {
             Vec::new()
         };
@@ -559,18 +708,22 @@ fn factor_components(
         ));
     }
     let count = components.count();
-    let mut offsets = Vec::with_capacity(count + 1);
+    let mut offsets = try_capacity(add(count, 1)?, "terminal component offsets")?;
     offsets.push(0);
     for &size in components.sizes() {
         offsets.push(offsets.last().unwrap() + size.saturating_sub(1));
     }
-    let mut factor_index = vec![usize::MAX; graph.vertex_count()];
+    let mut factor_index = try_filled(
+        graph.vertex_count(),
+        usize::MAX,
+        "terminal component factor index",
+    )?;
     for (index, &vertex) in permutation.iter().enumerate() {
         factor_index[vertex] = index;
     }
     // Group only grounded edges with flat counting-sort storage. Do not scan
     // every edge again for every component, or allocate a graph per block.
-    let mut edge_offsets = vec![0usize; count + 1];
+    let mut edge_offsets = try_filled(add(count, 1)?, 0usize, "terminal component edge offsets")?;
     for edge in graph.edges() {
         if factor_index[edge.u()] != usize::MAX && factor_index[edge.v()] != usize::MAX {
             edge_offsets[components.labels()[edge.u()] + 1] += 1;
@@ -579,8 +732,13 @@ fn factor_components(
     for c in 0..count {
         edge_offsets[c + 1] += edge_offsets[c];
     }
-    let mut next = edge_offsets[..count].to_vec();
-    let mut edge_indices = vec![0usize; edge_offsets[count]];
+    let mut next = try_capacity(count, "terminal component edge cursors")?;
+    next.extend_from_slice(&edge_offsets[..count]);
+    let mut edge_indices = try_filled(
+        edge_offsets[count],
+        0usize,
+        "terminal component edge indices",
+    )?;
     for (index, edge) in graph.edges().iter().enumerate() {
         if factor_index[edge.u()] != usize::MAX && factor_index[edge.v()] != usize::MAX {
             let c = components.labels()[edge.u()];
@@ -588,11 +746,18 @@ fn factor_components(
             next[c] += 1;
         }
     }
+    let capacity = if ADMITTED {
+        components.sizes().iter().try_fold(0, |sum, &size| {
+            add(sum, strict_slots(size.saturating_sub(1))?)
+        })?
+    } else {
+        0
+    };
     let mut factors = ComponentFactorRows {
-        diagonal: Vec::with_capacity(dimension),
-        row_offsets: Vec::with_capacity(dimension + 1),
-        columns: Vec::new(),
-        values: Vec::new(),
+        diagonal: try_capacity(dimension, "terminal component diagonal")?,
+        row_offsets: try_capacity(add(dimension, 1)?, "terminal component row offsets")?,
+        columns: try_capacity(capacity, "terminal component bounded columns")?,
+        values: try_capacity(capacity, "terminal component bounded values")?,
     };
     factors.row_offsets.push(0);
     for component in 0..count {
@@ -615,7 +780,7 @@ fn factor_components(
             factors.row_offsets.push(factors.columns.len());
             continue;
         }
-        factors.append_block(
+        factors.append_block::<ADMITTED>(
             graph,
             &permutation[start..end],
             &factor_index,
@@ -632,15 +797,20 @@ fn factor_components(
     let factor_nonzeros = dimension + values.len();
     // byte_len reports principal factor storage; discard growth slack before
     // these buffers become retained state (the legacy dense path sizes exactly).
-    columns.shrink_to_fit();
-    values.shrink_to_fit();
+    if ADMITTED {
+        columns = compact_fallibly(columns)?;
+        values = compact_fallibly(values)?;
+    } else {
+        columns.shrink_to_fit();
+        values.shrink_to_fit();
+    }
     let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
     let sparse_bytes = values
         .len()
         .saturating_mul(24)
         .saturating_add((dimension + 1).saturating_mul(2 * core::mem::size_of::<usize>()));
     let lower = if packed_slots.saturating_mul(8) <= sparse_bytes {
-        let mut packed = vec![0.0; packed_slots];
+        let mut packed = try_filled(packed_slots, 0.0, "terminal component packed conversion")?;
         for row in 0..dimension {
             let start = row.saturating_mul(row.saturating_sub(1)) / 2;
             for index in row_offsets[row]..row_offsets[row + 1] {
@@ -649,7 +819,7 @@ fn factor_components(
         }
         LowerFactor::Packed { values: packed }
     } else {
-        LowerFactor::from_sparse_rows(row_offsets, columns, values)
+        LowerFactor::from_sparse_rows(row_offsets, columns, values)?
     };
     Ok((lower, diagonal, factor_nonzeros))
 }
@@ -666,7 +836,7 @@ struct ComponentFactorRows {
 
 #[cfg(feature = "experimental-components")]
 impl ComponentFactorRows {
-    fn append_block(
+    fn append_block<const ADMITTED: bool>(
         &mut self,
         graph: &Laplacian,
         permutation: &[usize],
@@ -675,7 +845,8 @@ impl ComponentFactorRows {
         base: usize,
     ) -> Result<(), CmgError> {
         let dimension = permutation.len();
-        let mut input_offsets = vec![0usize; dimension + 1];
+        let mut input_offsets =
+            try_filled(add(dimension, 1)?, 0usize, "terminal block input offsets")?;
         for &index in edge_indices {
             let edge = graph.edges()[index];
             let column = factor_index[edge.u()].min(factor_index[edge.v()]) - base;
@@ -684,9 +855,10 @@ impl ComponentFactorRows {
         for column in 0..dimension {
             input_offsets[column + 1] += input_offsets[column];
         }
-        let mut input_edges = vec![0usize; edge_indices.len()];
+        let mut input_edges = try_filled(edge_indices.len(), 0usize, "terminal block input edges")?;
         {
-            let mut next = input_offsets[..dimension].to_vec();
+            let mut next = try_capacity(dimension, "terminal block input cursors")?;
+            next.extend_from_slice(&input_offsets[..dimension]);
             for &index in edge_indices {
                 let edge = graph.edges()[index];
                 let column = factor_index[edge.u()].min(factor_index[edge.v()]) - base;
@@ -697,16 +869,21 @@ impl ComponentFactorRows {
         // The arithmetic scan reads only rows and values. Keep the row-link
         // bookkeeping in separate arrays so it does not occupy that scan's
         // cache lines.
-        let mut entry_rows = Vec::with_capacity(edge_indices.len());
-        let mut entry_columns = Vec::with_capacity(edge_indices.len());
-        let mut entry_values = Vec::with_capacity(edge_indices.len());
-        let mut next_in_row = Vec::with_capacity(edge_indices.len());
-        let mut column_offsets = Vec::with_capacity(dimension + 1);
+        let capacity = if ADMITTED {
+            strict_slots(dimension)?
+        } else {
+            edge_indices.len()
+        };
+        let mut entry_rows = try_capacity(capacity, "terminal block entry rows")?;
+        let mut entry_columns = try_capacity(capacity, "terminal block entry columns")?;
+        let mut entry_values = try_capacity(capacity, "terminal block entry values")?;
+        let mut next_in_row = try_capacity(capacity, "terminal block row links")?;
+        let mut column_offsets = try_capacity(add(dimension, 1)?, "terminal block column offsets")?;
         column_offsets.push(0);
-        let mut first = vec![usize::MAX; dimension];
-        let mut last = vec![usize::MAX; dimension];
-        let mut work = vec![0.0; dimension];
-        let mut diagonal = vec![0.0; dimension];
+        let mut first = try_filled(dimension, usize::MAX, "terminal block first links")?;
+        let mut last = try_filled(dimension, usize::MAX, "terminal block last links")?;
+        let mut work = try_filled(dimension, 0.0, "terminal block numeric work")?;
+        let mut diagonal = try_filled(dimension, 0.0, "terminal block diagonal")?;
         for column in 0..dimension {
             work[column + 1..].fill(0.0);
             for &index in &input_edges[input_offsets[column]..input_offsets[column + 1]] {
