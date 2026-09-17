@@ -6,7 +6,7 @@ root=/projectnb/welfgr/cmg-benchmarks
 run_id=${1:?}
 mode=${2:?}
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-development$ ]]
-[[ "$mode" == shutdown || "$mode" == integration ]]
+[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen ]]
 run="$root/runs/$run_id"
 mkdir "$run/work/development-started"
 sha=$(cat "$run/manifests/source-commit.txt")
@@ -38,6 +38,8 @@ step fmt cargo fmt --all -- --check
 step clippy cargo clippy --locked --offline --all-features --all-targets -- -D warnings
 if [[ "$mode" == shutdown ]]; then
     step shutdown cargo test --locked --offline --features parallel --lib execution::lifetime_tests -- --nocapture
+elif [[ "$mode" == screen ]]; then
+    step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
 else
     step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor
     step minimal cargo test --locked --offline --all-targets

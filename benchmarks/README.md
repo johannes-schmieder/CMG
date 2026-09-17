@@ -196,3 +196,13 @@ With `component-allocations`, this entry point emits separate setup/workspace
 requested-memory measurements and checks zero warmed caller-buffer allocations.
 It omits timing samples in that build. Never use instrumented binaries for timing
 qualification. The original `component-bench` timing entry point stays unchanged.
+# Ownership integration screen
+
+`ownership-screen` is a small fixed library-boundary screen for worker lifetime,
+ordinary/component setup, planned caller-buffer reuse and shutdown. Enable
+`experimental-components`; `candidate-screen` selects the additive
+executor-aware component builder, and `screen-allocations` enables a separate
+requested-allocation run. Timing and allocation results must not be mixed.
+See `scc/README.md` for alternating immutable-source comparisons and the frozen
+case list. This is development evidence, not historical component promotion
+or an end-to-end downstream command benchmark.

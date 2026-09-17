@@ -29,6 +29,21 @@ Affinity in the environment record is observed, not claimed exclusive.
 The single 32-worker construction test is excluded in this 28-slot lane;
 the focused retirement tests cover changing pool sizes up to eight workers.
 
+The `screen` development mode uses `ownership_screen.sh` and the reusable
+`ownership-screen` driver. First deploy with `deploy_development_screen.sh
+RUN_ID SOURCE_SHA BASELINE_SHA`; this wraps normal deployment and freezes the
+reference Git archive separately. The compute-node job compiles identical
+harness bytes against both immutable sources, with separate timing and requested
+allocation builds, verifies lockfile dependency correspondence and identical
+binary fixture inputs, then alternates seven baseline/candidate process pairs.
+Its frozen four-case list is connected path, path with pairs/isolates, dense
+worker-firm with pairs, and a tiny weighted bridge, each with ordinary/explicit
+component construction and one/four workers. Four caller-buffer solves reuse
+each hierarchy and workspace. Output includes setup, workspace, solve, joined
+shutdown, total time and separate allocation observations. It does not exercise
+fallback attempts or qualify a production dispatch policy. Full sources,
+artifacts, input hashes, raw JSONL and validation summary remain in the run.
+
 Start from a clean local checkout:
 
 ```bash

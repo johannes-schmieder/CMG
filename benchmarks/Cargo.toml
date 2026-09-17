@@ -12,6 +12,13 @@ cmg = { path = "..", features = ["parallel", "profiling"] }
 experimental-components = ["cmg/experimental-components"]
 component-allocations = []
 cycle-profiling = ["cmg/cycle-profiling"]
+candidate-screen = []
+screen-allocations = []
+
+[[bin]]
+name = "ownership-screen"
+path = "src/bin/ownership-screen.rs"
+required-features = ["experimental-components"]
 
 [[bin]]
 name = "component-bench"
