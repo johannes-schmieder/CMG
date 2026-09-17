@@ -54,6 +54,16 @@ artifacts, input hashes, raw JSONL and validation summary remain in the run.
 
 `integration-screen` performs the full bounded integration matrix first, then
 benchmark formatting/Clippy and the version-2 screen in the same allocation.
+It also runs a separately identified `screen-admitted` comparison on the same
+five cases: baseline legacy serial setup versus candidate explicitly admitted
+serial setup. Both sides retain one/four-worker planned solves. Candidate setup
+includes the bound query and exact-budget constructor; this measures pessimistic
+preallocation overhead without conflating it with switching parallel setup off.
+Its 140 pairs, builds, inputs, allocation observations and summary are stored
+separately from the original-policy screen. The helper's `admitted-screen`
+feature implies `candidate-screen` and `serial-setup-screen`; it is a harness
+feature, not a library policy. No timing is accepted before numerical identity
+and all enabled accuracy gates pass.
 Deploy with the reference archive. A failing accuracy test stops the job;
 timings cannot override it. Keep the historical default-policy bridge diagnosis
 separate from the explicit absolute-residual regression described in

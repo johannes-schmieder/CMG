@@ -79,6 +79,7 @@ else
         step benchmark-clippy cargo clippy --locked --offline --manifest-path benchmarks/Cargo.toml --all-features --all-targets -- -D warnings
         step screen-validator python3 -m unittest discover -s benchmarks/scc/tests -p test_ownership_screen.py -v
         step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
+        step admitted-screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run" screen-admitted
     fi
 fi
 find "$CARGO_TARGET_DIR" -type f -perm -0100 -print0 | sort -z | xargs -0 sha256sum > "$run/manifests/development-artifacts.sha256"

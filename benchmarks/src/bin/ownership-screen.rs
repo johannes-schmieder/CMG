@@ -86,6 +86,9 @@ fn build_pre(
     executor: &ParallelExecutor,
     direct_threshold: usize,
 ) -> CmgPreconditioner {
+    // This separate screen lane deliberately keeps the pool for solves only.
+    #[cfg(feature = "serial-setup-screen")]
+    let _ = executor;
     let options = CmgOptions {
         direct_threshold,
         ..Default::default()
@@ -96,19 +99,53 @@ fn build_pre(
             preserve_unpruned_stopping: true,
             factor_terminal_components: true,
         };
-        #[cfg(feature = "candidate-screen")]
+        #[cfg(feature = "admitted-screen")]
+        {
+            let budget = CmgPreconditioner::component_serial_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+                component,
+            )
+            .unwrap();
+            CmgPreconditioner::build_component_experiment_serial_with_budget(
+                graph, options, component, budget,
+            )
+            .unwrap()
+        }
+        #[cfg(all(feature = "candidate-screen", not(feature = "serial-setup-screen")))]
         {
             CmgPreconditioner::build_component_experiment_with_executor(
                 graph, options, component, executor,
             )
             .unwrap()
         }
-        #[cfg(not(feature = "candidate-screen"))]
+        #[cfg(all(
+            not(feature = "admitted-screen"),
+            any(not(feature = "candidate-screen"), feature = "serial-setup-screen")
+        ))]
         {
             CmgPreconditioner::build_component_experiment(graph, options, component).unwrap()
         }
     } else {
-        CmgPreconditioner::build_with_executor(graph, options, executor).unwrap()
+        #[cfg(feature = "admitted-screen")]
+        {
+            let budget = CmgPreconditioner::serial_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+            )
+            .unwrap();
+            CmgPreconditioner::build_serial_with_budget(graph, options, budget).unwrap()
+        }
+        #[cfg(all(feature = "serial-setup-screen", not(feature = "admitted-screen")))]
+        {
+            CmgPreconditioner::build(graph, options).unwrap()
+        }
+        #[cfg(not(feature = "serial-setup-screen"))]
+        {
+            CmgPreconditioner::build_with_executor(graph, options, executor).unwrap()
+        }
     }
 }
 
@@ -303,31 +340,7 @@ fn main() {
                     ..Default::default()
                 })
                 .unwrap();
-                let options = CmgOptions {
-                    direct_threshold: 64,
-                    ..Default::default()
-                };
-                let pre = if component {
-                    let component = ComponentBuildOptions {
-                        prune_coarse_isolates: true,
-                        preserve_unpruned_stopping: true,
-                        factor_terminal_components: true,
-                    };
-                    #[cfg(feature = "candidate-screen")]
-                    {
-                        CmgPreconditioner::build_component_experiment_with_executor(
-                            &graph, options, component, &executor,
-                        )
-                        .unwrap()
-                    }
-                    #[cfg(not(feature = "candidate-screen"))]
-                    {
-                        CmgPreconditioner::build_component_experiment(&graph, options, component)
-                            .unwrap()
-                    }
-                } else {
-                    CmgPreconditioner::build_with_executor(&graph, options, &executor).unwrap()
-                };
+                let pre = build_pre(&graph, component, &executor, 64);
                 let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
                 let setup = start.elapsed().as_nanos();
                 let prepare = Instant::now();

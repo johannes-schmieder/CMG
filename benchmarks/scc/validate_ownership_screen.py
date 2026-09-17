@@ -6,7 +6,9 @@ import statistics
 import sys
 
 run = pathlib.Path(sys.argv[1])
-root = run / "output" / "screen"
+lane = sys.argv[2] if len(sys.argv) > 2 else "screen"
+assert lane in ("screen", "screen-admitted")
+root = run / "output" / lane
 
 # Generated driver manifests must resolve the same non-CMG dependency versions
 # as each other and the committed library lockfile. Parse only the package
@@ -23,8 +25,8 @@ def dependencies(path):
             packages[fields["name"]] = (fields["version"], fields.get("checksum"))
     return packages
 
-old_dependencies = dependencies(run / "work/screen/baseline/Cargo.lock")
-assert old_dependencies == dependencies(run / "work/screen/candidate/Cargo.lock")
+old_dependencies = dependencies(run / "work" / lane / "baseline/Cargo.lock")
+assert old_dependencies == dependencies(run / "work" / lane / "candidate/Cargo.lock")
 assert old_dependencies == dependencies(pathlib.Path.cwd() / "Cargo.lock")
 
 
@@ -86,6 +88,8 @@ for key in sorted(baseline[0]):
     })
 record = {
     "protocol": "ownership-development-v2-with-discarded-attempt",
+    "lane": lane,
+    "setup_policy": "matched serial setup: baseline legacy vs candidate admitted" if lane == "screen-admitted" else "original ordinary executor setup; baseline components serial vs candidate executor-aware",
     "source": (run / "manifests/source-commit.txt").read_text().strip(),
     "baseline": (run / "manifests/screen-reference/source.txt").read_text().strip(),
     "pairs": 140,

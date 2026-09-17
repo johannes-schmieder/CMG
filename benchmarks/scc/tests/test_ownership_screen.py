@@ -11,17 +11,17 @@ VALIDATOR = REPO / "benchmarks/scc/validate_ownership_screen.py"
 
 
 class OwnershipScreenTests(unittest.TestCase):
-    def run_fixture(self, fault=None):
+    def run_fixture(self, fault=None, lane="screen"):
         with tempfile.TemporaryDirectory() as temporary:
             run = Path(temporary)
-            output = run / "output/screen"
+            output = run / "output" / lane
             output.mkdir(parents=True)
             reference = run / "manifests/screen-reference"
             reference.mkdir(parents=True)
             (run / "manifests/source-commit.txt").write_text("0" * 40)
             (reference / "source.txt").write_text("1" * 40)
             for variant in ("baseline", "candidate"):
-                work = run / "work/screen" / variant
+                work = run / "work" / lane / variant
                 work.mkdir(parents=True)
                 (work / "Cargo.lock").write_bytes((REPO / "Cargo.lock").read_bytes())
                 for attempt in ("alloc", "1", "2", "3", "4", "5", "6", "7"):
@@ -60,13 +60,14 @@ class OwnershipScreenTests(unittest.TestCase):
                         "".join(json.dumps(row) + "\n" for row in rows)
                     )
             result = subprocess.run(
-                [sys.executable, str(VALIDATOR), str(run)],
+                [sys.executable, str(VALIDATOR), str(run), lane],
                 cwd=REPO, capture_output=True, text=True, check=False,
             )
             summary = output / "summary.json"
             if result.returncode == 0:
                 record = json.loads(summary.read_text())
                 self.assertEqual(record["pairs"], 140)
+                self.assertEqual(record["lane"], lane)
                 self.assertEqual(len(record["cases"]), 20)
             else:
                 self.assertFalse(summary.exists(), "invalid evidence produced a summary")
@@ -74,6 +75,10 @@ class OwnershipScreenTests(unittest.TestCase):
 
     def test_complete_synthetic_fixture(self):
         result = self.run_fixture()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_matched_serial_admission_fixture(self):
+        result = self.run_fixture(lane="screen-admitted")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_missing_fallback_is_rejected(self):
