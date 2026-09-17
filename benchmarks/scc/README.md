@@ -55,6 +55,13 @@ them into qualification: its receipt is `ORACLE_DIAGNOSIS_COMPLETE`, never
 `DEVELOPMENT_SUCCESS`. Unexpected execution errors still fail the job. Preserve
 the original failed unit test and inspect both source-bound diagnostic rows.
 
+`storage` is a targeted allocation-API lane: minimal/all-feature/release
+`storage_accounting` tests, formatting, Clippy, docs and the exact Rust 1.85.1
+compatibility check. Its receipt is `STORAGE_API_VALIDATION_SUCCESS`, explicitly
+not full solver qualification. It neither invokes nor disables the separately
+failing accuracy oracle, and it performs no performance measurements. Rust
+1.85.0 itself is not tested by this patch-version compatibility lane.
+
 Start from a clean local checkout:
 
 ```bash

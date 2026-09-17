@@ -1,10 +1,10 @@
 #!/bin/bash
 # One bounded development allocation; never invokes the scientific campaigns.
 set -euo pipefail
-run_id=${1:?usage: submit_development.sh RUN_ID shutdown|integration}
-mode=${2:?usage: submit_development.sh RUN_ID shutdown|integration|screen}
+run_id=${1:?usage: submit_development.sh RUN_ID MODE}
+mode=${2:?usage: submit_development.sh RUN_ID shutdown|integration|screen|oracle|storage}
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-development$ ]]
-[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen || "$mode" == oracle ]]
+[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen || "$mode" == oracle || "$mode" == storage ]]
 root=/projectnb/welfgr/cmg-benchmarks
 run="$root/runs/$run_id"
 sha=$(cat "$run/manifests/source-commit.txt")
