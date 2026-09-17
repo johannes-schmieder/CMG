@@ -43,7 +43,7 @@ elif [[ "$mode" == screen ]]; then
     step final-memory-minimal cargo test --locked --offline --test storage_accounting
     step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
 else
-    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor
+    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor -- --nocapture
     step minimal cargo test --locked --offline --all-targets
     step parallel cargo test --locked --offline --all-targets --features parallel -- --skip custom_executor_supports_up_to_thirty_two_threads
     step components cargo test --locked --offline --all-targets --features experimental-components

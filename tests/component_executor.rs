@@ -48,6 +48,45 @@ fn executor_component_setup_matches_serial_including_parallel_sort_boundary() {
                         .matvec(&(0..612).map(|v| (v % 13) as f64).collect::<Vec<_>>())
                         .unwrap();
                     assert_eq!(serial.apply(&rhs).unwrap(), parallel.apply(&rhs).unwrap());
+                    // This dense finest graph selects parallel CSR fill with
+                    // four workers. The independent TLS allocation fixture
+                    // intentionally covers serial CSR only; do not confuse it
+                    // with a cross-thread/runtime allocation measurement.
+                    let bound =
+                        ParallelCmgPlan::construction_allocation_bound(&parallel, &executor)
+                            .unwrap();
+                    assert!(
+                        ParallelCmgPlan::build_with_budget(&parallel, &executor, bound - 1)
+                            .is_err()
+                    );
+                    let admitted =
+                        ParallelCmgPlan::build_with_budget(&parallel, &executor, bound).unwrap();
+                    let reference = ParallelCmgPlan::build(&parallel, &executor).unwrap();
+                    if threads == 4 {
+                        assert!(admitted.operator_count() > 0);
+                    }
+                    let mut workspace = parallel.try_workspace().unwrap();
+                    let mut expected = vec![0.0; 612];
+                    let mut actual = vec![0.0; 612];
+                    reference
+                        .apply_compatible_into(
+                            &parallel,
+                            &rhs,
+                            &mut expected,
+                            &mut workspace,
+                            &executor,
+                        )
+                        .unwrap();
+                    admitted
+                        .apply_compatible_into(
+                            &parallel,
+                            &rhs,
+                            &mut actual,
+                            &mut workspace,
+                            &executor,
+                        )
+                        .unwrap();
+                    assert_eq!(actual, expected);
                 }
             }
         }
@@ -73,7 +112,7 @@ fn prepared_component_banks_cover_serial_planned_and_concurrent_rhs() {
     let mut weights = vec![1.0; endpoints.len()];
     weights[31] = 1e-9;
     // The alternate route around the cycle keeps this case well-conditioned;
-    // weak-bridge forward-accuracy coverage remains in adversarial/oracle tests.
+    // A genuine bridge with an analytic resistance oracle is tested separately.
     let first = topology.assemble(&weights).unwrap();
     let mut target: Vec<_> = (0..112).map(|i| ((i * 7) % 19) as f64).collect();
     topology.components().center_in_place(&mut target).unwrap();
@@ -155,6 +194,112 @@ fn prepared_component_banks_cover_serial_planned_and_concurrent_rhs() {
                     assert!(residual <= d.tolerance());
                 }
                 assert_eq!(CmgStorageReport::measure(&[&bank]).unwrap(), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn dyadic_weak_bridge_matches_independent_resistance_oracle() {
+    // Frozen before execution: endpoint unit injection on a 64-vertex path.
+    // Unit resistances except a 2^24 bridge. Path current is exactly one, so
+    // adjacent voltage differences equal resistance. All reference arithmetic
+    // below is exactly representable; no production solver builds the oracle.
+    const N: usize = 64;
+    const BRIDGE_RESISTANCE: f64 = 16_777_216.0;
+    const FORWARD_RELATIVE_LIMIT: f64 = 1e-6;
+    const RESIDUAL_LIMIT: f64 = 1e-8 * std::f64::consts::SQRT_2;
+    let graph = Laplacian::from_edges(
+        N,
+        (1..N).map(|v| {
+            (
+                v - 1,
+                v,
+                if v == 32 {
+                    1.0 / BRIDGE_RESISTANCE
+                } else {
+                    1.0
+                },
+            )
+        }),
+    )
+    .unwrap();
+    let mut reference = [0.0; N];
+    for v in (1..N).rev() {
+        reference[v - 1] = reference[v] + if v == 32 { BRIDGE_RESISTANCE } else { 1.0 };
+    }
+    let mean = reference.iter().sum::<f64>() / N as f64;
+    for value in &mut reference {
+        *value -= mean;
+    }
+    let scale = reference.iter().map(|x| x.abs()).fold(0.0, f64::max);
+    let mut rhs = [0.0; N];
+    rhs[0] = 1.0;
+    rhs[N - 1] = -1.0;
+    for threads in [1, 4] {
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads,
+            min_parallel_len: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        for direct_threshold in [8, N + 1] {
+            for component in [false, true] {
+                let options = CmgOptions {
+                    direct_threshold,
+                    ..Default::default()
+                };
+                let pre = if component {
+                    CmgPreconditioner::build_component_experiment_with_executor(
+                        &graph, options, COMPONENT, &executor,
+                    )
+                } else {
+                    CmgPreconditioner::build_with_executor(&graph, options, &executor)
+                }
+                .unwrap();
+                let plan = ParallelCmgPlan::build_with_budget(&pre, &executor, usize::MAX).unwrap();
+                let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
+                let mut solution = [0.0; N];
+                let diagnostics = solve_pcg_with_plan_into_with_workspace(
+                    &graph,
+                    &pre,
+                    &plan,
+                    &rhs,
+                    None,
+                    &mut solution,
+                    PcgOptions::default(),
+                    &mut workspace,
+                    &executor,
+                )
+                .unwrap();
+                assert!(diagnostics.residual_norm() <= diagnostics.tolerance());
+                let forward = solution
+                    .iter()
+                    .zip(reference)
+                    .map(|(x, r)| (x - r).abs())
+                    .fold(0.0, f64::max)
+                    / scale;
+                assert!(
+                    forward <= FORWARD_RELATIVE_LIMIT,
+                    "forward error {forward:e}"
+                );
+                // Independent path-current divergence; not graph.matvec or the
+                // solver's reported residual. Keep the original certificate too.
+                let mut residual = rhs;
+                for v in 1..N {
+                    let resistance = if v == 32 { BRIDGE_RESISTANCE } else { 1.0 };
+                    let current = (solution[v - 1] - solution[v]) / resistance;
+                    residual[v - 1] -= current;
+                    residual[v] += current;
+                }
+                let residual = residual.iter().map(|r| r * r).sum::<f64>().sqrt();
+                assert!(
+                    residual <= RESIDUAL_LIMIT,
+                    "independent residual {residual:e}"
+                );
+                println!(
+                    "WEAK_BRIDGE_ORACLE_SUCCESS threads={threads} direct={direct_threshold} component={component} forward={forward:e} residual={residual:e}"
+                );
             }
         }
     }
