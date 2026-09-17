@@ -566,6 +566,37 @@ impl CmgPreconditioner {
         Self::from_hierarchy(CmgHierarchy::build_with_executor(graph, options, executor)?)
     }
 
+    /// Build the explicit component path using an existing package-owned pool.
+    /// No extra executor or duplicate hierarchy is created. Contraction/sorting
+    /// retain the ordinary executor thresholds; forest work and factorization
+    /// remain serial. Options, stopping rules and certification are unchanged.
+    ///
+    /// This is not whole-build memory admission: see [`crate::CmgMemoryEstimate`]
+    /// and the unresolved construction/runtime limits in the ownership guide.
+    #[cfg(all(feature = "experimental-components", feature = "parallel"))]
+    pub fn build_component_experiment_with_executor(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
+        let hierarchy = if experiment.prune_coarse_isolates {
+            CmgHierarchy::build_pruned_with_executor(
+                graph,
+                options,
+                experiment.preserve_unpruned_stopping,
+                executor,
+            )?
+        } else {
+            CmgHierarchy::build_with_executor(graph, options, executor)?
+        };
+        if experiment.factor_terminal_components {
+            Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor_by_component)
+        } else {
+            Self::from_hierarchy(hierarchy)
+        }
+    }
+
     /// Build through the production hierarchy and finalization paths while timing both stages.
     #[cfg(all(feature = "parallel", feature = "profiling"))]
     pub fn build_with_executor_profiled(

@@ -32,6 +32,19 @@ pub struct CmgMemoryEstimate {
 }
 
 impl CmgMemoryEstimate {
+    /// Principal-array estimate for explicit component setup. The retained
+    /// factor and workspace bounds cover all component option combinations;
+    /// transient ordered-sparse factor construction is not whole-build admitted.
+    #[cfg(feature = "experimental-components")]
+    pub fn conservative_component(
+        problem: CmgProblemSize,
+        options: CmgOptions,
+        parallel: ParallelOptions,
+        _component: crate::ComponentBuildOptions,
+    ) -> Result<Self, CmgError> {
+        Self::conservative(problem, options, parallel)
+    }
+
     /// A complete CMG-owned construction peak is not yet proven. Principal
     /// arrays omit setup/container overlaps, and parallel runtime queues have
     /// no admitted bound. Never treat `build_peak_bytes` as a whole-action cap.

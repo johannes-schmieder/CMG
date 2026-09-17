@@ -13,6 +13,77 @@ latest kernel checkpoint below improves both connected terminal setup and
 mixed-component cycles. The original active-count stopping experiment remains
 available for comparison; it still regresses on some worker-firm cases.
 
+## Executor-aware integration candidate
+
+`build_component_experiment_with_executor(graph, options, component, executor)`
+reuses an existing `ParallelExecutor`. It passes the same executor into coarse
+contraction/sorting, including the existing 65,536-edge setup threshold. Forest
+construction and terminal factors remain serial, as in the ordinary builder.
+It creates neither an additional worker pool nor a preliminary hierarchy.
+The intended explicit options remain:
+
+```rust
+# #[cfg(all(feature = "parallel", feature = "experimental-components"))]
+# fn example(graph: &cmg::Laplacian, executor: &cmg::ParallelExecutor) -> Result<(), cmg::CmgError> {
+let component = cmg::ComponentBuildOptions {
+    prune_coarse_isolates: true,
+    preserve_unpruned_stopping: true,
+    factor_terminal_components: true,
+};
+let preconditioner = cmg::CmgPreconditioner::build_component_experiment_with_executor(
+    graph, cmg::CmgOptions::default(), component, executor,
+)?;
+let required = cmg::PcgBatchWorkspace::bank_allocation_bytes(&preconditioner, 4)?;
+let workspaces = cmg::PcgBatchWorkspace::new_bank_with_budget(
+    &preconditioner, 4, required,
+)?;
+let storage = cmg::CmgStorageReport::measure(&[graph, &preconditioner, &workspaces])?;
+# let _ = storage;
+# Ok(()) }
+```
+
+For a later prepared fereg session, the exact sequence is:
+
+1. Enable both `parallel` and `experimental-components` on the dependency.
+2. Admit and prepare topology with `prepare_with_budget`; retain its lineage.
+   Admit reusable assembly scratch with `PreparedLaplacianWorkspace::new_with_budget`.
+3. Charge live parents/old frames, then create the next numeric frame using
+   `assemble_with_workspace_budgeted` and its `numeric_allocation_bytes` query.
+4. Reuse one executor and build the explicit component preconditioner above.
+   Build a `ParallelCmgPlan` only if the existing caller policy requests it.
+5. Prepare a fixed admitted workspace bank and call the existing caller-buffer
+   functions. For changing weights, use the explicit retained-preconditioner
+   entry points, including the plan variant only when the old plan belongs to
+   that retained hierarchy. The current numeric frame supplies all operator
+   products and residual certificates. No rebuild/refresh policy is added here.
+6. Measure simultaneously live owners in one `CmgStorageReport`; retire old
+   frames/banks and eventually the joined executor before new admission.
+
+This is an API integration recipe, **not adoption approval**. The corresponding
+`conservative_component` estimate remains principal-array scoped. Complete
+hierarchy/plan construction and runtime admission are unresolved and strict
+whole-build admission refuses them. See [memory ownership](memory-ownership.md).
+Do not discard fereg's unresolved coverage flags or claim its entire memory
+supplement redundant. Ordinary defaults, active-count stopping, and the tiny
+PCG portfolio remain separate and unchanged. The historical SCC 54-target gain
+record and its three inconclusive connected comparisons do not establish
+complete-command fereg gains or unconditional promotion.
+
+To test an unpublished local commit without modifying fereg, create a fresh
+archive of the desired **committed** fereg source in a temporary directory,
+copy the exact CMG commit with `git archive` into a second temporary directory,
+and build the copied downstream tree using Cargo's command-line
+`--config 'patch."https://github.com/johannes-schmieder/CMG".cmg.path="/absolute/cmg-snapshot"'`.
+Use a separate `CARGO_TARGET_DIR`, let Cargo update only the copied lockfile,
+and inspect that lockfile: only the CMG source entry should change unless an
+explicit feature change in the copied manifest requires otherwise. Record the
+two source SHAs, archive/lockfile hashes, features, compiler and build result.
+Do not use `--locked` until the copied lockfile has been updated. This procedure
+tests committed downstream code; it does not include fereg's current dirty
+memory-accounting work. A separate authorized snapshot/export of that work is
+needed to test that development state. Do not edit fereg or its installed
+artifacts, and do not attempt to fetch an unpublished SHA from GitHub.
+
 ## Latest result
 
 Numerical checkpoint `ab2b0a4` retains residual/restriction fusion and terminal

@@ -335,6 +335,32 @@ impl CmgHierarchy {
         .map(|(hierarchy, _)| hierarchy)
     }
 
+    #[cfg(all(feature = "experimental-components", feature = "parallel"))]
+    pub(crate) fn build_pruned_with_executor(
+        graph: &Laplacian,
+        options: CmgOptions,
+        preserve_stopping: bool,
+        executor: &ParallelExecutor,
+    ) -> Result<Self, CmgError> {
+        if preserve_stopping {
+            Self::build_with_kernels_impl::<false, true, true, _, _>(
+                graph,
+                options,
+                build_forest_aggregation_labels,
+                |aggregation, current| aggregation.contract_with_executor(current, executor),
+            )
+            .map(|(hierarchy, _)| hierarchy)
+        } else {
+            Self::build_with_kernels_impl::<false, true, false, _, _>(
+                graph,
+                options,
+                build_forest_aggregation_labels,
+                |aggregation, current| aggregation.contract_with_executor(current, executor),
+            )
+            .map(|(hierarchy, _)| hierarchy)
+        }
+    }
+
     /// Build a hierarchy with deterministic parallel coarse-graph contraction.
     ///
     /// Forest selection and splitting remain serial in this checkpoint. The
