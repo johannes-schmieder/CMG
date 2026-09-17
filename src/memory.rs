@@ -334,10 +334,12 @@ impl RepeatedPcgMemoryEstimate {
         // The legacy hierarchy bound already includes conservative component
         // metadata. Count only the topology-owned maps here so the shared
         // finest components are not included twice in the combined total.
+        // prepare() reserves keys and offsets at the *input* count and keeps
+        // that capacity even when duplicates collapse to a single edge.
         let prepared_topology_bytes = checked_sum(&[
-            checked_mul(problem.canonical_edges, 8, "prepared canonical keys")?,
+            checked_mul(problem.input_edges, 8, "prepared canonical keys")?,
             checked_mul(
-                checked_add(problem.canonical_edges, 1, "prepared group offsets")?,
+                checked_add(problem.input_edges, 1, "prepared group offsets")?,
                 usize_bytes,
                 "prepared group offsets",
             )?,

@@ -114,6 +114,11 @@ with `max_levels=1`. Zero-thread requests resolve available parallelism rather
 than being estimated as one worker. For reproducible admission, pass the
 already chosen explicit thread count.
 
+Prepared keys and group offsets retain their input-sized reserved capacities,
+even when many duplicate inputs canonicalize to one edge. The repeated estimate
+now uses input counts for those two maps; a duplicate-rich regression would
+exceed the previous canonical-count sub-bound.
+
 The proof applies to positive finite fill factors and every termination reason
 (direct, full contraction, vertex stagnation, fill stagnation, level limit),
 including the preserved-stopping and active-count experiments. It changes no

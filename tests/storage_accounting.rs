@@ -241,3 +241,28 @@ fn fill_crossing_and_isolates_are_not_a_nonzero_storage_cap() {
         }
     }
 }
+
+#[test]
+fn duplicate_maps_keep_input_capacity_in_the_repeated_estimate() {
+    let topology = PreparedLaplacianTopology::prepare(2, std::iter::repeat_n((0, 1), 512)).unwrap();
+    let estimate = RepeatedPcgMemoryEstimate::conservative(
+        CmgProblemSize {
+            vertices: 2,
+            input_edges: 512,
+            canonical_edges: 1,
+            right_hand_sides: 1,
+        },
+        CmgOptions::default(),
+        ParallelOptions {
+            threads: 1,
+            ..Default::default()
+        },
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(
+        estimate.prepared_topology_bytes() + estimate.shared_component_metadata_bytes()
+            >= topology.retained_bytes()
+    );
+}

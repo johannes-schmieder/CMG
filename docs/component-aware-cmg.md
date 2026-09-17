@@ -59,6 +59,15 @@ For a later prepared fereg session, the exact sequence is:
 6. Measure simultaneously live owners in one `CmgStorageReport`; retire old
    frames/banks and eventually the joined executor before new admission.
 
+In fereg's current `build_graph_route_from_numeric`, retain the subsequent
+`ParallelPcgSolver::from_preconditioner(preconditioner, executor, policy)` call.
+Only the explicit component builder needs replacing there; the existing solver
+continues to own the same executor and lazy plan. Do not build a second plan or
+pool beside that solver. Report the solver, caller-buffer bank and prepared
+parents together; the solver's executor makes the uncovered runtime scope
+visible. Fereg's owned-result route also needs its returned result bank counted
+outside the workspace report.
+
 This is an API integration recipe, **not adoption approval**. The corresponding
 `conservative_component` estimate remains principal-array scoped. Complete
 hierarchy/plan construction and runtime admission are unresolved and strict

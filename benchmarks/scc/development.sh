@@ -39,6 +39,8 @@ step clippy cargo clippy --locked --offline --all-features --all-targets -- -D w
 if [[ "$mode" == shutdown ]]; then
     step shutdown cargo test --locked --offline --features parallel --lib execution::lifetime_tests -- --nocapture
 elif [[ "$mode" == screen ]]; then
+    step final-memory cargo test --locked --offline --test storage_accounting --all-features
+    step final-memory-minimal cargo test --locked --offline --test storage_accounting
     step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
 else
     step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor
