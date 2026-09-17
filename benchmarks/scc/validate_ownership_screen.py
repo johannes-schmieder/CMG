@@ -7,7 +7,7 @@ import sys
 
 run = pathlib.Path(sys.argv[1])
 lane = sys.argv[2] if len(sys.argv) > 2 else "screen"
-assert lane in ("screen", "screen-admitted")
+assert lane in ("screen", "screen-admitted", "screen-parallel-admitted")
 root = run / "output" / lane
 
 # Generated driver manifests must resolve the same non-CMG dependency versions
@@ -86,15 +86,23 @@ for key in sorted(baseline[0]):
         "memory": {v: {field: value for field, value in allocation[v][key].items() if field.endswith("_requested_increment")} for v in allocation},
         "coefficient_relative_error": candidate[0][key]["coefficient_relative_error"],
     })
+source = (run / "manifests/source-commit.txt").read_text().strip()
+same_source = lane == "screen-parallel-admitted"
+policies = {
+    "screen": "original ordinary executor setup; baseline components serial vs candidate executor-aware",
+    "screen-admitted": "matched serial setup: baseline legacy vs candidate admitted",
+    "screen-parallel-admitted": "same-source executor setup: legacy vs CMG-owned admitted; runtime uncovered in both",
+}
 record = {
     "protocol": "ownership-development-v2-with-discarded-attempt",
     "lane": lane,
-    "setup_policy": "matched serial setup: baseline legacy vs candidate admitted" if lane == "screen-admitted" else "original ordinary executor setup; baseline components serial vs candidate executor-aware",
-    "source": (run / "manifests/source-commit.txt").read_text().strip(),
-    "baseline": (run / "manifests/screen-reference/source.txt").read_text().strip(),
+    "setup_policy": policies[lane],
+    "source": source,
+    "baseline": source if same_source else (run / "manifests/screen-reference/source.txt").read_text().strip(),
+    "both_variants_join_workers": same_source,
     "pairs": 140,
     "numerical_fields_identical": True,
-    "scope": "Seven alternating process pairs; unpinned shared-host development evidence, not component promotion or complete-command fereg evidence. Allocation runs are separate. Original four cases unchanged; added caller-rejected multilevel attempt followed by complete retirement and direct rebuild. Only the added fallback total includes all solver-owned cleanup. Baseline pool drop does not wait for workers; candidate drop does. Runtime allocation observations are not admission proofs.",
+    "scope": "Seven alternating process pairs; unpinned shared-host development evidence, not component promotion or complete-command fereg evidence. Allocation runs are separate. Original four cases unchanged; added caller-rejected multilevel attempt followed by complete retirement and direct rebuild. Only the added fallback total includes all solver-owned cleanup. Runtime allocation observations are not admission proofs. " + ("Both variants join workers." if same_source else "Baseline pool drop does not wait for workers; candidate drop does."),
     "cases": summary,
 }
 with (root / "summary.json").open("x") as output:

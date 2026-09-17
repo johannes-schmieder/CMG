@@ -80,6 +80,49 @@ fn fixture(case: &str) -> Laplacian {
     .unwrap()
 }
 
+// All-feature lint builds select this lane; deployed drivers select exactly one
+// admission lane. Its baseline uses this same source's legacy executor builder.
+#[cfg(feature = "parallel-admitted-screen")]
+fn build_pre(
+    graph: &Laplacian,
+    component: bool,
+    executor: &ParallelExecutor,
+    direct_threshold: usize,
+) -> CmgPreconditioner {
+    let options = CmgOptions {
+        direct_threshold,
+        ..Default::default()
+    };
+    if component {
+        let component = ComponentBuildOptions {
+            prune_coarse_isolates: true,
+            preserve_unpruned_stopping: true,
+            factor_terminal_components: true,
+        };
+        let budget = CmgPreconditioner::component_executor_construction_cmg_allocation_bound(
+            graph.vertex_count(),
+            graph.edge_count(),
+            options,
+            component,
+        )
+        .unwrap();
+        CmgPreconditioner::build_component_experiment_with_executor_and_cmg_budget(
+            graph, options, component, executor, budget,
+        )
+        .unwrap()
+    } else {
+        let budget = CmgPreconditioner::executor_construction_cmg_allocation_bound(
+            graph.vertex_count(),
+            graph.edge_count(),
+            options,
+        )
+        .unwrap();
+        CmgPreconditioner::build_with_executor_and_cmg_budget(graph, options, executor, budget)
+            .unwrap()
+    }
+}
+
+#[cfg(not(feature = "parallel-admitted-screen"))]
 fn build_pre(
     graph: &Laplacian,
     component: bool,

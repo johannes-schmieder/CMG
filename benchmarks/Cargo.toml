@@ -16,6 +16,7 @@ candidate-screen = []
 screen-allocations = []
 serial-setup-screen = []
 admitted-screen = ["candidate-screen", "serial-setup-screen"]
+parallel-admitted-screen = ["candidate-screen"]
 
 [[bin]]
 name = "ownership-screen"

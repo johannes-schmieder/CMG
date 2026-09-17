@@ -5,7 +5,7 @@ test "${NSLOTS:-0}" = 28
 test -n "${JOB_ID:-}"
 run=${1:?}
 lane=${2:-screen}
-[[ "$lane" == screen || "$lane" == screen-admitted ]]
+[[ "$lane" == screen || "$lane" == screen-admitted || "$lane" == screen-parallel-admitted ]]
 work="$run/work/$lane"
 output="$run/output/$lane"
 code=$(pwd)
@@ -18,13 +18,17 @@ for variant in baseline candidate; do
     mkdir "$driver" "$driver/src" "$output/inputs-$variant"
     cp "$code/benchmarks/src/bin/ownership-screen.rs" "$driver/src/main.rs"
     source_path="$code"
-    if [[ "$variant" == baseline ]]; then source_path="$work/baseline-source"; fi
-    printf '[package]\nname="ownership-screen"\nversion="0.0.0"\nedition="2024"\n[dependencies]\ncmg={path="%s",features=["parallel","experimental-components"]}\n[features]\ncandidate-screen=[]\nscreen-allocations=[]\nserial-setup-screen=[]\nadmitted-screen=["candidate-screen","serial-setup-screen"]\n' "$source_path" > "$driver/Cargo.toml"
+    if [[ "$variant" == baseline && "$lane" != screen-parallel-admitted ]]; then source_path="$work/baseline-source"; fi
+    printf '[package]\nname="ownership-screen"\nversion="0.0.0"\nedition="2024"\n[dependencies]\ncmg={path="%s",features=["parallel","experimental-components"]}\n[features]\ncandidate-screen=[]\nscreen-allocations=[]\nserial-setup-screen=[]\nadmitted-screen=["candidate-screen","serial-setup-screen"]\nparallel-admitted-screen=["candidate-screen"]\n' "$source_path" > "$driver/Cargo.toml"
     features=''
     if [[ "$variant" == candidate ]]; then features=candidate-screen; fi
     if [[ "$lane" == screen-admitted ]]; then
         features=serial-setup-screen
         if [[ "$variant" == candidate ]]; then features=admitted-screen; fi
+    fi
+    if [[ "$lane" == screen-parallel-admitted ]]; then
+        features=candidate-screen
+        if [[ "$variant" == candidate ]]; then features=parallel-admitted-screen; fi
     fi
     cargo build --offline --release --manifest-path "$driver/Cargo.toml" --features "${features:+$features,}screen-allocations" --target-dir "$driver/alloc-target" > "$run/logs/$lane-build-$variant-alloc.log" 2>&1
     "$driver/alloc-target/release/ownership-screen" "$output/inputs-$variant" > "$output/$variant-alloc.jsonl"

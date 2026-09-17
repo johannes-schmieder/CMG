@@ -69,6 +69,8 @@ class OwnershipScreenTests(unittest.TestCase):
                 self.assertEqual(record["pairs"], 140)
                 self.assertEqual(record["lane"], lane)
                 self.assertEqual(len(record["cases"]), 20)
+                self.assertEqual(record["baseline"], "0" * 40 if lane == "screen-parallel-admitted" else "1" * 40)
+                self.assertEqual(record["both_variants_join_workers"], lane == "screen-parallel-admitted")
             else:
                 self.assertFalse(summary.exists(), "invalid evidence produced a summary")
             return result
@@ -83,6 +85,10 @@ class OwnershipScreenTests(unittest.TestCase):
 
     def test_missing_fallback_is_rejected(self):
         self.assertNotEqual(self.run_fixture(lambda rows: rows.pop()).returncode, 0)
+
+    def test_matched_parallel_admission_fixture(self):
+        result = self.run_fixture(lane="screen-parallel-admitted")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_unrejected_attempt_is_rejected(self):
         self.assertNotEqual(

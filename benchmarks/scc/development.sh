@@ -65,7 +65,7 @@ elif [[ "$mode" == screen ]]; then
     step final-memory-minimal cargo test --locked --offline --test storage_accounting
     step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
 else
-    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor --test residual_contract -- --nocapture
+    step focused cargo test --locked --offline --all-features --test storage_accounting --test component_executor --test residual_contract --test factor_admission --test hierarchy_admission --test parallel_construction_admission -- --nocapture
     step minimal cargo test --locked --offline --all-targets
     step parallel cargo test --locked --offline --all-targets --features parallel -- --skip custom_executor_supports_up_to_thirty_two_threads
     step components cargo test --locked --offline --all-targets --features experimental-components
@@ -80,6 +80,7 @@ else
         step screen-validator python3 -m unittest discover -s benchmarks/scc/tests -p test_ownership_screen.py -v
         step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
         step admitted-screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run" screen-admitted
+        step parallel-admitted-screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run" screen-parallel-admitted
     fi
 fi
 find "$CARGO_TARGET_DIR" -type f -perm -0100 -print0 | sort -z | xargs -0 sha256sum > "$run/manifests/development-artifacts.sha256"
