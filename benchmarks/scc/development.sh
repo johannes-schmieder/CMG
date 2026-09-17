@@ -6,7 +6,7 @@ root=/projectnb/welfgr/cmg-benchmarks
 run_id=${1:?}
 mode=${2:?}
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-development$ ]]
-[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen ]]
+[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen || "$mode" == oracle ]]
 run="$root/runs/$run_id"
 mkdir "$run/work/development-started"
 sha=$(cat "$run/manifests/source-commit.txt")
@@ -36,7 +36,13 @@ step() {
 }
 step fmt cargo fmt --all -- --check
 step clippy cargo clippy --locked --offline --all-features --all-targets -- -D warnings
-if [[ "$mode" == shutdown ]]; then
+if [[ "$mode" == oracle ]]; then
+    step oracle-diagnosis bash "$code/benchmarks/scc/bridge_oracle.sh" "$run"
+    sha256sum --status -c "$run/manifests/source-files-sha256.txt"
+    printf 'source=%s\njob=%s\nmode=%s\n' "$sha" "$JOB_ID" "$mode" > "$run/receipts/ORACLE_DIAGNOSIS_COMPLETE"
+    printf 'CMG_DEVELOPMENT_DIAGNOSIS_COMPLETE source=%s mode=%s\n' "$sha" "$mode"
+    exit 0
+elif [[ "$mode" == shutdown ]]; then
     step shutdown cargo test --locked --offline --features parallel --lib execution::lifetime_tests -- --nocapture
 elif [[ "$mode" == screen ]]; then
     step final-memory cargo test --locked --offline --test storage_accounting --all-features

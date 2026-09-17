@@ -21,6 +21,11 @@ path = "src/bin/ownership-screen.rs"
 required-features = ["experimental-components"]
 
 [[bin]]
+name = "bridge-oracle"
+path = "src/bin/bridge-oracle.rs"
+required-features = ["experimental-components"]
+
+[[bin]]
 name = "component-bench"
 path = "src/bin/component-bench.rs"
 

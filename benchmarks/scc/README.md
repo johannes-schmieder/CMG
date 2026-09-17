@@ -44,6 +44,17 @@ shutdown, total time and separate allocation observations. It does not exercise
 fallback attempts or qualify a production dispatch policy. Full sources,
 artifacts, input hashes, raw JSONL and validation summary remain in the run.
 
+The separate `oracle` development mode uses the same reference-archive deploy
+but runs only the frozen 64-vertex dyadic weak-bridge diagnosis, not performance
+or a campaign. Default PCG certification, independent path-current residual and
+analytic centered resistance voltages are recorded for ordinary/component,
+one/four workers and direct thresholds 8/65. The forward limit remains `1e-6`;
+the independent residual limit remains `sqrt(2)*1e-8`. The driver exits 2 when
+an accuracy gate fails. The wrapper records those exit codes without converting
+them into qualification: its receipt is `ORACLE_DIAGNOSIS_COMPLETE`, never
+`DEVELOPMENT_SUCCESS`. Unexpected execution errors still fail the job. Preserve
+the original failed unit test and inspect both source-bound diagnostic rows.
+
 Start from a clean local checkout:
 
 ```bash
