@@ -16,7 +16,9 @@ hierarchies, terminal factors, prepared topology/current graphs, plans,
 workspaces and executor handle banks. `Vec<T>` roots include spare outer
 capacity as well as nested owners; passing two live banks counts their overlap.
 Supported `Vec<f64>` and nested numerical banks can also be supplied explicitly
-for caller-owned outputs. Borrowed input/output slices are never implicitly
+for caller-owned outputs. Owned `PcgResult`, `Vec<PcgResult>` and
+`ParallelPcgBatchResult` roots include solution capacities and outer descriptor
+banks; they are separate owners, not implicitly part of the workspace. Borrowed input/output slices are never implicitly
 charged. Root values themselves are inline, not separate heap allocations.
 
 The report has two disjoint categories:

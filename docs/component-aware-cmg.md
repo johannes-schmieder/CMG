@@ -65,8 +65,8 @@ Only the explicit component builder needs replacing there; the existing solver
 continues to own the same executor and lazy plan. Do not build a second plan or
 pool beside that solver. Report the solver, caller-buffer bank and prepared
 parents together; the solver's executor makes the uncovered runtime scope
-visible. Fereg's owned-result route also needs its returned result bank counted
-outside the workspace report.
+visible. Fereg's owned-result route also needs its returned `PcgResult` bank or
+`ParallelPcgBatchResult` included as a root, outside the workspace report.
 
 When its existing policy needs a plan, query
 `solver.plan_construction_allocation_bound()` and initialize with

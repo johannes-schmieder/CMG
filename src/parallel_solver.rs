@@ -121,6 +121,8 @@ pub struct ParallelPcgBatchResult {
     report: ParallelPcgBatchReport,
 }
 
+crate::storage::storage_fields!(ParallelPcgBatchResult, results);
+
 impl ParallelPcgBatchResult {
     /// Borrow results in input order.
     #[must_use]

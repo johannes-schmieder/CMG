@@ -79,6 +79,42 @@ fn report(roots: &[&dyn CmgStorage]) -> usize {
 }
 
 #[test]
+fn owned_solution_banks_include_outer_spare_capacity() {
+    let graph = Laplacian::from_edges(17, (1..17).map(|v| (v - 1, v, 1.0))).unwrap();
+    let pre = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
+    let mut rhs = [0.0; 17];
+    rhs[0] = 1.0;
+    rhs[16] = -1.0;
+    let mut bank = Vec::with_capacity(7);
+    for _ in 0..3 {
+        bank.push(solve_pcg(&graph, &pre, &rhs, PcgOptions::default()).unwrap());
+    }
+    assert_eq!(
+        report(&[&bank]),
+        bank.capacity() * std::mem::size_of::<PcgResult>() + 3 * 17 * 8
+    );
+    assert_eq!(report(&[&bank, &bank[0]]), report(&[&bank]));
+    #[cfg(feature = "parallel")]
+    {
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        let solver =
+            ParallelPcgSolver::from_preconditioner(pre, executor, ParallelPcgPolicy::default())
+                .unwrap();
+        let batch = solver
+            .solve_batch(&[rhs.to_vec(), rhs.to_vec()], PcgOptions::default())
+            .unwrap();
+        let observed = report(&[&batch]);
+        let results = batch.into_results();
+        assert_eq!(observed, report(&[&results]));
+        assert!(observed >= 2 * (std::mem::size_of::<PcgResult>() + 17 * 8));
+    }
+}
+
+#[test]
 fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
     let graph = Laplacian::from_edges(64, (1..64).map(|i| (i - 1, i, 1.0))).unwrap();
     let bound = CsrLaplacian::construction_allocation_bound(64, 63).unwrap();

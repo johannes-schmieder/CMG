@@ -653,6 +653,8 @@ pub struct PcgResult {
     rhs_projection_norm: f64,
 }
 
+crate::storage::storage_fields!(PcgResult, solution);
+
 impl PcgResult {
     /// Return the certified solution.
     #[must_use]
