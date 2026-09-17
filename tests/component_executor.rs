@@ -267,7 +267,14 @@ fn dyadic_weak_bridge_matches_independent_resistance_oracle() {
                     &rhs,
                     None,
                     &mut solution,
-                    PcgOptions::default(),
+                    PcgOptions {
+                        // This oracle requires an RHS-scaled residual, not the
+                        // default backward error (which grows with ||x||).
+                        // Keep both independently frozen accuracy gates below.
+                        relative_tolerance: 0.0,
+                        absolute_tolerance: RESIDUAL_LIMIT,
+                        ..Default::default()
+                    },
                     &mut workspace,
                     &executor,
                 )

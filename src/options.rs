@@ -91,6 +91,14 @@ impl CmgOptions {
 }
 
 /// Options for certified preconditioned conjugate gradients.
+///
+/// Acceptance uses `absolute_tolerance + relative_tolerance *
+/// (||b||₂ + operator_norm_bound * ||x||₂)`. The relative term is a backward
+/// error criterion, not a coefficient-error guarantee or an RHS-relative
+/// residual limit. For a fixed positive residual limit, set
+/// `relative_tolerance` to zero and `absolute_tolerance` to that limit. This
+/// retains the fresh original-system certificate and may require more work or
+/// fail to converge when the requested limit is below the arithmetic floor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PcgOptions {
     /// Relative backward-residual tolerance.
