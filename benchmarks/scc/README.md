@@ -61,6 +61,10 @@ compatibility check. Its receipt is `STORAGE_API_VALIDATION_SUCCESS`, explicitly
 not full solver qualification. It neither invokes nor disables the separately
 failing accuracy oracle, and it performs no performance measurements. Rust
 1.85.0 itself is not tested by this patch-version compatibility lane.
+When separately authorized, `storage-screen` adds the unchanged four-case
+development screen in the same allocation (deploy with the reference archive).
+Its timing evidence never overrides an independent accuracy failure or turns
+the targeted storage receipt into full solver qualification.
 
 Start from a clean local checkout:
 

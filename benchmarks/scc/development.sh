@@ -6,7 +6,7 @@ root=/projectnb/welfgr/cmg-benchmarks
 run_id=${1:?}
 mode=${2:?}
 [[ "$run_id" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{7,40}-b2v1-development$ ]]
-[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen || "$mode" == oracle || "$mode" == storage ]]
+[[ "$mode" == shutdown || "$mode" == integration || "$mode" == screen || "$mode" == oracle || "$mode" == storage || "$mode" == storage-screen ]]
 run="$root/runs/$run_id"
 mkdir "$run/work/development-started"
 sha=$(cat "$run/manifests/source-commit.txt")
@@ -36,7 +36,7 @@ step() {
 }
 step fmt cargo fmt --all -- --check
 step clippy cargo clippy --locked --offline --all-features --all-targets -- -D warnings
-if [[ "$mode" == storage ]]; then
+if [[ "$mode" == storage || "$mode" == storage-screen ]]; then
     # Targeted allocation API checks only. A separate failed accuracy oracle
     # remains enabled; this mode does not claim full solver qualification.
     step storage-minimal cargo test --locked --offline --test storage_accounting -- --nocapture
@@ -44,6 +44,9 @@ if [[ "$mode" == storage ]]; then
     step storage-release cargo test --locked --offline --release --all-features --test storage_accounting -- --nocapture
     step docs env RUSTDOCFLAGS=-Dwarnings cargo doc --locked --offline --no-deps --all-features
     step msrv cargo +1.85.1 check --locked --offline --all-features --all-targets
+    if [[ "$mode" == storage-screen ]]; then
+        step screen bash "$code/benchmarks/scc/ownership_screen.sh" "$run"
+    fi
     find "$CARGO_TARGET_DIR" -type f -perm -0100 -print0 | sort -z | xargs -0 sha256sum > "$run/manifests/development-artifacts.sha256"
     sha256sum --status -c "$run/manifests/source-files-sha256.txt"
     printf 'source=%s\njob=%s\nmode=%s\nscope=targeted allocation APIs, not solver qualification\n' "$sha" "$JOB_ID" "$mode" > "$run/receipts/STORAGE_API_VALIDATION_SUCCESS"
