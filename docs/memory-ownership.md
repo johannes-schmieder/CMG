@@ -372,6 +372,41 @@ alternative was removed to simplify the inventory.
 
 ## Runtime scope and lifetime
 
+### Optional estimated-runtime policy
+
+Callers may explicitly accept engineering headroom instead of a certified
+runtime bound. `ParallelRuntimeAllowance::default()` charges 32 MiB per pool
+plus 2 MiB per worker for runtime heap, and 8 MiB per worker for stacks. These
+are initial, configurable rules of thumb, not calibrated empirical bounds.
+`allowance.estimate(options)` separates known join-handle layouts, heuristic
+runtime heap and requested stacks, with checked arithmetic. At 16 workers the
+heap-plus-stack allowance is 192 MiB, plus the small known handle bank.
+
+`ParallelExecutor::new_with_estimated_memory_budget(options, allowance, budget)`
+checks that total before pool/handle allocation and returns `(executor, estimate)`.
+It fixes an auto-detected worker count once and explicitly requests
+`allowance.worker_stack_bytes` for every worker. This overrides the platform or
+`RUST_MIN_STACK` default for this constructor only: set a larger explicit value
+if the application requires larger stacks. Native rounding, guard pages, TLS,
+allocator caches and actual residency still require whole-process headroom.
+It installs no hard allocator cap and makes no promise to prevent OOM.
+
+Keep the returned estimate with the owning solver's memory-policy metadata.
+Before creating a new pool, charge its entire `total_bytes()`. Once its handles
+are included in a `CmgStorageReport`, add only the separate runtime-heap and
+stack allowances; otherwise the handle bank is counted twice. Do not also add
+a host's charge for these same worker stacks. Charge two live pools separately;
+reuse a pool where possible, and keep allowance charged through joined shutdown.
+Process-global deferred garbage may survive retirement, so retain process
+headroom and check representative long-running workloads, not just one pool.
+
+The strict constructor and `runtime_allocation_bound()` are unchanged and still
+reject/return `None`. `runtime_heap_unbounded()` stays true even for an estimated
+pool: reporting does not disguise uncertainty. Applications choosing this
+explicit estimated policy can proceed without a bounded-executor rewrite,
+subject to numerical/integration testing and observed process memory. Ordinary
+construction/default routing do not automatically opt into the policy.
+
 The lockfile pins Rayon 1.12.0, rayon-core 1.13.0, crossbeam-deque 0.8.7,
 crossbeam-epoch 0.9.20 and crossbeam-utils 0.8.22. Rayon creates worker and
 broadcast deques, registry/thread descriptors, sleep state and an injector.

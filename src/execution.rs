@@ -70,6 +70,111 @@ impl ParallelOptions {
     }
 }
 
+/// Explicit engineering allowances for an estimated-runtime policy.
+///
+/// These are configurable planning headroom, NOT measured usage, proved bounds
+/// or allocator limits. Defaults are 32 MiB per pool, 2 MiB heap per worker and
+/// 8 MiB requested stack per worker. Keep whole-process headroom separately.
+#[cfg(feature = "parallel")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelRuntimeAllowance {
+    /// Pool-wide runtime heap allowance in bytes.
+    pub pool_heap_bytes: usize,
+    /// Additional runtime heap allowance per worker in bytes.
+    pub worker_heap_bytes: usize,
+    /// Requested stack size per worker; must be positive. The estimated
+    /// constructor sets this explicitly, overriding the platform/RUST_MIN_STACK
+    /// default. Choose a larger value if the calling application requires it.
+    pub worker_stack_bytes: usize,
+}
+
+#[cfg(feature = "parallel")]
+impl Default for ParallelRuntimeAllowance {
+    fn default() -> Self {
+        Self {
+            pool_heap_bytes: 32 * 1024 * 1024,
+            worker_heap_bytes: 2 * 1024 * 1024,
+            worker_stack_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
+
+/// A checked planning estimate, separating known handle layouts from heuristic
+/// runtime heap and requested thread stacks. This never certifies runtime bytes.
+#[cfg(feature = "parallel")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParallelRuntimeEstimate {
+    threads: usize,
+    worker_handles_bytes: usize,
+    runtime_heap_allowance_bytes: usize,
+    worker_stack_allowance_bytes: usize,
+    total_bytes: usize,
+}
+
+#[cfg(feature = "parallel")]
+impl ParallelRuntimeEstimate {
+    /// Resolved worker count used by this estimate.
+    pub const fn threads(self) -> usize {
+        self.threads
+    }
+    /// CMG-owned handle-bank layouts. Already included when an executor or its
+    /// owning solver is measured with CmgStorageReport; do not count twice.
+    pub const fn worker_handles_bytes(self) -> usize {
+        self.worker_handles_bytes
+    }
+    /// Heuristic runtime heap headroom, excluding the known handle bank.
+    pub const fn runtime_heap_allowance_bytes(self) -> usize {
+        self.runtime_heap_allowance_bytes
+    }
+    /// Sum of requested worker stack sizes. OS rounding/guard pages and actual
+    /// residency are not certified. Do not add another host stack charge.
+    pub const fn worker_stack_allowance_bytes(self) -> usize {
+        self.worker_stack_allowance_bytes
+    }
+    /// Checked total of handle layouts and both allowances, used before startup.
+    pub const fn total_bytes(self) -> usize {
+        self.total_bytes
+    }
+}
+
+#[cfg(feature = "parallel")]
+impl ParallelRuntimeAllowance {
+    /// Compute a checked planning estimate without starting workers. A zero
+    /// thread request is resolved here; constructor admission uses that same
+    /// resolved count rather than detecting available parallelism a second time.
+    pub fn estimate(self, options: ParallelOptions) -> Result<ParallelRuntimeEstimate, CmgError> {
+        let threads = options.validate()?.resolved_threads();
+        if self.worker_stack_bytes == 0 {
+            return Err(CmgError::InvalidOption {
+                name: "worker_stack_bytes",
+                value: 0.0,
+            });
+        }
+        let multiply = |bytes: usize| {
+            bytes
+                .checked_mul(threads)
+                .ok_or(CmgError::AllocationFailed {
+                    context: "runtime allowance overflows",
+                })
+        };
+        let worker_handles_bytes = crate::storage::bytes::<std::thread::JoinHandle<()>>(threads)?;
+        let runtime_heap_allowance_bytes =
+            crate::storage::add(self.pool_heap_bytes, multiply(self.worker_heap_bytes)?)?;
+        let worker_stack_allowance_bytes = multiply(self.worker_stack_bytes)?;
+        let total_bytes = crate::storage::add(
+            worker_handles_bytes,
+            crate::storage::add(runtime_heap_allowance_bytes, worker_stack_allowance_bytes)?,
+        )?;
+        Ok(ParallelRuntimeEstimate {
+            threads,
+            worker_handles_bytes,
+            runtime_heap_allowance_bytes,
+            worker_stack_allowance_bytes,
+            total_bytes,
+        })
+    }
+}
+
 /// A reusable package-owned Rayon thread pool.
 ///
 /// This type is available only with the `parallel` Cargo feature. It never
@@ -119,30 +224,65 @@ impl ParallelExecutor {
         crate::storage::admit(required, budget_bytes)?;
         Self::new(options)
     }
+
+    /// Explicitly admit an ESTIMATE before worker/handle allocation, returning
+    /// the charged estimate for reporting. This is not strict runtime admission
+    /// and installs no allocator cap. Requests the allowance's worker stack
+    /// size explicitly; the ordinary constructor's stack policy is unchanged.
+    pub fn new_with_estimated_memory_budget(
+        mut options: ParallelOptions,
+        allowance: ParallelRuntimeAllowance,
+        budget_bytes: usize,
+    ) -> Result<(Self, ParallelRuntimeEstimate), CmgError> {
+        let estimate = allowance.estimate(options)?;
+        crate::storage::admit(estimate.total_bytes(), budget_bytes)?;
+        options.threads = estimate.threads();
+        let executor = Self::with_spawn_and_stack_size(
+            options,
+            Some(allowance.worker_stack_bytes),
+            Self::spawn_worker,
+        )?;
+        Ok((executor, estimate))
+    }
+
     /// Construct an isolated thread pool with the requested execution policy.
     pub fn new(options: ParallelOptions) -> Result<Self, CmgError> {
-        Self::with_spawn(options, |thread| {
-            let mut builder = std::thread::Builder::new();
-            if let Some(name) = thread.name() {
-                builder = builder.name(name.to_owned());
-            }
-            if let Some(size) = thread.stack_size() {
-                builder = builder.stack_size(size);
-            }
-            builder.spawn(|| thread.run())
-        })
+        Self::with_spawn(options, Self::spawn_worker)
+    }
+
+    fn spawn_worker(thread: rayon::ThreadBuilder) -> std::io::Result<std::thread::JoinHandle<()>> {
+        let mut builder = std::thread::Builder::new();
+        if let Some(name) = thread.name() {
+            builder = builder.name(name.to_owned());
+        }
+        if let Some(size) = thread.stack_size() {
+            builder = builder.stack_size(size);
+        }
+        builder.spawn(|| thread.run())
     }
 
     fn with_spawn(
         options: ParallelOptions,
+        spawn: impl FnMut(rayon::ThreadBuilder) -> std::io::Result<std::thread::JoinHandle<()>>,
+    ) -> Result<Self, CmgError> {
+        Self::with_spawn_and_stack_size(options, None, spawn)
+    }
+
+    fn with_spawn_and_stack_size(
+        options: ParallelOptions,
+        stack_size: Option<usize>,
         mut spawn: impl FnMut(rayon::ThreadBuilder) -> std::io::Result<std::thread::JoinHandle<()>>,
     ) -> Result<Self, CmgError> {
         let options = options.validate()?;
         let threads = options.resolved_threads();
         let mut workers = JoinedWorkers::new(threads)?;
-        let pool = rayon::ThreadPoolBuilder::new()
+        let mut builder = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
-            .thread_name(|index| format!("cmg-worker-{index}"))
+            .thread_name(|index| format!("cmg-worker-{index}"));
+        if let Some(size) = stack_size {
+            builder = builder.stack_size(size);
+        }
+        let pool = builder
             .spawn_handler(|thread| {
                 workers.handles.push(spawn(thread)?);
                 Ok(())
@@ -329,6 +469,35 @@ mod lifetime_tests {
                 })
             },
         )
+    }
+
+    #[test]
+    fn explicit_stack_request_reaches_spawn_and_partial_startup_joins() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut started = 0;
+        let result = ParallelExecutor::with_spawn_and_stack_size(
+            ParallelOptions {
+                threads: 4,
+                ..Default::default()
+            },
+            Some(8 * 1024 * 1024),
+            |thread| {
+                assert_eq!(thread.stack_size(), Some(8 * 1024 * 1024));
+                if started == 2 {
+                    return Err(std::io::Error::other("injected startup failure"));
+                }
+                started += 1;
+                let completed = Arc::clone(&completed);
+                std::thread::Builder::new()
+                    .stack_size(thread.stack_size().unwrap())
+                    .spawn(move || {
+                        EXIT.with(|slot| *slot.borrow_mut() = Some(Exit(completed)));
+                        thread.run();
+                    })
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
     }
 
     #[test]

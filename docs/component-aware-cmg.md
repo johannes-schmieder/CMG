@@ -22,6 +22,15 @@ construction and terminal factors remain serial, as in the ordinary builder.
 It creates neither an additional worker pool nor a preliminary hierarchy.
 The intended explicit options remain:
 
+For the practical estimated-runtime policy, construct one executor using
+`ParallelRuntimeAllowance::default().estimate(parallel_options)` followed by
+`ParallelExecutor::new_with_estimated_memory_budget`. Retain the returned
+estimate alongside the solver, keeping heuristic heap/stack allowances separate
+from CMG-owned capacity reports. This is an explicit alternative to strict
+runtime admission, not a new default or a claim of bounded Rayon storage.
+The [ownership guide](memory-ownership.md#optional-estimated-runtime-policy)
+documents stack configuration and how to avoid double counting.
+
 ```rust
 # #[cfg(all(feature = "parallel", feature = "experimental-components"))]
 # fn example(graph: &cmg::Laplacian, executor: &cmg::ParallelExecutor) -> Result<(), cmg::CmgError> {

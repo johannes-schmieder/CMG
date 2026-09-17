@@ -49,9 +49,9 @@ pub use component_portfolio::{
 pub use components::Components;
 pub use csr::CsrLaplacian;
 pub use error::CmgError;
-#[cfg(feature = "parallel")]
-pub use execution::ParallelExecutor;
 pub use execution::ParallelOptions;
+#[cfg(feature = "parallel")]
+pub use execution::{ParallelExecutor, ParallelRuntimeAllowance, ParallelRuntimeEstimate};
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };

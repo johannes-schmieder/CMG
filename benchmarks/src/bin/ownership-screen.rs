@@ -192,6 +192,21 @@ fn build_pre(
     }
 }
 
+fn build_executor(options: ParallelOptions) -> ParallelExecutor {
+    #[cfg(feature = "candidate-screen")]
+    {
+        let allowance = ParallelRuntimeAllowance::default();
+        let budget = allowance.estimate(options).unwrap().total_bytes();
+        ParallelExecutor::new_with_estimated_memory_budget(options, allowance, budget)
+            .unwrap()
+            .0
+    }
+    #[cfg(not(feature = "candidate-screen"))]
+    {
+        ParallelExecutor::new(options).unwrap()
+    }
+}
+
 // Frozen additive development case: discard a backward-certified multilevel
 // attempt that fails the caller's stronger residual gate, retire all its owned
 // state, and rebuild a direct alternative. This driver, not CMG/fereg routing,
@@ -256,7 +271,7 @@ fn fallback_screen(input_dir: Option<&str>) {
             let base = live();
             begin_peak();
             let start = Instant::now();
-            let executor = ParallelExecutor::new(execution).unwrap();
+            let executor = build_executor(execution);
             let pre = build_pre(&graph, component, &executor, 8);
             let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
             let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
@@ -289,7 +304,7 @@ fn fallback_screen(input_dir: Option<&str>) {
             let after_discard = live() - base;
 
             let preparing = Instant::now();
-            let executor = ParallelExecutor::new(execution).unwrap();
+            let executor = build_executor(execution);
             let pre = build_pre(&graph, component, &executor, N + 1);
             let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
             let setup = preparing.elapsed().as_nanos();
@@ -376,13 +391,12 @@ fn main() {
                 let base = live();
                 begin_peak();
                 let start = Instant::now();
-                let executor = ParallelExecutor::new(ParallelOptions {
+                let executor = build_executor(ParallelOptions {
                     threads,
                     min_parallel_len: 1,
                     reduction_chunk_size: 256,
                     ..Default::default()
-                })
-                .unwrap();
+                });
                 let pre = build_pre(&graph, component, &executor, 64);
                 let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
                 let setup = start.elapsed().as_nanos();

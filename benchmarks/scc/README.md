@@ -64,6 +64,16 @@ separately from the original-policy screen. The helper's `admitted-screen`
 feature implies `candidate-screen` and `serial-setup-screen`; it is a harness
 feature, not a library policy. No timing is accepted before numerical identity
 and all enabled accuracy gates pass.
+`integration-screen` also runs `screen-parallel-admitted`: both sides use the
+final source and executor-aware setup, comparing legacy versus fixed-bank
+CMG-owned admission. It has the same 20 configurations and separate artifacts.
+Candidate builds in all lanes now opt into the estimated-runtime constructor:
+32 MiB per pool + 2 MiB heap allowance per worker, with explicitly requested
+8 MiB worker stacks. The same-source lane uses this policy on both sides;
+upstream baselines keep their original stack configuration. This makes the
+policy change visible in timing/provenance rather than implying unchanged
+thread resources. These allowances are not measured usage or certified bounds.
+
 Deploy with the reference archive. A failing accuracy test stops the job;
 timings cannot override it. Keep the historical default-policy bridge diagnosis
 separate from the explicit absolute-residual regression described in

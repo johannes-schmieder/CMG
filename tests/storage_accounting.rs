@@ -79,6 +79,91 @@ fn report(roots: &[&dyn CmgStorage]) -> usize {
 }
 
 #[test]
+#[cfg(feature = "parallel")]
+fn estimated_runtime_budget_is_explicit_checked_and_not_a_strict_bound() {
+    let mib = 1024 * 1024;
+    let allowance = ParallelRuntimeAllowance::default();
+    let options = ParallelOptions {
+        threads: 16,
+        ..Default::default()
+    };
+    let estimate = allowance.estimate(options).unwrap();
+    assert_eq!(estimate.threads(), 16);
+    assert_eq!(estimate.runtime_heap_allowance_bytes(), 64 * mib);
+    assert_eq!(estimate.worker_stack_allowance_bytes(), 128 * mib);
+    assert_eq!(
+        estimate.total_bytes(),
+        192 * mib + estimate.worker_handles_bytes()
+    );
+    let calls = CALLS.with(Cell::get);
+    assert!(matches!(
+        ParallelExecutor::new_with_estimated_memory_budget(
+            options,
+            allowance,
+            estimate.total_bytes() - 1,
+        ),
+        Err(CmgError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(
+        CALLS.with(Cell::get),
+        calls,
+        "short runtime estimate spawned/allocated"
+    );
+    for threads in [1, 4, 2, 1] {
+        let options = ParallelOptions { threads, ..options };
+        let expected = allowance.estimate(options).unwrap();
+        let (executor, charged) = ParallelExecutor::new_with_estimated_memory_budget(
+            options,
+            allowance,
+            expected.total_bytes(),
+        )
+        .unwrap();
+        assert_eq!(charged, expected);
+        assert_eq!(executor.thread_count(), threads);
+        let measured = CmgStorageReport::measure(&[&executor]).unwrap();
+        assert!(measured.runtime_heap_unbounded());
+        assert_eq!(
+            measured.total_bytes().unwrap(),
+            charged.worker_handles_bytes()
+        );
+        drop(executor);
+    }
+    FAIL.with(|fail| fail.set(Some(0)));
+    let result = ParallelExecutor::new_with_estimated_memory_budget(
+        options,
+        allowance,
+        estimate.total_bytes(),
+    );
+    FAIL.with(|fail| fail.set(None));
+    assert!(matches!(result, Err(CmgError::AllocationFailed { .. })));
+    for allowance in [
+        ParallelRuntimeAllowance {
+            pool_heap_bytes: usize::MAX,
+            ..allowance
+        },
+        ParallelRuntimeAllowance {
+            worker_heap_bytes: usize::MAX,
+            ..allowance
+        },
+        ParallelRuntimeAllowance {
+            worker_stack_bytes: usize::MAX,
+            ..allowance
+        },
+        ParallelRuntimeAllowance {
+            worker_stack_bytes: 0,
+            ..allowance
+        },
+    ] {
+        assert!(allowance.estimate(options).is_err());
+    }
+    assert_eq!(ParallelExecutor::runtime_allocation_bound(), None);
+    assert!(ParallelExecutor::new_with_memory_budget(options, usize::MAX).is_err());
+    println!(
+        "ESTIMATED_RUNTIME_POLICY_SUCCESS exact_short_overflow_retirement=true strict_coverage=false"
+    );
+}
+
+#[test]
 fn owned_solution_banks_include_outer_spare_capacity() {
     let graph = Laplacian::from_edges(17, (1..17).map(|v| (v - 1, v, 1.0))).unwrap();
     let pre = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();

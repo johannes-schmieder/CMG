@@ -100,6 +100,8 @@ record = {
     "source": source,
     "baseline": source if same_source else (run / "manifests/screen-reference/source.txt").read_text().strip(),
     "both_variants_join_workers": same_source,
+    "candidate_runtime_policy": "estimated: 32 MiB per pool + 2 MiB heap and explicit 8 MiB stack per worker; not a bound",
+    "baseline_runtime_policy": "same estimated policy as candidate" if same_source else "legacy unbudgeted pool and default stack size",
     "pairs": 140,
     "numerical_fields_identical": True,
     "scope": "Seven alternating process pairs; unpinned shared-host development evidence, not component promotion or complete-command fereg evidence. Allocation runs are separate. Original four cases unchanged; added caller-rejected multilevel attempt followed by complete retirement and direct rebuild. Only the added fallback total includes all solver-owned cleanup. Runtime allocation observations are not admission proofs. " + ("Both variants join workers." if same_source else "Baseline pool drop does not wait for workers; candidate drop does."),
