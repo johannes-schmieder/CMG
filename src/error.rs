@@ -6,6 +6,8 @@ use core::fmt;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum CmgError {
+    /// The optional iteration poll requested cancellation.
+    Interrupted,
     /// A vector or matrix dimension did not match the expected dimension.
     DimensionMismatch {
         /// Context in which the mismatch occurred.
@@ -177,6 +179,7 @@ impl CmgError {
 impl fmt::Display for CmgError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Interrupted => formatter.write_str("PCG solve interrupted"),
             Self::DimensionMismatch {
                 context,
                 expected,

@@ -763,7 +763,7 @@ pub fn solve_pcg_with_workspace(
         None,
         options,
         workspace,
-        GraphCompatibility::Exact,
+        GraphCompatibility::Exact.into(),
     )?;
     Ok(result_from_diagnostics(
         workspace.solution.clone(),
@@ -784,6 +784,34 @@ pub fn solve_pcg_into_with_workspace(
     options: PcgOptions,
     workspace: &mut PcgWorkspace,
 ) -> Result<PcgDiagnostics, CmgError> {
+    solve_pcg_into_with_workspace_and_poll(
+        graph,
+        preconditioner,
+        rhs,
+        initial_guess,
+        solution,
+        options,
+        workspace,
+        None,
+    )
+}
+
+/// Solve into caller storage with an optional cooperative cancellation poll.
+///
+/// The poll runs before initialization and each scalar PCG iteration on the
+/// executing thread. False returns [`CmgError::Interrupted`], leaves `solution`
+/// unchanged, and permits workspace reuse. Thread-bound host APIs need a relay.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_pcg_into_with_workspace_and_poll(
+    graph: &Laplacian,
+    preconditioner: &CmgPreconditioner,
+    rhs: &[f64],
+    initial_guess: Option<&[f64]>,
+    solution: &mut [f64],
+    options: PcgOptions,
+    workspace: &mut PcgWorkspace,
+    poll: Option<&(dyn Fn() -> bool + Sync)>,
+) -> Result<PcgDiagnostics, CmgError> {
     if solution.len() != graph.vertex_count() {
         return Err(CmgError::dimension(
             "solve_pcg_into solution",
@@ -798,7 +826,10 @@ pub fn solve_pcg_into_with_workspace(
         initial_guess,
         options,
         workspace,
-        GraphCompatibility::Exact,
+        PcgControl {
+            compatibility: GraphCompatibility::Exact,
+            poll,
+        },
     )?;
     solution.copy_from_slice(&workspace.solution);
     Ok(diagnostics)
@@ -833,10 +864,35 @@ pub fn solve_pcg_with_retained_preconditioner_into_with_workspace(
         initial_guess,
         options,
         workspace,
-        GraphCompatibility::PreparedTopology,
+        GraphCompatibility::PreparedTopology.into(),
     )?;
     solution.copy_from_slice(&workspace.solution);
     Ok(diagnostics)
+}
+
+#[derive(Clone, Copy)]
+struct PcgControl<'a> {
+    compatibility: GraphCompatibility,
+    poll: Option<&'a (dyn Fn() -> bool + Sync)>,
+}
+
+impl From<GraphCompatibility> for PcgControl<'_> {
+    fn from(compatibility: GraphCompatibility) -> Self {
+        Self {
+            compatibility,
+            poll: None,
+        }
+    }
+}
+
+impl PcgControl<'_> {
+    fn check(self) -> Result<(), CmgError> {
+        if self.poll.is_some_and(|poll| !poll()) {
+            Err(CmgError::Interrupted)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -852,7 +908,7 @@ fn solve_pcg_core(
     initial_guess: Option<&[f64]>,
     options: PcgOptions,
     workspace: &mut PcgWorkspace,
-    compatibility: GraphCompatibility,
+    control: PcgControl<'_>,
 ) -> Result<PcgDiagnostics, CmgError> {
     // Choose one monomorphized loop at entry; connected solves keep the original
     // centering and dot-product call sequence throughout their iterations.
@@ -865,7 +921,7 @@ fn solve_pcg_core(
             initial_guess,
             options,
             workspace,
-            compatibility,
+            control,
         );
     }
     solve_pcg_core_kernel::<false>(
@@ -875,7 +931,7 @@ fn solve_pcg_core(
         initial_guess,
         options,
         workspace,
-        compatibility,
+        control,
     )
 }
 
@@ -886,17 +942,18 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
     initial_guess: Option<&[f64]>,
     options: PcgOptions,
     workspace: &mut PcgWorkspace,
-    compatibility: GraphCompatibility,
+    control: PcgControl<'_>,
 ) -> Result<PcgDiagnostics, CmgError> {
+    control.check()?;
     let options = options.validate()?;
     let dimension = graph.vertex_count();
-    let compatible = match compatibility {
+    let compatible = match control.compatibility {
         GraphCompatibility::Exact => preconditioner.matches_graph(graph),
         GraphCompatibility::PreparedTopology => preconditioner.matches_prepared_topology(graph),
     };
     if !compatible {
         return Err(CmgError::InvalidHierarchy {
-            context: match compatibility {
+            context: match control.compatibility {
                 GraphCompatibility::Exact => {
                     "PCG graph differs from the preconditioner's finest graph"
                 }
@@ -1018,6 +1075,7 @@ fn solve_pcg_core_kernel<const FUSED_CENTERING: bool>(
     let mut last_tolerance = initial_tolerance;
 
     for iteration in 1..=options.max_iterations {
+        control.check()?;
         graph.matvec_into(&workspace.direction, &mut workspace.matrix_direction)?;
         let direction_curvature = dot(&workspace.direction, &workspace.matrix_direction);
         validate_positive_pcg(iteration, "p^T A p", direction_curvature)?;
@@ -1774,7 +1832,7 @@ pub fn profile_pcg_batch_into_with_workspace(
             guess,
             options,
             pcg,
-            GraphCompatibility::Exact,
+            GraphCompatibility::Exact.into(),
         )?;
         solve_nanoseconds += solve_start.elapsed().as_nanos();
         let scatter_start = Instant::now();
@@ -2209,7 +2267,7 @@ fn solve_batch_item(
         guess,
         options,
         pcg,
-        compatibility,
+        compatibility.into(),
     )
 }
 
@@ -2755,7 +2813,7 @@ mod paired_norm_tests {
                     initial_guess,
                     options,
                     &mut reference_workspace,
-                    GraphCompatibility::Exact,
+                    GraphCompatibility::Exact.into(),
                 )
                 .unwrap();
                 let fused = solve_pcg_core_kernel::<true>(
@@ -2765,7 +2823,7 @@ mod paired_norm_tests {
                     initial_guess,
                     options,
                     &mut fused_workspace,
-                    GraphCompatibility::Exact,
+                    GraphCompatibility::Exact.into(),
                 )
                 .unwrap();
                 assert_eq!(reference, fused);

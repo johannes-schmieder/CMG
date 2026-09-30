@@ -78,8 +78,8 @@ pub use pcg::{
     PcgBatchMut, PcgBatchRef, PcgBatchWorkspace, PcgDiagnostics, PcgResult, PcgWorkspace,
     solve_pcg, solve_pcg_batch, solve_pcg_batch_into_with_workspace,
     solve_pcg_batch_with_retained_preconditioner_into_with_workspace,
-    solve_pcg_into_with_workspace, solve_pcg_with_retained_preconditioner_into_with_workspace,
-    solve_pcg_with_workspace,
+    solve_pcg_into_with_workspace, solve_pcg_into_with_workspace_and_poll,
+    solve_pcg_with_retained_preconditioner_into_with_workspace, solve_pcg_with_workspace,
 };
 #[cfg(feature = "parallel")]
 pub use pcg::{
