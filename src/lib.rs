@@ -92,9 +92,9 @@ pub use pcg::{
 };
 #[cfg(feature = "profiling")]
 pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan};
-pub use preconditioner::CmgPreconditioner;
 #[cfg(feature = "parallel")]
 pub use preconditioner::ParallelCmgPlan;
+pub use preconditioner::{CmgBatchWorkspace, CmgPreconditioner};
 #[cfg(feature = "profiling")]
 pub use preconditioner::{
     HierarchyPhaseProfile, ParallelPlanBuildProfile, ParallelPlanLevelProfile,

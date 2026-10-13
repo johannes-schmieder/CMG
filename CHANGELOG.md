@@ -7,6 +7,12 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Added
 
+- Allocation-free fixed-cycle interleaved multi-RHS applications through
+  `CmgBatchWorkspace` and `apply_compatible_batch_into`, with checked workspace
+  admission, capacity ownership accounting, and optional existing parallel plans.
+  Capacity one retains the scalar path; wider tiles share matrix, transfer and
+  factor traversals and use serial compensated coarse sums, whose rounding may
+  differ from scalar parallel chunk reductions. Existing APIs are unchanged.
 - Deterministic stationary CMG preconditioning and certified PCG solves for
   weighted graph Laplacians and SDDM systems.
 - Optional package-owned parallel execution and reusable repeated-right-hand-side

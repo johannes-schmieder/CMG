@@ -80,6 +80,57 @@ enum LowerFactor {
 }
 
 impl LowerFactor {
+    fn batch_correction(
+        &self,
+        row: usize,
+        input: &[f64],
+        columns: usize,
+        forward: bool,
+        sums: &mut [f64],
+    ) {
+        sums.fill(0.0);
+        let mut add_entry = |source: usize, coefficient: f64| {
+            for (lane, value) in sums.iter_mut().enumerate() {
+                *value += coefficient * input[source * columns + lane];
+            }
+        };
+        match self {
+            Self::Packed { values } if forward => {
+                let start = row * row.saturating_sub(1) / 2;
+                for (column, &value) in values[start..start + row].iter().enumerate() {
+                    add_entry(column, value);
+                }
+            }
+            Self::Packed { values } => {
+                let mut index = row * (row + 1) / 2 + row;
+                for later in row + 1..input.len() / columns {
+                    add_entry(later, values[index]);
+                    index += later;
+                }
+            }
+            Self::Sparse {
+                row_offsets,
+                columns,
+                row_values,
+                ..
+            } if forward => {
+                for index in row_offsets[row]..row_offsets[row + 1] {
+                    add_entry(columns[index] as usize, row_values[index]);
+                }
+            }
+            Self::Sparse {
+                column_offsets,
+                rows,
+                column_values,
+                ..
+            } => {
+                for index in column_offsets[row]..column_offsets[row + 1] {
+                    add_entry(rows[index] as usize, column_values[index]);
+                }
+            }
+        }
+    }
+
     fn from_dense(lower: &[Vec<f64>]) -> Result<Self, CmgError> {
         let dimension = lower.len();
         let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
@@ -257,6 +308,59 @@ pub struct GroundedLdl {
 }
 
 impl GroundedLdl {
+    pub(crate) fn solve_batch_compatible(
+        &self,
+        rhs: &[f64],
+        solution: &mut [f64],
+        columns: usize,
+        forward: &mut [f64],
+        factor_solution: &mut [f64],
+    ) {
+        // The output row is temporary correction storage until scattering. This
+        // avoids another allocation and loads each factor entry once per tile.
+        let scratch_len = columns.min(solution.len());
+        let scratch = &mut solution[..scratch_len];
+        let dimension = self.active_dimension();
+        for row in 0..dimension {
+            self.lower
+                .batch_correction(row, forward, columns, true, scratch);
+            for lane in 0..columns {
+                let value = rhs[self.permutation[row] * columns + lane] - scratch[lane];
+                forward[row * columns + lane] = value;
+                #[cfg(feature = "experimental-components")]
+                {
+                    factor_solution[row * columns + lane] = value / self.diagonal[row];
+                }
+            }
+        }
+        #[cfg(not(feature = "experimental-components"))]
+        for row in 0..dimension {
+            for lane in 0..columns {
+                forward[row * columns + lane] /= self.diagonal[row];
+            }
+        }
+        for row in (0..dimension).rev() {
+            self.lower
+                .batch_correction(row, factor_solution, columns, false, scratch);
+            for lane in 0..columns {
+                #[cfg(feature = "experimental-components")]
+                {
+                    factor_solution[row * columns + lane] -= scratch[lane];
+                }
+                #[cfg(not(feature = "experimental-components"))]
+                {
+                    factor_solution[row * columns + lane] =
+                        forward[row * columns + lane] - scratch[lane];
+                }
+            }
+        }
+        solution.fill(0.0);
+        for (row, &vertex) in self.permutation.iter().enumerate() {
+            solution[vertex * columns..(vertex + 1) * columns]
+                .copy_from_slice(&factor_solution[row * columns..(row + 1) * columns]);
+        }
+    }
+
     /// Upper bound on all new requested heap layouts during ordinary terminal
     /// construction, including component discovery, both dense row banks and
     /// simultaneous packed/sparse conversion. Borrowed graph/allocator overhead

@@ -94,6 +94,67 @@ pub struct HierarchyLevel {
 }
 
 impl HierarchyLevel {
+    pub(crate) fn restrict_batch_residual(
+        &self,
+        rhs: &[f64],
+        matrix: &[f64],
+        coarse: &mut [f64],
+        columns: usize,
+    ) -> Result<(), CmgError> {
+        coarse.fill(0.0);
+        let mut restrict = |fine: usize, target: usize| {
+            for lane in 0..columns {
+                coarse[target * columns + lane] +=
+                    rhs[fine * columns + lane] - matrix[fine * columns + lane];
+            }
+        };
+        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
+            context: "batch level has no transfer",
+        })? {
+            LevelTransfer::Full(aggregation) => {
+                for fine in 0..aggregation.fine_dimension() {
+                    restrict(fine, aggregation.label_at(fine));
+                }
+            }
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => {
+                for &(fine, coarse) in transfer.entries() {
+                    restrict(fine as usize, coarse as usize);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prolong_batch_add(
+        &self,
+        coarse: &[f64],
+        fine: &mut [f64],
+        columns: usize,
+    ) -> Result<(), CmgError> {
+        let mut prolong = |source: usize, target: usize| {
+            for lane in 0..columns {
+                fine[target * columns + lane] += coarse[source * columns + lane];
+            }
+        };
+        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
+            context: "batch level has no transfer",
+        })? {
+            LevelTransfer::Full(aggregation) => {
+                for row in 0..aggregation.fine_dimension() {
+                    prolong(aggregation.label_at(row), row);
+                }
+            }
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => {
+                for &(fine, coarse) in transfer.entries() {
+                    prolong(coarse as usize, fine as usize);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Return the graph at this level.
     #[must_use]
     pub const fn graph(&self) -> &Laplacian {

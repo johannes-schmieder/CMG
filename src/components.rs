@@ -187,6 +187,58 @@ pub(crate) struct CenteringPlan {
 }
 
 impl CenteringPlan {
+    pub(crate) fn component_count(&self) -> usize {
+        self.sizes.len()
+    }
+
+    /// Preserve the serial compensated sum order independently in each lane.
+    pub(crate) fn center_batch(
+        &self,
+        values: &mut [f64],
+        columns: usize,
+        sums: &mut [f64],
+        corrections: &mut [f64],
+        means: &mut [f64],
+    ) -> Result<(), CmgError> {
+        sums.fill(0.0);
+        corrections.fill(0.0);
+        for (vertex, row) in values.chunks_exact(columns).enumerate() {
+            let component = match &self.labels {
+                CenteringLabels::Single => 0,
+                CenteringLabels::Compact(labels) => labels[vertex] as usize,
+                CenteringLabels::Native(labels) => labels[vertex],
+            };
+            for (lane, &value) in row.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: vertex,
+                        column: lane,
+                        value,
+                    });
+                }
+                let slot = component * columns + lane;
+                neumaier_add(&mut sums[slot], &mut corrections[slot], value);
+            }
+        }
+        for (component, &size) in self.sizes.iter().enumerate() {
+            for lane in 0..columns {
+                let slot = component * columns + lane;
+                means[slot] = (sums[slot] + corrections[slot]) / size as f64;
+            }
+        }
+        for (vertex, row) in values.chunks_exact_mut(columns).enumerate() {
+            let component = match &self.labels {
+                CenteringLabels::Single => 0,
+                CenteringLabels::Compact(labels) => labels[vertex] as usize,
+                CenteringLabels::Native(labels) => labels[vertex],
+            };
+            for (lane, value) in row.iter_mut().enumerate() {
+                *value -= means[component * columns + lane];
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn try_from_laplacian(graph: &Laplacian) -> Result<Self, CmgError> {
         let Components { labels, sizes, .. } = Components::try_from_endpoints(
             graph.vertex_count(),

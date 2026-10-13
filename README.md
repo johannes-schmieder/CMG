@@ -200,6 +200,46 @@ raw submitted edges, the complete bounded hierarchy, an optional parallel plan,
 and the requested reusable workspace pool. `memory_report` provides exact
 principal retained bytes after construction without changing solver behavior.
 
+### Fixed-cycle multi-RHS applications
+
+Outer Krylov solvers can apply the stationary preconditioner to a small tile of
+component-compatible right-hand sides without starting an inner PCG solve:
+
+```rust
+use cmg::{CmgBatchWorkspace, CmgOptions, CmgPreconditioner, Laplacian};
+
+# fn main() -> Result<(), cmg::CmgError> {
+let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 1.0)])?;
+let cmg = CmgPreconditioner::build(&graph, CmgOptions::default())?;
+let required = CmgBatchWorkspace::allocation_bytes(&cmg, 4)?;
+let mut workspace = CmgBatchWorkspace::try_new(&cmg, 4, required)?;
+// Two columns, vertex-major: [b0(vertex0), b1(vertex0), b0(vertex1), ...].
+let rhs = [1.0, 2.0, 0.0, -1.0, -1.0, -1.0];
+let mut output = [0.0; 6];
+cmg.apply_compatible_batch_into(&rhs, &mut output, 2, &mut workspace)?;
+# Ok(())
+# }
+```
+
+Each application uses its actual column count as the row stride, so the same
+workspace accepts smaller tiles and tails. Sparse matrix, transfer and terminal
+factor passes share their traversal across the columns. `ParallelCmgPlan` offers
+the same `apply_compatible_batch_into` operation with a supplied executor;
+there is no additional pool or per-column CMG-owned allocation. The checked
+workspace budget includes all retained numerical buffers and descriptor banks,
+but excludes the borrowed hierarchy, caller input/output and parallel runtime.
+`CmgStorageReport` includes the new workspace in capacity-based ownership reports.
+
+Callers must supply component-compatible columns: this API does not validate or
+project the fine-level null space. It applies the fixed cycle and its configured
+recursive repeats, without tolerance-based stopping. Capacity one preserves the
+existing scalar workspace and cycle exactly. Larger-capacity tiles use serial
+compensated coarse-component sums independently in each lane, including when a
+parallel plan is supplied; this can differ by rounding from scalar parallel
+chunk reductions. Existing scalar and PCG APIs retain their arithmetic and
+routing. Tile width is a caller resource choice, not an automatic performance
+claim.
+
 ## Validated benchmarks
 
 A current-code qualification on Intel Xeon Gold 6242 nodes compared this crate

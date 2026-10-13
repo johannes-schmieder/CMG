@@ -1,5 +1,8 @@
 //! Stationary recursive CMG preconditioner application.
 
+mod batch;
+pub use batch::CmgBatchWorkspace;
+
 #[cfg(feature = "cycle-profiling")]
 use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
 use crate::components::CenteringPlan;

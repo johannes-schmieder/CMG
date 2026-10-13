@@ -149,6 +149,48 @@ impl PartialEq for CsrLaplacian {
 }
 
 impl CsrLaplacian {
+    #[cfg(feature = "parallel")]
+    pub(crate) fn matvec_batch(
+        &self,
+        input: &[f64],
+        output: &mut [f64],
+        columns: usize,
+        executor: &ParallelExecutor,
+    ) {
+        let row_product = |row: usize, values: &mut [f64]| {
+            values.fill(0.0);
+            let (start, end) = self.row_offsets.bounds(row);
+            for index in start..end {
+                let neighbor = match &self.columns {
+                    ColumnIndices::Compact(indices) => indices[index] as usize,
+                    ColumnIndices::Native(indices) => indices[index],
+                };
+                let weight = self.weights[index];
+                for (lane, value) in values.iter_mut().enumerate() {
+                    *value +=
+                        weight * (input[row * columns + lane] - input[neighbor * columns + lane]);
+                }
+            }
+        };
+        if executor.should_parallel(self.vertex_count) {
+            let rows = executor.work_chunk_len(self.vertex_count);
+            executor.install(|| {
+                output
+                    .par_chunks_mut(rows * columns)
+                    .enumerate()
+                    .for_each(|(block, chunk)| {
+                        for (offset, values) in chunk.chunks_exact_mut(columns).enumerate() {
+                            row_product(block * rows + offset, values);
+                        }
+                    })
+            });
+        } else {
+            for (row, values) in output.chunks_exact_mut(columns).enumerate() {
+                row_product(row, values);
+            }
+        }
+    }
+
     /// Upper bound on new CMG-owned requested layouts during serial CSR
     /// construction. Includes retained arrays and overlapping cursor scratch;
     /// excludes borrowed graph/lineage, allocator overhead and inline roots.
