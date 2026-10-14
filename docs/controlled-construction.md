@@ -216,3 +216,30 @@ Successful arithmetic and faults injected at fixed logical gates must remain
 repeatable. Existing small infallible Arc allocations retain the limitation
 stated above; a caller requiring every runtime allocation to be fallible must
 account for that separately before claiming overlap eligibility.
+
+## Prefix witness scope
+
+The focused Rust 1.85.1 prefix checks exercise three state-machine witnesses:
+non-fitting chunks retain their grant remainder across drain/resume; cap refusal,
+malformed chunks and Break remain distinct; and an executed allocation failure
+has a stable logical identity while a later Break preserves its fatal record.
+The drain witness includes a newer grant followed by drain before the worker
+retries, preventing stale pending state from acknowledging unfinished work.
+
+A separate threaded witness constructs the graph, hierarchy and scalar workspace
+on one retained stack under grants of 257 and 4096 units. Its complete admitted
+operation trace, hierarchy, terminal factor and scalar cycle match the full-grant
+reference. Strict library/controlled-build Clippy and formatting also pass.
+These are construction witnesses, not qualification of a host executor lease,
+P-1 foreground reductions, independent foreground certification or Low-session
+ownership. Those integration properties require their own witnesses.
+
+The successful-run guarantee assumes fixed input and successful allocation
+outcomes. Faults injected at the same logical gate must preserve prescribed
+prefixes and terminal arbitration under schedule perturbation; the host service
+must test that contract across both tasks. Exogenous operating-system OOM may
+occur at a different gate under a different schedule, so identical real-OOM
+routes are not promised. Neither early completion nor a fatal result authorizes
+returning a leased worker early. Drain reaches the issued frontier or an intrinsic
+terminal event; explicit Break may truncate it. The host joins before publishing
+or rolling back and only then transfers worker and candidate ownership.
