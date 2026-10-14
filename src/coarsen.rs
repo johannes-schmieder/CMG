@@ -118,6 +118,36 @@ impl Aggregation {
         })
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn from_forest_labels_controlled(
+        labels: Vec<usize>,
+        aggregate_count: usize,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        let labels = if aggregate_count <= (u32::MAX as usize).saturating_add(1) {
+            meter.allocation(
+                "aggregation compact labels",
+                crate::storage::bytes::<u32>(labels.len())?,
+            )?;
+            let mut compact =
+                crate::storage::try_capacity(labels.len(), "aggregation compact labels")?;
+            for &label in &labels {
+                meter.work("aggregation compact label copy", 16)?;
+                debug_assert!(label < aggregate_count);
+                compact.push(label as u32);
+            }
+            LabelStorage::Compact(compact)
+        } else {
+            LabelStorage::Native(labels)
+        };
+        Ok(Self {
+            labels,
+            native_labels: OnceLock::new(),
+            aggregate_count,
+            sizes: OnceLock::new(),
+        })
+    }
+
     fn from_validated_parts(labels: Vec<usize>, aggregate_count: usize) -> Self {
         let compact_limit = (u32::MAX as usize).saturating_add(1);
         let labels = if aggregate_count <= compact_limit {
@@ -348,6 +378,30 @@ impl Aggregation {
 
     pub(crate) fn contract_admitted(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
         self.contract_impl::<true>(graph)
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn contract_controlled(
+        &self,
+        graph: &Laplacian,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Laplacian, CmgError> {
+        self.validate_contract_graph(graph)?;
+        meter.allocation(
+            "contracted edges",
+            crate::storage::bytes::<Edge>(graph.edge_count())?,
+        )?;
+        let mut coarse_edges =
+            crate::storage::try_capacity(graph.edge_count(), "contracted edges")?;
+        for edge in graph.edges() {
+            meter.work("contracted edge mapping", 64)?;
+            let left = self.label_at(edge.u());
+            let right = self.label_at(edge.v());
+            if left != right {
+                coarse_edges.push(Edge::from_internal_parts(left, right, edge.weight())?);
+            }
+        }
+        Laplacian::from_compact_edges_controlled(self.coarse_dimension(), coarse_edges, meter)
     }
 
     fn contract_impl<const ADMITTED: bool>(
@@ -590,5 +644,63 @@ mod residual_restriction_tests {
         }
         let empty = Aggregation::new(Vec::new(), 0).unwrap();
         empty.restrict_residual_into(&[], &[], &mut []).unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod controlled_aggregation_tests {
+    use super::*;
+    use crate::build_control::{BuildBoundary, BuildDecision, BuildMeter, BuildStopReason};
+
+    #[test]
+    fn controlled_labels_and_contraction_preserve_values_and_stop() {
+        let labels = vec![0, 0, 1, 1, 2, 2, 3, 3, 4];
+        let graph = Laplacian::from_edges(
+            9,
+            [
+                (0, 1, 1.0),
+                (0, 2, 1e16),
+                (1, 3, 1.0),
+                (1, 2, 2.0),
+                (3, 4, 0.5),
+                (5, 7, 3.0),
+                (6, 8, 1.0),
+            ],
+        )
+        .unwrap();
+        let original = graph.clone();
+        let expected = Aggregation::from_forest_labels_admitted(labels.clone(), 5).unwrap();
+        let mut control = |_: BuildBoundary| BuildDecision::Continue;
+        let actual = Aggregation::from_forest_labels_controlled(
+            labels.clone(),
+            5,
+            &mut BuildMeter::new(u64::MAX, &mut control),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        let coarse = actual
+            .contract_controlled(&graph, &mut BuildMeter::new(u64::MAX, &mut control))
+            .unwrap();
+        assert_eq!(coarse, expected.contract_admitted(&graph).unwrap());
+        let mut stop = |_: BuildBoundary| BuildDecision::Interrupted;
+        assert!(matches!(
+            actual.contract_controlled(&graph, &mut BuildMeter::new(u64::MAX, &mut stop)),
+            Err(CmgError::BuildStopped {
+                reason: BuildStopReason::Interrupted,
+                ..
+            })
+        ));
+        assert!(matches!(
+            Aggregation::from_forest_labels_controlled(
+                labels,
+                5,
+                &mut BuildMeter::new(u64::MAX, &mut stop)
+            ),
+            Err(CmgError::BuildStopped {
+                reason: BuildStopReason::Interrupted,
+                ..
+            })
+        ));
+        assert_eq!(graph, original);
     }
 }

@@ -2,6 +2,8 @@
 
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
+#[cfg(feature = "experimental-components")]
+use crate::build_control::BuildMeter;
 use crate::{CmgError, Laplacian, ValidationOptions};
 
 crate::storage::storage_fields!(
@@ -87,6 +89,38 @@ impl ComponentWorkspace {
         })
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn try_new_controlled(
+        component_count: usize,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        Ok(Self {
+            sums: meter.try_filled(component_count, 0.0, "component workspace sums")?,
+            corrections: meter.try_filled(
+                component_count,
+                0.0,
+                "component workspace corrections",
+            )?,
+            scales: meter.try_filled(component_count, 0.0, "component workspace scales")?,
+            scale_corrections: meter.try_filled(
+                component_count,
+                0.0,
+                "component workspace scale corrections",
+            )?,
+            means: meter.try_filled(component_count, 0.0, "component workspace means")?,
+            projection_corrections: meter.try_filled(
+                component_count,
+                0.0,
+                "component workspace projection corrections",
+            )?,
+            representatives: meter.try_filled(
+                component_count,
+                usize::MAX,
+                "component workspace representatives",
+            )?,
+        })
+    }
+
     pub(crate) fn validate(&self, component_count: usize) -> Result<(), CmgError> {
         for (context, actual) in [
             ("ComponentWorkspace sums", self.sums.len()),
@@ -146,6 +180,22 @@ impl CenteringWorkspace {
             sums: try_filled(component_count, 0.0, "centering workspace sums")?,
             corrections: try_filled(component_count, 0.0, "centering workspace corrections")?,
             means: try_filled(component_count, 0.0, "centering workspace means")?,
+        })
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn try_new_controlled(
+        component_count: usize,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        Ok(Self {
+            sums: meter.try_filled(component_count, 0.0, "centering workspace sums")?,
+            corrections: meter.try_filled(
+                component_count,
+                0.0,
+                "centering workspace corrections",
+            )?,
+            means: meter.try_filled(component_count, 0.0, "centering workspace means")?,
         })
     }
 
@@ -264,6 +314,38 @@ impl CenteringPlan {
             sizes,
         })
     }
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn try_from_laplacian_controlled(
+        graph: &Laplacian,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        let Components { labels, sizes, .. } = Components::try_from_endpoints_controlled(
+            graph.vertex_count(),
+            graph.edges().iter().map(|edge| (edge.u(), edge.v())),
+            meter,
+        )?;
+        #[cfg(feature = "experimental-components")]
+        let labels = labels.into_vec();
+        let vertex_count = labels.len();
+        let component_count = sizes.len();
+        let labels = if component_count <= 1 {
+            CenteringLabels::Single
+        } else if component_count <= u32::MAX as usize {
+            let mut compact = meter.try_capacity(labels.len(), "centering compact labels")?;
+            for &label in &labels {
+                meter.work("centering compact labels", 8)?;
+                compact.push(label as u32);
+            }
+            CenteringLabels::Compact(compact)
+        } else {
+            CenteringLabels::Native(labels)
+        };
+        Ok(Self {
+            vertex_count,
+            labels,
+            sizes,
+        })
+    }
     pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
         crate::storage::bytes::<[f64; 3]>(self.sizes.len())
     }
@@ -293,6 +375,14 @@ impl CenteringPlan {
 
     pub(crate) fn try_workspace(&self) -> Result<CenteringWorkspace, CmgError> {
         CenteringWorkspace::try_new(self.sizes.len())
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn try_workspace_controlled(
+        &self,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<CenteringWorkspace, CmgError> {
+        CenteringWorkspace::try_new_controlled(self.sizes.len(), meter)
     }
 
     #[cfg(feature = "parallel")]
@@ -551,6 +641,83 @@ impl Components {
         })
     }
 
+    /// Discover components with bounded work and allocation checkpoints.
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn try_from_endpoints_controlled<I>(
+        vertex_count: usize,
+        endpoints: I,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError>
+    where
+        I: IntoIterator<Item = (usize, usize)>,
+    {
+        let mut parent = meter.try_capacity(vertex_count, "component parents")?;
+        for vertex in 0..vertex_count {
+            meter.work("component parents", 8)?;
+            parent.push(vertex);
+        }
+        for (left, right) in endpoints {
+            meter.work("component union", 32)?;
+            let left_root = find_root_controlled(&mut parent, left, meter)?;
+            let right_root = find_root_controlled(&mut parent, right, meter)?;
+            if left_root != right_root {
+                parent[left_root.max(right_root)] = left_root.min(right_root);
+            }
+        }
+        for vertex in 0..vertex_count {
+            meter.work("component compress", 8)?;
+            parent[vertex] = find_root_controlled(&mut parent, vertex, meter)?;
+        }
+        let mut root_to_label =
+            meter.try_filled(vertex_count, usize::MAX, "component root labels")?;
+        let mut labels = meter.try_filled(vertex_count, 0, "component labels")?;
+        let mut component_count = 0;
+        for vertex in 0..vertex_count {
+            meter.work("component labels", 32)?;
+            let root = parent[vertex];
+            let label = if root_to_label[root] == usize::MAX {
+                let next = component_count;
+                component_count += 1;
+                root_to_label[root] = next;
+                next
+            } else {
+                root_to_label[root]
+            };
+            labels[vertex] = label;
+        }
+        let mut sizes = meter.try_filled(component_count, 0, "component sizes")?;
+        for &label in &labels {
+            meter.work("component sizes", 8)?;
+            sizes[label] += 1;
+        }
+        #[cfg(feature = "experimental-components")]
+        let contiguous = {
+            let mut sorted = true;
+            for pair in labels.windows(2) {
+                meter.work("component contiguous", 8)?;
+                sorted &= pair[0] <= pair[1];
+            }
+            sorted
+        };
+        // An exact-capacity conversion does not allocate or traverse the bank.
+        // Refuse excess allocator capacity rather than hide a shrink/reallocation.
+        #[cfg(feature = "experimental-components")]
+        if labels.capacity() != labels.len() {
+            return Err(CmgError::AllocationFailed {
+                context: "component boxed labels capacity",
+            });
+        }
+        Ok(Self {
+            #[cfg(feature = "experimental-components")]
+            contiguous,
+            #[cfg(not(feature = "experimental-components"))]
+            labels,
+            #[cfg(feature = "experimental-components")]
+            labels: labels.into_boxed_slice(),
+            sizes,
+        })
+    }
+
     /// Return the number of connected components.
     #[must_use]
     pub fn count(&self) -> usize {
@@ -575,6 +742,14 @@ impl Components {
 
     pub(crate) fn try_workspace(&self) -> Result<ComponentWorkspace, CmgError> {
         ComponentWorkspace::try_new(self.count())
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn try_workspace_controlled(
+        &self,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<ComponentWorkspace, CmgError> {
+        ComponentWorkspace::try_new_controlled(self.count(), meter)
     }
 
     #[cfg(feature = "parallel")]
@@ -1108,6 +1283,27 @@ fn neumaier_add(sum: &mut f64, correction: &mut f64, value: f64) {
     *sum = next;
 }
 
+#[cfg(feature = "experimental-components")]
+fn find_root_controlled(
+    parent: &mut [usize],
+    vertex: usize,
+    meter: &mut BuildMeter<'_>,
+) -> Result<usize, CmgError> {
+    let mut root = vertex;
+    while parent[root] != root {
+        meter.work("component root walk", 8)?;
+        root = parent[root];
+    }
+    let mut current = vertex;
+    while parent[current] != current {
+        meter.work("component root compression", 16)?;
+        let next = parent[current];
+        parent[current] = root;
+        current = next;
+    }
+    Ok(root)
+}
+
 fn find_root(parent: &mut [usize], vertex: usize) -> usize {
     let mut root = vertex;
     while parent[root] != root {
@@ -1407,6 +1603,106 @@ mod deterministic_parallel_centering_tests {
                 error,
                 CmgError::NonFiniteMatrixValue { row: 130, .. }
             ));
+        }
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod controlled_component_tests {
+    use super::*;
+    use crate::{BuildBoundary, BuildDecision, BuildStopReason};
+
+    #[test]
+    fn controlled_components_and_centering_match_prepared_paths() {
+        for graph in [
+            Laplacian::from_edges(0, []).unwrap(),
+            Laplacian::from_edges(8, []).unwrap(),
+            Laplacian::from_edges(8, (0..7).map(|v| (v, v + 1, 1.0))).unwrap(),
+            Laplacian::from_edges(8, [(0, 2, 1.0), (1, 3, 1.0), (2, 4, 2.0)]).unwrap(),
+        ] {
+            let mut allow = |_| BuildDecision::Continue;
+            let mut meter = BuildMeter::new(u64::MAX, &mut allow);
+            let controlled = Components::try_from_endpoints_controlled(
+                graph.vertex_count(),
+                graph.edges().iter().rev().map(|edge| (edge.u(), edge.v())),
+                &mut meter,
+            )
+            .unwrap();
+            let expected = Components::try_from_endpoints(
+                graph.vertex_count(),
+                graph.edges().iter().map(|edge| (edge.u(), edge.v())),
+            )
+            .unwrap();
+            assert_eq!(controlled, expected);
+            let actual_plan =
+                CenteringPlan::try_from_laplacian_controlled(&graph, &mut meter).unwrap();
+            let expected_plan = CenteringPlan::try_from_laplacian(&graph).unwrap();
+            assert_eq!(actual_plan, expected_plan);
+            let actual_workspace = controlled.try_workspace_controlled(&mut meter).unwrap();
+            let expected_workspace = expected.try_workspace().unwrap();
+            assert_eq!(actual_workspace.sums, expected_workspace.sums);
+            assert_eq!(actual_workspace.corrections, expected_workspace.corrections);
+            assert_eq!(actual_workspace.scales, expected_workspace.scales);
+            assert_eq!(
+                actual_workspace.scale_corrections,
+                expected_workspace.scale_corrections
+            );
+            assert_eq!(actual_workspace.means, expected_workspace.means);
+            assert_eq!(
+                actual_workspace.projection_corrections,
+                expected_workspace.projection_corrections
+            );
+            assert_eq!(
+                actual_workspace.representatives,
+                expected_workspace.representatives
+            );
+            let actual_workspace = actual_plan.try_workspace_controlled(&mut meter).unwrap();
+            let expected_workspace = expected_plan.try_workspace().unwrap();
+            assert_eq!(actual_workspace.sums, expected_workspace.sums);
+            assert_eq!(actual_workspace.corrections, expected_workspace.corrections);
+            assert_eq!(actual_workspace.means, expected_workspace.means);
+        }
+    }
+
+    #[test]
+    fn controlled_component_root_walk_can_stop_inside_a_chain() {
+        let endpoints = (0..8)
+            .rev()
+            .map(|v| (v, v + 1))
+            .chain([(8, 0)])
+            .collect::<Vec<_>>();
+        let mut boundaries = Vec::new();
+        let mut record = |boundary| {
+            boundaries.push(boundary);
+            BuildDecision::Continue
+        };
+        Components::try_from_endpoints_controlled(
+            9,
+            endpoints.iter().copied(),
+            &mut BuildMeter::new(u64::MAX, &mut record),
+        )
+        .unwrap();
+        let root_walk = boundaries
+            .iter()
+            .filter(|boundary| boundary.phase == "component root walk")
+            .collect::<Vec<_>>();
+        assert!(root_walk.len() >= 8);
+        for boundary in root_walk {
+            let mut seen = 0;
+            let mut stop = |current: BuildBoundary| {
+                assert_eq!(current, boundaries[seen]);
+                seen += 1;
+                if current.chunk_id == boundary.chunk_id {
+                    BuildDecision::Interrupted
+                } else {
+                    BuildDecision::Continue
+                }
+            };
+            assert!(
+                matches!(Components::try_from_endpoints_controlled(9, endpoints.iter().copied(), &mut BuildMeter::new(u64::MAX, &mut stop)),
+                Err(CmgError::BuildStopped { reason: BuildStopReason::Interrupted, chunk_id, .. }) if chunk_id == boundary.chunk_id)
+            );
+            assert_eq!(seen as u64, boundary.chunk_id + 1);
         }
     }
 }

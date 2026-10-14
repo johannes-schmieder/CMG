@@ -6,6 +6,17 @@ use core::fmt;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum CmgError {
+    /// A controlled serial construction stopped before its next operation.
+    BuildStopped {
+        /// Caller stop or checked work-budget reason.
+        reason: crate::BuildStopReason,
+        /// Phase containing the unstarted operation.
+        phase: &'static str,
+        /// Ordinal of the unstarted operation.
+        chunk_id: u64,
+        /// Work allowance admitted before stopping.
+        charged_work: u64,
+    },
     /// A vector or matrix dimension did not match the expected dimension.
     DimensionMismatch {
         /// Context in which the mismatch occurred.
@@ -177,6 +188,15 @@ impl CmgError {
 impl fmt::Display for CmgError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::BuildStopped {
+                reason,
+                phase,
+                chunk_id,
+                charged_work,
+            } => write!(
+                formatter,
+                "CMG build stopped ({reason:?}) at {phase} chunk {chunk_id} after {charged_work} work units"
+            ),
             Self::DimensionMismatch {
                 context,
                 expected,

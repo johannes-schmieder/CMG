@@ -855,6 +855,110 @@ impl CmgHierarchy {
         Ok((Self { levels, report }, phase_records))
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn build_component_controlled(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        meter.work("hierarchy initialization", 128)?;
+        let options = options.validate()?;
+        let initial_nonzeros = graph.matrix_nnz();
+        let mut cumulative_nonzeros = 0usize;
+        let mut current = graph.clone();
+        let mut levels = meter.try_capacity(options.max_levels, "hierarchy levels")?;
+        let mut retired_vertices = 0usize;
+        let terminal_reason;
+        loop {
+            meter.work("hierarchy terminal decision", 128)?;
+            let n = current.vertex_count();
+            let decision_n = n + retired_vertices;
+            if n == 0 || decision_n <= 1 || decision_n < options.direct_threshold {
+                terminal_reason = TerminalReason::Direct;
+                let level = make_level_controlled(current, None, 0, Some(terminal_reason), meter)?;
+                meter.work("hierarchy level publication", 32)?;
+                levels.push(level);
+                break;
+            }
+            let (labels, aggregate_count) =
+                crate::forest::build_forest_aggregation_labels_controlled(
+                    &current,
+                    options.low_effective_degree_threshold,
+                    meter,
+                )?;
+            let aggregation =
+                Aggregation::from_forest_labels_controlled(labels, aggregate_count, meter)?;
+            meter.work("hierarchy stopping rules", 128)?;
+            let decision_coarse_count = aggregation.coarse_dimension() + retired_vertices;
+            let terminal = if decision_coarse_count == 1 {
+                Some(TerminalReason::FullContraction)
+            } else {
+                cumulative_nonzeros = cumulative_nonzeros.saturating_add(current.matrix_nnz());
+                if decision_coarse_count >= decision_n.saturating_sub(1) {
+                    Some(TerminalReason::StagnatedVertexReduction)
+                } else if cumulative_nonzeros as f64
+                    > options.max_hierarchy_nnz_factor * initial_nonzeros as f64
+                {
+                    Some(TerminalReason::StagnatedFill)
+                } else if levels.len() + 1 >= options.max_levels {
+                    Some(TerminalReason::MaximumLevels)
+                } else {
+                    None
+                }
+            };
+            if let Some(reason) = terminal {
+                terminal_reason = reason;
+                let level =
+                    make_level_controlled(current, Some(aggregation), 0, Some(reason), meter)?;
+                meter.work("hierarchy level publication", 32)?;
+                levels.push(level);
+                break;
+            }
+            let coarse = aggregation.contract_controlled(&current, meter)?;
+            let (coarse, pruned_transfer) = if experiment.prune_coarse_isolates {
+                match crate::component_experiment::prune_controlled(&aggregation, &coarse, meter)? {
+                    Some((transfer, compact)) => {
+                        meter.work("hierarchy retired vertex count", 32)?;
+                        if experiment.preserve_unpruned_stopping {
+                            retired_vertices += coarse.vertex_count() - compact.vertex_count();
+                        }
+                        (compact, Some(transfer))
+                    }
+                    None => (coarse, None),
+                }
+            } else {
+                (coarse, None)
+            };
+            meter.work("hierarchy repeat count", 32)?;
+            let repeat = repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz());
+            let mut level = make_level_controlled(current, Some(aggregation), repeat, None, meter)?;
+            meter.work("hierarchy level publication", 64)?;
+            if let Some(transfer) = pruned_transfer {
+                level.transfer = Some(LevelTransfer::Pruned(transfer));
+            }
+            levels.push(level);
+            current = coarse;
+        }
+        let mut vertex_counts = meter.try_capacity(levels.len(), "hierarchy vertex report")?;
+        let mut matrix_nonzeros = meter.try_capacity(levels.len(), "hierarchy nonzero report")?;
+        for level in &levels {
+            meter.work("hierarchy report", 32)?;
+            vertex_counts.push(level.graph.vertex_count());
+            matrix_nonzeros.push(level.graph.matrix_nnz());
+        }
+        meter.work("hierarchy publication", 32)?;
+        Ok(Self {
+            levels,
+            report: HierarchyBuildReport {
+                terminal_reason,
+                vertex_counts,
+                matrix_nonzeros,
+                cumulative_coarsened_nonzeros: cumulative_nonzeros,
+            },
+        })
+    }
+
     /// Return all levels from fine to coarse.
     #[must_use]
     pub fn levels(&self) -> &[HierarchyLevel] {
@@ -916,4 +1020,28 @@ fn repeat_from_nonzeros(fine_nonzeros: usize, coarse_nonzeros: usize) -> usize {
         return 1;
     }
     (fine_nonzeros / coarse_nonzeros).saturating_sub(1).max(1)
+}
+
+#[cfg(feature = "experimental-components")]
+fn make_level_controlled(
+    graph: Laplacian,
+    aggregation: Option<Aggregation>,
+    repeat: usize,
+    terminal_reason: Option<TerminalReason>,
+    meter: &mut crate::build_control::BuildMeter<'_>,
+) -> Result<HierarchyLevel, CmgError> {
+    let mut inverse_diagonal =
+        meter.try_capacity(graph.vertex_count(), "hierarchy inverse diagonal")?;
+    for &degree in graph.diagonal() {
+        meter.work("hierarchy inverse diagonal", 16)?;
+        inverse_diagonal.push(if degree > 0.0 { 0.5 / degree } else { 0.0 });
+    }
+    meter.work("hierarchy level finalization", 32)?;
+    Ok(HierarchyLevel {
+        graph,
+        inverse_diagonal,
+        transfer: aggregation.map(LevelTransfer::Full),
+        repeat,
+        terminal_reason,
+    })
 }

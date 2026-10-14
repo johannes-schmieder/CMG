@@ -152,6 +152,76 @@ impl Laplacian {
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
+    /// Build a graph with cooperative cancellation and checked setup budgets.
+    ///
+    /// The borrowed input slice is excluded from `budget_bytes`. The admitted
+    /// bound covers two compact edge buffers, the diagonal and three Arc owners,
+    /// including modeled control blocks. Allocator overhead and latency are not
+    /// bounded. Work is precharged through `control`; a stopped build publishes
+    /// no graph. Canonical ordering and arithmetic match [`Self::from_edges`].
+    pub fn from_edges_controlled(
+        vertex_count: usize,
+        edges: &[(usize, usize, f64)],
+        budget_bytes: usize,
+        work_budget: u64,
+        control: &mut dyn crate::BuildControl,
+    ) -> Result<Self, CmgError> {
+        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
+        meter.work("input graph memory bound", 128)?;
+        let edge_bytes = crate::storage::bytes::<Edge>(edges.len())?;
+        let mut required = crate::storage::add(edge_bytes, edge_bytes)?;
+        required = crate::storage::add(required, crate::storage::bytes::<f64>(vertex_count)?)?;
+        required = crate::storage::add(required, crate::storage::arc_bytes::<Vec<Edge>>()?)?;
+        required = crate::storage::add(required, crate::storage::arc_bytes::<Vec<f64>>()?)?;
+        required = crate::storage::add(required, crate::storage::arc_bytes::<()>()?)?;
+        crate::storage::admit(required, budget_bytes)?;
+        let mut raw = meter.try_capacity(edges.len(), "input compact edges")?;
+        for &(left, right, weight) in edges {
+            meter.work("input edge validation and mapping", 128)?;
+            if left >= vertex_count {
+                return Err(CmgError::VertexOutOfBounds {
+                    vertex: left,
+                    vertex_count,
+                });
+            }
+            if right >= vertex_count {
+                return Err(CmgError::VertexOutOfBounds {
+                    vertex: right,
+                    vertex_count,
+                });
+            }
+            if left > u32::MAX as usize {
+                return Err(CmgError::VertexIndexTooWide {
+                    vertex: left,
+                    maximum: u32::MAX as usize,
+                });
+            }
+            if right > u32::MAX as usize {
+                return Err(CmgError::VertexIndexTooWide {
+                    vertex: right,
+                    maximum: u32::MAX as usize,
+                });
+            }
+            if left == right {
+                return Err(CmgError::SelfLoop { vertex: left });
+            }
+            if !weight.is_finite() || weight <= 0.0 {
+                return Err(CmgError::InvalidEdgeWeight {
+                    u: left,
+                    v: right,
+                    weight,
+                });
+            }
+            let (u, v) = if left < right {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            raw.push(Edge::from_compact_parts(u as u32, v as u32, weight));
+        }
+        Self::from_compact_edges_controlled(vertex_count, raw, &mut meter)
+    }
+
     /// Build a Laplacian while parallelizing deterministic edge sorting.
     ///
     /// Validation and compensated duplicate aggregation are identical to
@@ -181,6 +251,88 @@ impl Laplacian {
     ) -> Result<Self, CmgError> {
         sort_compact_edge_endpoints(&mut raw);
         Self::from_endpoint_sorted_raw_edges(vertex_count, raw)
+    }
+
+    /// Build a canonical coarse graph with bounded, precharged setup work.
+    pub(crate) fn from_compact_edges_controlled(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        // Sorting by the full comparator gives precisely the order used by the
+        // original endpoint sort followed by each duplicate group's weight sort.
+        meter.sort_by(&mut raw, compare_raw_edges, "coarse edge sorting")?;
+        meter.allocation(
+            "coarse graph diagonal",
+            crate::storage::bytes::<f64>(vertex_count)?,
+        )?;
+        let mut diagonal = crate::storage::try_capacity(vertex_count, "coarse graph diagonal")?;
+        for _ in 0..vertex_count {
+            meter.work("coarse graph diagonal initialization", 8)?;
+            diagonal.push(0.0);
+        }
+        let mut read_index = 0;
+        let mut write_index = 0;
+        while read_index < raw.len() {
+            meter.work("coarse graph merge group", 32)?;
+            let key = raw[read_index].key;
+            let u = raw[read_index].compact_u();
+            let v = raw[read_index].compact_v();
+            let mut sum = 0.0;
+            let mut correction = 0.0;
+            while read_index < raw.len() && raw[read_index].key == key {
+                meter.work("coarse graph compensated merge", 64)?;
+                compensated_add(&mut sum, &mut correction, raw[read_index].weight);
+                read_index += 1;
+            }
+            meter.work("coarse graph merged edge", 64)?;
+            write_merged_edge(&mut raw, &mut diagonal, write_index, u, v, sum + correction)?;
+            write_index += 1;
+        }
+        raw.truncate(write_index);
+        if raw.capacity() != raw.len() {
+            meter.allocation(
+                "coarse edge compaction",
+                crate::storage::bytes::<Edge>(raw.len())?,
+            )?;
+            let mut compact = crate::storage::try_capacity(raw.len(), "coarse edge compaction")?;
+            for &edge in &raw {
+                meter.work("coarse edge compaction copy", 8)?;
+                compact.push(edge);
+            }
+            raw = compact;
+        }
+        let mut diagonal_nnz = 0;
+        let mut maximum_degree = 0.0_f64;
+        for &degree in &diagonal {
+            meter.work("coarse graph invariants", 16)?;
+            diagonal_nnz += usize::from(degree != 0.0);
+            maximum_degree = maximum_degree.max(degree);
+        }
+        meter.work("coarse graph metadata", 32)?;
+        let matrix_nnz = diagonal_nnz + 2 * raw.len();
+        let operator_norm_bound = 2.0 * maximum_degree;
+        meter.allocation(
+            "coarse graph edge owner",
+            crate::storage::arc_bytes::<Vec<Edge>>()?,
+        )?;
+        let edges = Arc::new(raw);
+        meter.allocation(
+            "coarse graph diagonal owner",
+            crate::storage::arc_bytes::<Vec<f64>>()?,
+        )?;
+        let diagonal = Arc::new(diagonal);
+        meter.allocation("coarse graph lineage", crate::storage::arc_bytes::<()>()?)?;
+        Ok(Self {
+            vertex_count,
+            edges,
+            diagonal,
+            matrix_nnz,
+            operator_norm_bound,
+            lineage: Arc::new(()),
+            prepared_topology_lineage: None,
+            prepared_components: None,
+        })
     }
 
     pub(crate) fn from_compact_edges_admitted(
@@ -364,6 +516,94 @@ impl Laplacian {
         &self,
     ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
         self.without_isolated_vertices_impl::<true>()
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn without_isolated_vertices_controlled(
+        &self,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
+        let mut has_isolate = false;
+        for &degree in self.diagonal.iter() {
+            meter.work("isolate detection", 8)?;
+            if degree.partial_cmp(&0.0) != Some(core::cmp::Ordering::Greater) {
+                has_isolate = true;
+                break;
+            }
+        }
+        if !has_isolate {
+            return Ok(None);
+        }
+        meter.allocation(
+            "isolate vertex map",
+            crate::storage::bytes::<usize>(self.vertex_count)?,
+        )?;
+        let mut map = crate::storage::try_capacity(self.vertex_count, "isolate vertex map")?;
+        let mut dimension = 0;
+        let mut endpoints_unchanged = true;
+        for (vertex, &degree) in self.diagonal.iter().enumerate() {
+            meter.work("isolate vertex mapping", 32)?;
+            if degree > 0.0 {
+                map.push(dimension);
+                endpoints_unchanged &= vertex == dimension;
+                dimension += 1;
+            } else {
+                map.push(usize::MAX);
+            }
+        }
+        let edges = if endpoints_unchanged {
+            Arc::clone(&self.edges)
+        } else {
+            meter.allocation(
+                "isolate compact edges",
+                crate::storage::bytes::<Edge>(self.edge_count())?,
+            )?;
+            let mut edges =
+                crate::storage::try_capacity(self.edge_count(), "isolate compact edges")?;
+            for &edge in self.edges.iter() {
+                meter.work("isolate edge mapping", 32)?;
+                edges.push(Edge::from_compact_parts(
+                    map[edge.u()] as u32,
+                    map[edge.v()] as u32,
+                    edge.weight(),
+                ));
+            }
+            meter.allocation(
+                "isolate edge owner",
+                crate::storage::arc_bytes::<Vec<Edge>>()?,
+            )?;
+            Arc::new(edges)
+        };
+        meter.allocation(
+            "isolate compact diagonal",
+            crate::storage::bytes::<f64>(dimension)?,
+        )?;
+        let mut diagonal = crate::storage::try_capacity(dimension, "isolate compact diagonal")?;
+        for &degree in self.diagonal.iter() {
+            meter.work("isolate diagonal copy", 16)?;
+            if degree > 0.0 {
+                diagonal.push(degree);
+            }
+        }
+        meter.allocation(
+            "isolate diagonal owner",
+            crate::storage::arc_bytes::<Vec<f64>>()?,
+        )?;
+        let diagonal = Arc::new(diagonal);
+        meter.allocation("isolate graph lineage", crate::storage::arc_bytes::<()>()?)?;
+        Ok(Some((
+            map,
+            Self {
+                vertex_count: dimension,
+                edges,
+                diagonal,
+                matrix_nnz: self.matrix_nnz,
+                operator_norm_bound: self.operator_norm_bound,
+                lineage: Arc::new(()),
+                prepared_topology_lineage: None,
+                prepared_components: None,
+            },
+        )))
     }
 
     #[cfg(feature = "experimental-components")]
@@ -954,5 +1194,194 @@ mod cached_endpoint_key_tests {
         assert_eq!(edge.v(), 91);
         assert_eq!(endpoint_key(&edge), (17_u64 << 32) | 91_u64);
         assert_eq!(edge.weight().to_bits(), 2.5_f64.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod controlled_graph_tests {
+    use super::*;
+    use crate::build_control::{BuildBoundary, BuildDecision, BuildMeter, BuildStopReason};
+
+    fn raw_edges() -> Vec<Edge> {
+        [
+            (0, 2, 1e16),
+            (2, 4, 3.0),
+            (0, 2, 1.0),
+            (1, 4, 0.125),
+            (0, 2, 2.0),
+            (2, 4, 1e-16),
+            (1, 4, 0.25),
+            (0, 1, 7.0),
+        ]
+        .into_iter()
+        .map(|(u, v, w)| Edge::from_internal_parts(u, v, w).unwrap())
+        .collect()
+    }
+
+    #[test]
+    fn public_controlled_graph_matches_and_stops_at_every_boundary() {
+        let input: Vec<_> = raw_edges()
+            .into_iter()
+            .map(|edge| (edge.v(), edge.u(), edge.weight()))
+            .collect();
+        let expected = Laplacian::from_edges(6, input.iter().copied()).unwrap();
+        let mut boundaries = Vec::new();
+        let actual = {
+            let mut control = |boundary: BuildBoundary| {
+                boundaries.push(boundary);
+                BuildDecision::Continue
+            };
+            Laplacian::from_edges_controlled(6, &input, usize::MAX, u64::MAX, &mut control).unwrap()
+        };
+        assert_eq!(actual, expected);
+        for (stop, &boundary) in boundaries.iter().enumerate() {
+            let mut seen = 0;
+            let mut control = |candidate: BuildBoundary| {
+                assert_eq!(candidate, boundaries[seen]);
+                seen += 1;
+                if candidate.chunk_id == stop as u64 {
+                    BuildDecision::Interrupted
+                } else {
+                    BuildDecision::Continue
+                }
+            };
+            let error =
+                Laplacian::from_edges_controlled(6, &input, usize::MAX, u64::MAX, &mut control)
+                    .unwrap_err();
+            assert_eq!(seen, stop + 1);
+            assert_eq!(
+                error,
+                CmgError::BuildStopped {
+                    reason: BuildStopReason::Interrupted,
+                    phase: boundary.phase,
+                    chunk_id: boundary.chunk_id,
+                    charged_work: boundary.charged_work
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn public_controlled_graph_validates_edges_and_admits_before_allocation() {
+        for (count, input) in [
+            (2, vec![(2, 1, 1.0)]),
+            (2, vec![(0, 2, 1.0)]),
+            (2, vec![(1, 1, 1.0)]),
+            (2, vec![(0, 1, 0.0)]),
+            (2, vec![(0, 1, -1.0)]),
+            (2, vec![(0, 1, f64::INFINITY)]),
+            (2, vec![(0, 1, f64::NAN)]),
+        ] {
+            let expected = Laplacian::from_edges(count, input.iter().copied()).unwrap_err();
+            let mut control = |_: BuildBoundary| BuildDecision::Continue;
+            let actual =
+                Laplacian::from_edges_controlled(count, &input, usize::MAX, u64::MAX, &mut control)
+                    .unwrap_err();
+            // Debug comparison handles the NaN carried in the weight error.
+            assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        }
+        let mut control = |boundary: BuildBoundary| {
+            assert!(matches!(
+                boundary.operation,
+                crate::BuildOperation::Work { .. }
+            ));
+            BuildDecision::Continue
+        };
+        assert!(matches!(
+            Laplacian::from_edges_controlled(2, &[(0, 1, 1.0)], 0, u64::MAX, &mut control),
+            Err(CmgError::MemoryBudgetExceeded { .. })
+        ));
+        let mut unreachable = |_: BuildBoundary| -> BuildDecision {
+            panic!("zero work budget must stop before callback")
+        };
+        assert!(matches!(
+            Laplacian::from_edges_controlled(2, &[(0, 1, 1.0)], usize::MAX, 0, &mut unreachable),
+            Err(CmgError::BuildStopped {
+                reason: BuildStopReason::WorkBudgetExhausted,
+                ..
+            })
+        ));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn public_controlled_graph_rejects_wide_endpoints() {
+        let wide = u32::MAX as usize + 1;
+        for input in [[(wide, 0, 1.0)], [(0, wide, 1.0)]] {
+            let mut control = |_: BuildBoundary| BuildDecision::Continue;
+            assert_eq!(
+                Laplacian::from_edges_controlled(
+                    wide + 1,
+                    &input,
+                    usize::MAX,
+                    u64::MAX,
+                    &mut control
+                )
+                .unwrap_err(),
+                CmgError::VertexIndexTooWide {
+                    vertex: wide,
+                    maximum: u32::MAX as usize
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn controlled_graph_preserves_bits_and_stops_at_every_boundary() {
+        let expected = Laplacian::from_compact_edges_admitted(6, raw_edges()).unwrap();
+        let mut boundaries = Vec::new();
+        let actual = {
+            let mut control = |boundary: BuildBoundary| {
+                boundaries.push(boundary);
+                BuildDecision::Continue
+            };
+            Laplacian::from_compact_edges_controlled(
+                6,
+                raw_edges(),
+                &mut BuildMeter::new(u64::MAX, &mut control),
+            )
+            .unwrap()
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual
+                .diagonal()
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .diagonal()
+                .iter()
+                .map(|x| x.to_bits())
+                .collect::<Vec<_>>()
+        );
+        for (stop, &boundary) in boundaries.iter().enumerate() {
+            let mut seen = 0;
+            let mut control = |candidate: BuildBoundary| {
+                assert_eq!(candidate, boundaries[seen]);
+                seen += 1;
+                if candidate.chunk_id == stop as u64 {
+                    BuildDecision::StopUnused
+                } else {
+                    BuildDecision::Continue
+                }
+            };
+            let error = Laplacian::from_compact_edges_controlled(
+                6,
+                raw_edges(),
+                &mut BuildMeter::new(u64::MAX, &mut control),
+            )
+            .unwrap_err();
+            assert_eq!(seen, stop + 1);
+            assert_eq!(
+                error,
+                CmgError::BuildStopped {
+                    reason: BuildStopReason::StopUnused,
+                    phase: boundary.phase,
+                    chunk_id: boundary.chunk_id,
+                    charged_work: boundary.charged_work
+                }
+            );
+        }
     }
 }

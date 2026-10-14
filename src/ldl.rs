@@ -1,5 +1,7 @@
 //! Component-grounded, static-degree-ordered LDL^T terminal solver.
 
+#[cfg(feature = "experimental-components")]
+use crate::build_control::BuildMeter;
 use crate::storage::{add, bytes, try_capacity, try_filled};
 use crate::{CmgError, Components, Laplacian, ValidationOptions};
 
@@ -1132,5 +1134,786 @@ mod scaled_forward_tests {
             }
         }
         assert!(saw_packed && saw_sparse);
+    }
+}
+
+// Controlled constructors mirror the admitted paths, with bounded fallible
+// checkpoints inside every traversal and numeric update.
+#[cfg(feature = "experimental-components")]
+fn dense_bank_controlled(
+    dimension: usize,
+    meter: &mut BuildMeter<'_>,
+) -> Result<Vec<Vec<f64>>, CmgError> {
+    let mut rows = meter.try_capacity(dimension, "terminal dense row descriptors")?;
+    for _ in 0..dimension {
+        meter.work("terminal dense banks", 128)?;
+        rows.push(meter.try_filled(dimension, 0.0, "terminal dense row")?);
+    }
+    Ok(rows)
+}
+
+#[cfg(feature = "experimental-components")]
+fn compact_fallibly_controlled<T: Copy>(
+    values: Vec<T>,
+    meter: &mut BuildMeter<'_>,
+) -> Result<Vec<T>, CmgError> {
+    if values.len() == values.capacity() {
+        return Ok(values);
+    }
+    let mut compact = meter.try_capacity(values.len(), "terminal compact conversion")?;
+    for &value in &values {
+        meter.work("terminal compaction copy", 8)?;
+        compact.push(value);
+    }
+    Ok(compact)
+}
+
+impl LowerFactor {
+    #[cfg(feature = "experimental-components")]
+    fn from_dense_controlled(
+        lower: &[Vec<f64>],
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        let dimension = lower.len();
+        let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
+        let mut strict_nonzeros = 0;
+        for (row, values) in lower.iter().enumerate() {
+            meter.work("terminal count rows", 8)?;
+            for &value in &values[..row] {
+                meter.work("terminal count values", 8)?;
+                strict_nonzeros += usize::from(value != 0.0);
+            }
+        }
+
+        let packed_bytes = packed_slots.saturating_mul(core::mem::size_of::<f64>());
+        let sparse_bytes = strict_nonzeros
+            .saturating_mul(2 * core::mem::size_of::<u32>() + 2 * core::mem::size_of::<f64>())
+            .saturating_add(2 * (dimension + 1).saturating_mul(core::mem::size_of::<usize>()));
+
+        if dimension <= u32::MAX as usize && sparse_bytes < packed_bytes {
+            let mut row_offsets =
+                meter.try_capacity(add(dimension, 1)?, "terminal sparse row offsets")?;
+            let mut columns = meter.try_capacity(strict_nonzeros, "terminal sparse columns")?;
+            let mut row_values =
+                meter.try_capacity(strict_nonzeros, "terminal sparse row values")?;
+            row_offsets.push(0);
+            for (row, values) in lower.iter().enumerate() {
+                meter.work("terminal factor conversion", 128)?;
+                for (column, value) in values[..row].iter().copied().enumerate() {
+                    meter.work("terminal factor conversion", 128)?;
+                    if value != 0.0 {
+                        columns.push(column as u32);
+                        row_values.push(value);
+                    }
+                }
+                row_offsets.push(columns.len());
+            }
+
+            Self::from_sparse_rows_controlled(row_offsets, columns, row_values, meter)
+        } else {
+            let mut values = meter.try_capacity(packed_slots, "terminal packed values")?;
+            for (row, dense_row) in lower.iter().enumerate() {
+                meter.work("terminal factor conversion", 128)?;
+                for &value in &dense_row[..row] {
+                    meter.work("terminal packed copy", 8)?;
+                    values.push(value);
+                }
+            }
+            Ok(Self::Packed { values })
+        }
+    }
+}
+
+impl LowerFactor {
+    #[cfg(feature = "experimental-components")]
+    fn from_sparse_rows_controlled(
+        row_offsets: Vec<usize>,
+        columns: Vec<u32>,
+        row_values: Vec<f64>,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        let dimension = row_offsets.len() - 1;
+        let strict_nonzeros = columns.len();
+        let mut column_counts = meter.try_filled(dimension, 0_usize, "terminal column counts")?;
+        for &column in &columns {
+            meter.work("terminal factor conversion", 128)?;
+            column_counts[column as usize] += 1;
+        }
+        let mut column_offsets =
+            meter.try_capacity(add(dimension, 1)?, "terminal column offsets")?;
+        column_offsets.push(0);
+        for count in column_counts {
+            meter.work("terminal factor conversion", 128)?;
+            column_offsets.push(column_offsets.last().copied().unwrap_or(0) + count);
+        }
+        let mut next = meter.copy_slice(&column_offsets[..dimension], "terminal column cursors")?;
+        let mut rows = meter.try_filled(strict_nonzeros, 0_u32, "terminal transposed rows")?;
+        let mut column_values =
+            meter.try_filled(strict_nonzeros, 0.0, "terminal transposed values")?;
+        for row in 0..dimension {
+            meter.work("terminal factor conversion", 128)?;
+            for index in row_offsets[row]..row_offsets[row + 1] {
+                meter.work("terminal factor conversion", 128)?;
+                let column = columns[index] as usize;
+                let destination = next[column];
+                rows[destination] = row as u32;
+                column_values[destination] = row_values[index];
+                next[column] += 1;
+            }
+        }
+
+        Ok(Self::Sparse {
+            row_offsets,
+            columns,
+            row_values,
+            column_offsets,
+            rows,
+            column_values,
+        })
+    }
+}
+
+impl GroundedLdl {
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn factor_controlled(
+        graph: &Laplacian,
+        budget_bytes: usize,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        meter.work("terminal admission", 128)?;
+        crate::storage::admit(
+            Self::construction_allocation_bound(graph.vertex_count())?,
+            budget_bytes,
+        )?;
+        Self::factor_impl_controlled::<false>(graph, meter)
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn factor_by_component_controlled(
+        graph: &Laplacian,
+        budget_bytes: usize,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        meter.work("terminal component admission", 128)?;
+        crate::storage::admit(
+            Self::component_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+            )?,
+            budget_bytes,
+        )?;
+        Self::factor_impl_controlled::<true>(graph, meter)
+    }
+    #[cfg(feature = "experimental-components")]
+    fn factor_impl_controlled<const BLOCKS: bool>(
+        graph: &Laplacian,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
+        let vertex_count = graph.vertex_count();
+        let components = Components::try_from_endpoints_controlled(
+            vertex_count,
+            graph.edges().iter().map(|e| (e.u(), e.v())),
+            meter,
+        )?;
+
+        let mut anchors = meter.try_filled(components.count(), 0, "terminal anchors")?;
+        for (vertex, &component) in components.labels().iter().enumerate() {
+            meter.work("terminal factor preparation", 128)?;
+            anchors[component] = vertex;
+        }
+        let mut is_anchor = meter.try_filled(vertex_count, false, "terminal anchor flags")?;
+        for &anchor in &anchors {
+            meter.work("terminal factor preparation", 128)?;
+            is_anchor[anchor] = true;
+        }
+
+        let mut active_vertices = meter.try_capacity(vertex_count, "terminal permutation")?;
+        for (vertex, &anchor) in is_anchor.iter().enumerate() {
+            meter.work("terminal active vertices", 16)?;
+            if !anchor {
+                active_vertices.push(vertex);
+            }
+        }
+        let mut pattern_nonzeros =
+            meter.try_filled(vertex_count, 0_usize, "terminal pattern counts")?;
+        for &vertex in &active_vertices {
+            meter.work("terminal factor preparation", 128)?;
+            // Every active grounded row retains its positive diagonal.
+            pattern_nonzeros[vertex] = 1;
+        }
+        for edge in graph.edges() {
+            meter.work("terminal factor preparation", 128)?;
+            if !is_anchor[edge.u()] && !is_anchor[edge.v()] {
+                pattern_nonzeros[edge.u()] += 1;
+                pattern_nonzeros[edge.v()] += 1;
+            }
+        }
+
+        let mut permutation = active_vertices;
+        #[cfg(feature = "experimental-components")]
+        if BLOCKS {
+            let key = |&vertex: &usize| {
+                (
+                    components.labels()[vertex],
+                    pattern_nonzeros[vertex],
+                    vertex,
+                )
+            };
+            meter.sort_by(
+                &mut permutation,
+                |left, right| key(left).cmp(&key(right)),
+                "terminal permutation sort",
+            )?;
+            drop(is_anchor);
+            drop(pattern_nonzeros);
+            let (lower, diagonal, factor_nonzeros) =
+                factor_components_controlled(graph, &components, &permutation, meter)?;
+            return Ok(Self {
+                vertex_count,
+                components,
+                anchors,
+                permutation,
+                lower,
+                diagonal,
+                factor_nonzeros,
+            });
+        }
+        let key = |&vertex: &usize| (pattern_nonzeros[vertex], vertex);
+        meter.sort_by(
+            &mut permutation,
+            |left, right| key(left).cmp(&key(right)),
+            "terminal permutation sort",
+        )?;
+        let dimension = permutation.len();
+
+        // Assemble the ordered grounded matrix directly. The previous path
+        // first materialized the full graph matrix and then copied the active
+        // permutation into this second dense buffer. Direct assembly removes
+        // one vertex_count^2 allocation and its complete permutation scan.
+        let mut matrix = dense_bank_controlled(dimension, meter)?;
+        let mut factor_index =
+            meter.try_filled(vertex_count, usize::MAX, "terminal factor index")?;
+        for (factor_vertex, &original_vertex) in permutation.iter().enumerate() {
+            meter.work("terminal factor preparation", 128)?;
+            factor_index[original_vertex] = factor_vertex;
+            matrix[factor_vertex][factor_vertex] = graph.diagonal()[original_vertex];
+        }
+        for edge in graph.edges() {
+            meter.work("terminal factor preparation", 128)?;
+            let factor_u = factor_index[edge.u()];
+            let factor_v = factor_index[edge.v()];
+            if factor_u == usize::MAX || factor_v == usize::MAX {
+                continue;
+            }
+            matrix[factor_u][factor_v] -= edge.weight();
+            matrix[factor_v][factor_u] -= edge.weight();
+        }
+
+        let (dense_lower, diagonal) = factor_dense_controlled(&matrix, &permutation, meter)?;
+
+        let mut strict_nonzeros = 0;
+        for (row, values) in dense_lower.iter().enumerate() {
+            meter.work("terminal factor count rows", 8)?;
+            for &value in &values[..row] {
+                meter.work("terminal factor count values", 8)?;
+                strict_nonzeros += usize::from(value != 0.0);
+            }
+        }
+        let factor_nonzeros = dimension.saturating_add(strict_nonzeros);
+        let lower = LowerFactor::from_dense_controlled(&dense_lower, meter)?;
+
+        Ok(Self {
+            vertex_count,
+            components,
+            anchors,
+            permutation,
+            lower,
+            diagonal,
+            factor_nonzeros,
+        })
+    }
+}
+
+#[cfg(feature = "experimental-components")]
+fn factor_dense_controlled(
+    matrix: &[Vec<f64>],
+    permutation: &[usize],
+    meter: &mut BuildMeter<'_>,
+) -> Result<(Vec<Vec<f64>>, Vec<f64>), CmgError> {
+    let dimension = permutation.len();
+    let mut dense_lower = dense_bank_controlled(dimension, meter)?;
+    let mut diagonal = meter.try_filled(dimension, 0.0, "terminal diagonal")?;
+    for (row, values) in dense_lower.iter_mut().enumerate() {
+        meter.work("terminal dense numeric", 128)?;
+        values[row] = 1.0;
+    }
+
+    for column in 0..dimension {
+        meter.work("terminal dense numeric", 128)?;
+        let mut pivot = matrix[column][column];
+        for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
+            meter.work("terminal dense numeric", 128)?;
+            let value = dense_lower[column][previous];
+            pivot -= value * value * diagonal_value;
+        }
+        if !pivot.is_finite() || pivot <= 0.0 {
+            return Err(CmgError::NonPositivePivot {
+                vertex: permutation[column],
+                value: pivot,
+            });
+        }
+        diagonal[column] = pivot;
+
+        for row in (column + 1)..dimension {
+            meter.work("terminal dense numeric", 128)?;
+            let mut value = matrix[row][column];
+            for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
+                meter.work("terminal dense numeric", 128)?;
+                value -=
+                    dense_lower[row][previous] * dense_lower[column][previous] * diagonal_value;
+            }
+            dense_lower[row][column] = value / pivot;
+        }
+    }
+
+    Ok((dense_lower, diagonal))
+}
+
+#[cfg(feature = "experimental-components")]
+fn factor_components_controlled(
+    graph: &Laplacian,
+    components: &Components,
+    permutation: &[usize],
+    meter: &mut BuildMeter<'_>,
+) -> Result<(LowerFactor, Vec<f64>, usize), CmgError> {
+    let dimension = permutation.len();
+    if dimension <= 1 {
+        let diagonal = if let Some(&vertex) = permutation.first() {
+            let pivot = graph.diagonal()[vertex];
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(CmgError::NonPositivePivot {
+                    vertex,
+                    value: pivot,
+                });
+            }
+            meter.try_filled(1, pivot, "terminal singleton pivot")?
+        } else {
+            Vec::new()
+        };
+        return Ok((
+            LowerFactor::Packed { values: Vec::new() },
+            diagonal,
+            dimension,
+        ));
+    }
+    let count = components.count();
+    let mut offsets = meter.try_capacity(add(count, 1)?, "terminal component offsets")?;
+    offsets.push(0);
+    for &size in components.sizes() {
+        meter.work("terminal component factor", 128)?;
+        offsets.push(offsets.last().unwrap() + size.saturating_sub(1));
+    }
+    let mut factor_index = meter.try_filled(
+        graph.vertex_count(),
+        usize::MAX,
+        "terminal component factor index",
+    )?;
+    for (index, &vertex) in permutation.iter().enumerate() {
+        meter.work("terminal component factor", 128)?;
+        factor_index[vertex] = index;
+    }
+    // Group only grounded edges with flat counting-sort storage. Do not scan
+    // every edge again for every component, or allocate a graph per block.
+    let mut edge_offsets =
+        meter.try_filled(add(count, 1)?, 0usize, "terminal component edge offsets")?;
+    for edge in graph.edges() {
+        meter.work("terminal component factor", 128)?;
+        if factor_index[edge.u()] != usize::MAX && factor_index[edge.v()] != usize::MAX {
+            edge_offsets[components.labels()[edge.u()] + 1] += 1;
+        }
+    }
+    for c in 0..count {
+        meter.work("terminal component factor", 128)?;
+        edge_offsets[c + 1] += edge_offsets[c];
+    }
+    let mut next = meter.copy_slice(&edge_offsets[..count], "terminal component edge cursors")?;
+    let mut edge_indices = meter.try_filled(
+        edge_offsets[count],
+        0usize,
+        "terminal component edge indices",
+    )?;
+    for (index, edge) in graph.edges().iter().enumerate() {
+        meter.work("terminal component factor", 128)?;
+        if factor_index[edge.u()] != usize::MAX && factor_index[edge.v()] != usize::MAX {
+            let c = components.labels()[edge.u()];
+            edge_indices[next[c]] = index;
+            next[c] += 1;
+        }
+    }
+    let mut capacity = 0;
+    for &size in components.sizes() {
+        meter.work("terminal component capacity", 32)?;
+        capacity = add(capacity, strict_slots(size.saturating_sub(1))?)?;
+    }
+    let mut factors = ComponentFactorRows {
+        diagonal: meter.try_capacity(dimension, "terminal component diagonal")?,
+        row_offsets: meter.try_capacity(add(dimension, 1)?, "terminal component row offsets")?,
+        columns: meter.try_capacity(capacity, "terminal component bounded columns")?,
+        values: meter.try_capacity(capacity, "terminal component bounded values")?,
+    };
+    factors.row_offsets.push(0);
+    for component in 0..count {
+        meter.work("terminal component factor", 128)?;
+        let start = offsets[component];
+        let end = offsets[component + 1];
+        let size = end - start;
+        if size == 0 {
+            continue;
+        }
+        if size == 1 {
+            let vertex = permutation[start];
+            let pivot = graph.diagonal()[vertex];
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(CmgError::NonPositivePivot {
+                    vertex,
+                    value: pivot,
+                });
+            }
+            factors.diagonal.push(pivot);
+            factors.row_offsets.push(factors.columns.len());
+            continue;
+        }
+        factors.append_block_controlled(
+            graph,
+            &permutation[start..end],
+            &factor_index,
+            &edge_indices[edge_offsets[component]..edge_offsets[component + 1]],
+            start,
+            meter,
+        )?;
+    }
+    let ComponentFactorRows {
+        diagonal,
+        row_offsets,
+        mut columns,
+        mut values,
+    } = factors;
+    let factor_nonzeros = dimension + values.len();
+    // byte_len reports principal factor storage; discard growth slack before
+    // these buffers become retained state (the legacy dense path sizes exactly).
+    columns = compact_fallibly_controlled(columns, meter)?;
+    values = compact_fallibly_controlled(values, meter)?;
+    let packed_slots = dimension.saturating_mul(dimension.saturating_sub(1)) / 2;
+    let sparse_bytes = values
+        .len()
+        .saturating_mul(24)
+        .saturating_add((dimension + 1).saturating_mul(2 * core::mem::size_of::<usize>()));
+    let lower = if packed_slots.saturating_mul(8) <= sparse_bytes {
+        let mut packed =
+            meter.try_filled(packed_slots, 0.0, "terminal component packed conversion")?;
+        for row in 0..dimension {
+            meter.work("terminal component factor", 128)?;
+            let start = row.saturating_mul(row.saturating_sub(1)) / 2;
+            for index in row_offsets[row]..row_offsets[row + 1] {
+                meter.work("terminal component factor", 128)?;
+                packed[start + columns[index] as usize] = values[index];
+            }
+        }
+        LowerFactor::Packed { values: packed }
+    } else {
+        LowerFactor::from_sparse_rows_controlled(row_offsets, columns, values, meter)?
+    };
+    Ok((lower, diagonal, factor_nonzeros))
+}
+
+#[cfg(feature = "experimental-components")]
+impl ComponentFactorRows {
+    #[cfg(feature = "experimental-components")]
+    fn append_block_controlled(
+        &mut self,
+        graph: &Laplacian,
+        permutation: &[usize],
+        factor_index: &[usize],
+        edge_indices: &[usize],
+        base: usize,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<(), CmgError> {
+        let dimension = permutation.len();
+        let mut input_offsets =
+            meter.try_filled(add(dimension, 1)?, 0usize, "terminal block input offsets")?;
+        for &index in edge_indices {
+            meter.work("terminal sparse numeric", 128)?;
+            let edge = graph.edges()[index];
+            let column = factor_index[edge.u()].min(factor_index[edge.v()]) - base;
+            input_offsets[column + 1] += 1;
+        }
+        for column in 0..dimension {
+            meter.work("terminal sparse numeric", 128)?;
+            input_offsets[column + 1] += input_offsets[column];
+        }
+        let mut input_edges =
+            meter.try_filled(edge_indices.len(), 0usize, "terminal block input edges")?;
+        {
+            let mut next =
+                meter.copy_slice(&input_offsets[..dimension], "terminal block input cursors")?;
+            for &index in edge_indices {
+                meter.work("terminal sparse numeric", 128)?;
+                let edge = graph.edges()[index];
+                let column = factor_index[edge.u()].min(factor_index[edge.v()]) - base;
+                input_edges[next[column]] = index;
+                next[column] += 1;
+            }
+        }
+        // The arithmetic scan reads only rows and values. Keep the row-link
+        // bookkeeping in separate arrays so it does not occupy that scan's
+        // cache lines.
+        let capacity = strict_slots(dimension)?;
+        let mut entry_rows = meter.try_capacity(capacity, "terminal block entry rows")?;
+        let mut entry_columns = meter.try_capacity(capacity, "terminal block entry columns")?;
+        let mut entry_values = meter.try_capacity(capacity, "terminal block entry values")?;
+        let mut next_in_row = meter.try_capacity(capacity, "terminal block row links")?;
+        let mut column_offsets =
+            meter.try_capacity(add(dimension, 1)?, "terminal block column offsets")?;
+        column_offsets.push(0);
+        let mut first = meter.try_filled(dimension, usize::MAX, "terminal block first links")?;
+        let mut last = meter.try_filled(dimension, usize::MAX, "terminal block last links")?;
+        let mut work = meter.try_filled(dimension, 0.0, "terminal block numeric work")?;
+        let mut diagonal = meter.try_filled(dimension, 0.0, "terminal block diagonal")?;
+        for column in 0..dimension {
+            meter.work("terminal sparse numeric", 128)?;
+            for value in &mut work[column + 1..] {
+                meter.work("terminal sparse clear", 8)?;
+                *value = 0.0;
+            }
+            for &index in &input_edges[input_offsets[column]..input_offsets[column + 1]] {
+                meter.work("terminal sparse numeric", 128)?;
+                let edge = graph.edges()[index];
+                let row = factor_index[edge.u()].max(factor_index[edge.v()]) - base;
+                work[row] -= edge.weight();
+            }
+            let mut pivot = graph.diagonal()[permutation[column]];
+            let mut link = first[column];
+            while link != usize::MAX {
+                meter.work("terminal sparse numeric", 128)?;
+                let previous = entry_values[link];
+                let k = entry_columns[link] as usize;
+                pivot -= previous * previous * diagonal[k];
+                // Column rows are increasing, so the suffix after this link
+                // contains precisely the rows below the current pivot.
+                let end = column_offsets[k + 1];
+                for (&row, &value) in entry_rows[link + 1..end]
+                    .iter()
+                    .zip(&entry_values[link + 1..end])
+                {
+                    meter.work("terminal sparse numeric", 128)?;
+                    work[row as usize] -= value * previous * diagonal[k];
+                }
+                link = next_in_row[link];
+            }
+            if !pivot.is_finite() || pivot <= 0.0 {
+                return Err(CmgError::NonPositivePivot {
+                    vertex: permutation[column],
+                    value: pivot,
+                });
+            }
+            diagonal[column] = pivot;
+            for row in column + 1..dimension {
+                meter.work("terminal sparse numeric", 128)?;
+                if work[row] == 0.0 {
+                    continue;
+                }
+                let value = work[row] / pivot;
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: permutation[row],
+                        column: permutation[column],
+                        value,
+                    });
+                }
+                if value != 0.0 {
+                    let index = entry_values.len();
+                    entry_rows.push(row as u32);
+                    entry_columns.push(column as u32);
+                    entry_values.push(value);
+                    next_in_row.push(usize::MAX);
+                    if last[row] == usize::MAX {
+                        first[row] = index;
+                    } else {
+                        next_in_row[last[row]] = index;
+                    }
+                    last[row] = index;
+                }
+            }
+            column_offsets.push(entry_values.len());
+        }
+        for value in diagonal {
+            meter.work("terminal sparse diagonal copy", 8)?;
+            self.diagonal.push(value);
+        }
+        for mut link in first {
+            meter.work("terminal sparse numeric", 128)?;
+            while link != usize::MAX {
+                meter.work("terminal sparse numeric", 128)?;
+                self.columns
+                    .push((base + entry_columns[link] as usize) as u32);
+                self.values.push(entry_values[link]);
+                link = next_in_row[link];
+            }
+            self.row_offsets.push(self.columns.len());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod controlled_factor_tests {
+    use super::*;
+    use crate::{BuildBoundary, BuildDecision, BuildOperation, BuildStopReason};
+
+    fn float_bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    fn assert_factor_bits(actual: &GroundedLdl, expected: &GroundedLdl) {
+        assert_eq!(actual, expected);
+        assert_eq!(float_bits(&actual.diagonal), float_bits(&expected.diagonal));
+        match (&actual.lower, &expected.lower) {
+            (LowerFactor::Packed { values: a }, LowerFactor::Packed { values: b }) => {
+                assert_eq!(float_bits(a), float_bits(b));
+            }
+            (
+                LowerFactor::Sparse {
+                    row_values: a,
+                    column_values: at,
+                    ..
+                },
+                LowerFactor::Sparse {
+                    row_values: b,
+                    column_values: bt,
+                    ..
+                },
+            ) => {
+                assert_eq!(float_bits(a), float_bits(b));
+                assert_eq!(float_bits(at), float_bits(bt));
+            }
+            _ => panic!("factor representations differ"),
+        }
+    }
+
+    fn build(
+        graph: &Laplacian,
+        blocks: bool,
+        meter: &mut BuildMeter<'_>,
+    ) -> Result<GroundedLdl, CmgError> {
+        #[cfg(feature = "experimental-components")]
+        if blocks {
+            return GroundedLdl::factor_by_component_controlled(graph, usize::MAX, meter);
+        }
+        let _ = blocks;
+        GroundedLdl::factor_controlled(graph, usize::MAX, meter)
+    }
+
+    #[test]
+    fn controlled_factors_match_admitted_bits() {
+        for n in [0_usize, 1, 2, 6, 24, 65] {
+            for dense in [false, true] {
+                for disconnected in [false, true] {
+                    let stride = if disconnected { 3 } else { 1 };
+                    for scale in [1e-90, 1.0, 1e90] {
+                        let edges = (0..n).flat_map(|u| {
+                            ((u + 1)..n)
+                                .filter(move |&v| {
+                                    u % stride == v % stride && (dense || v == u + stride)
+                                })
+                                .map(move |v| {
+                                    (u, v, scale * (0.5 + ((u * 7 + v * 11) % 17) as f64))
+                                })
+                        });
+                        let graph = Laplacian::from_edges(n + 2, edges).unwrap();
+                        for blocks in [false, true] {
+                            let mut allow = |_| BuildDecision::Continue;
+                            let mut meter = BuildMeter::new(u64::MAX, &mut allow);
+                            let actual = build(&graph, blocks, &mut meter).unwrap();
+                            #[cfg(feature = "experimental-components")]
+                            let expected = if blocks {
+                                GroundedLdl::factor_by_component_with_budget(&graph, usize::MAX)
+                                    .unwrap()
+                            } else {
+                                GroundedLdl::factor_with_budget(&graph, usize::MAX).unwrap()
+                            };
+                            #[cfg(not(feature = "experimental-components"))]
+                            let expected =
+                                GroundedLdl::factor_with_budget(&graph, usize::MAX).unwrap();
+                            assert_factor_bits(&actual, &expected);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn controlled_factor_stops_before_every_small_graph_boundary() {
+        let graph =
+            Laplacian::from_edges(4, [(0, 1, 2.0), (1, 2, 3.0), (0, 2, 0.5), (2, 3, 4.0)]).unwrap();
+        for blocks in [false, true] {
+            let mut boundaries = Vec::new();
+            let mut record = |boundary| {
+                boundaries.push(boundary);
+                BuildDecision::Continue
+            };
+            build(&graph, blocks, &mut BuildMeter::new(u64::MAX, &mut record)).unwrap();
+            for (index, boundary) in boundaries.iter().enumerate() {
+                assert_eq!(boundary.chunk_id, index as u64);
+                for decision in [BuildDecision::StopUnused, BuildDecision::Interrupted] {
+                    let mut seen = 0;
+                    let mut stop = |current: BuildBoundary| {
+                        assert_eq!(current, boundaries[seen]);
+                        seen += 1;
+                        if current.chunk_id == boundary.chunk_id {
+                            decision
+                        } else {
+                            BuildDecision::Continue
+                        }
+                    };
+                    let error = build(&graph, blocks, &mut BuildMeter::new(u64::MAX, &mut stop))
+                        .unwrap_err();
+                    let reason = if decision == BuildDecision::Interrupted {
+                        BuildStopReason::Interrupted
+                    } else {
+                        BuildStopReason::StopUnused
+                    };
+                    assert!(
+                        matches!(error, CmgError::BuildStopped { reason: actual, phase, chunk_id, charged_work }
+                        if actual == reason && phase == boundary.phase && chunk_id == boundary.chunk_id && charged_work == boundary.charged_work)
+                    );
+                    assert_eq!(seen, index + 1);
+                }
+            }
+            let total = boundaries
+                .iter()
+                .map(|boundary| match boundary.operation {
+                    BuildOperation::Work { units } => u64::from(units),
+                    BuildOperation::Allocation { .. } => 0,
+                })
+                .sum::<u64>();
+            let mut allow = |_| BuildDecision::Continue;
+            assert!(build(&graph, blocks, &mut BuildMeter::new(total, &mut allow)).is_ok());
+            assert!(matches!(
+                build(&graph, blocks, &mut BuildMeter::new(total - 1, &mut allow)),
+                Err(CmgError::BuildStopped {
+                    reason: BuildStopReason::WorkBudgetExhausted,
+                    ..
+                })
+            ));
+            assert!(matches!(
+                build(&graph, blocks, &mut BuildMeter::new(0, &mut allow)),
+                Err(CmgError::BuildStopped {
+                    reason: BuildStopReason::WorkBudgetExhausted,
+                    charged_work: 0,
+                    ..
+                })
+            ));
+        }
     }
 }

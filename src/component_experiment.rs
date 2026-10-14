@@ -155,6 +155,51 @@ pub(crate) fn prune_admitted(
     prune_impl::<true>(aggregation, coarse)
 }
 
+pub(crate) fn prune_controlled(
+    aggregation: &Aggregation,
+    coarse: &Laplacian,
+    meter: &mut crate::build_control::BuildMeter<'_>,
+) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
+    let Some((map, graph)) = coarse.without_isolated_vertices_controlled(meter)? else {
+        return Ok(None);
+    };
+    meter.allocation(
+        "pruned transfer entries",
+        crate::storage::bytes::<(u32, u32)>(aggregation.fine_dimension())?,
+    )?;
+    let mut entries =
+        crate::storage::try_capacity(aggregation.fine_dimension(), "pruned transfer entries")?;
+    for fine in 0..aggregation.fine_dimension() {
+        meter.work("pruned transfer mapping", 32)?;
+        let label = aggregation.label_at(fine);
+        if map[label] != usize::MAX {
+            entries.push((fine as u32, map[label] as u32));
+        }
+    }
+    if entries.len() != entries.capacity() {
+        meter.allocation(
+            "pruned transfer compaction",
+            crate::storage::bytes::<(u32, u32)>(entries.len())?,
+        )?;
+        let mut compact =
+            crate::storage::try_capacity(entries.len(), "pruned transfer compaction")?;
+        for &entry in &entries {
+            meter.work("pruned transfer compaction copy", 8)?;
+            compact.push(entry);
+        }
+        entries = compact;
+    }
+    Ok(Some((
+        PrunedTransfer {
+            fine_dimension: aggregation.fine_dimension(),
+            coarse_dimension: graph.vertex_count(),
+            represented_coarse_dimension: coarse.vertex_count(),
+            entries,
+        },
+        graph,
+    )))
+}
+
 fn prune_impl<const ADMITTED: bool>(
     aggregation: &Aggregation,
     coarse: &Laplacian,
@@ -238,6 +283,75 @@ mod residual_restriction_tests {
                     .is_err()
             );
             assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
+        }
+    }
+}
+
+#[cfg(test)]
+mod controlled_prune_tests {
+    use super::*;
+    use crate::build_control::{BuildBoundary, BuildDecision, BuildMeter, BuildStopReason};
+
+    #[test]
+    fn controlled_pruning_matches_and_stops_at_every_boundary() {
+        let aggregation = Aggregation::new(vec![0, 0, 1, 2, 3, 4, 4, 5], 6).unwrap();
+        // Exercise interspersed isolates, suffix isolates, no isolates, and all isolates.
+        for edges in [
+            vec![(1, 4, 2.0)],
+            vec![(0, 1, 1.0)],
+            vec![
+                (0, 1, 1.0),
+                (1, 2, 2.0),
+                (2, 3, 3.0),
+                (3, 4, 4.0),
+                (4, 5, 5.0),
+            ],
+            vec![],
+        ] {
+            let graph = Laplacian::from_edges(6, edges).unwrap();
+            let expected = prune_admitted(&aggregation, &graph).unwrap();
+            let mut boundaries = Vec::new();
+            let actual = {
+                let mut control = |boundary: BuildBoundary| {
+                    boundaries.push(boundary);
+                    BuildDecision::Continue
+                };
+                prune_controlled(
+                    &aggregation,
+                    &graph,
+                    &mut BuildMeter::new(u64::MAX, &mut control),
+                )
+                .unwrap()
+            };
+            assert_eq!(actual, expected);
+            for (stop, &boundary) in boundaries.iter().enumerate() {
+                let mut seen = 0;
+                let mut control = |candidate: BuildBoundary| {
+                    assert_eq!(candidate, boundaries[seen]);
+                    seen += 1;
+                    if candidate.chunk_id == stop as u64 {
+                        BuildDecision::Interrupted
+                    } else {
+                        BuildDecision::Continue
+                    }
+                };
+                let error = prune_controlled(
+                    &aggregation,
+                    &graph,
+                    &mut BuildMeter::new(u64::MAX, &mut control),
+                )
+                .unwrap_err();
+                assert_eq!(seen, stop + 1);
+                assert_eq!(
+                    error,
+                    CmgError::BuildStopped {
+                        reason: BuildStopReason::Interrupted,
+                        phase: boundary.phase,
+                        chunk_id: boundary.chunk_id,
+                        charged_work: boundary.charged_work
+                    }
+                );
+            }
         }
     }
 }

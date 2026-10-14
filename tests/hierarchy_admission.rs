@@ -9,6 +9,7 @@ thread_local! {
     static CALLS: Cell<usize> = const { Cell::new(0) };
     static FALLIBLE: Cell<usize> = const { Cell::new(0) };
     static FAIL: Cell<Option<usize>> = const { Cell::new(None) };
+    static TRACE: Cell<Option<AllocationLedger>> = const { Cell::new(None) };
 }
 struct Observed;
 fn allocated(bytes: usize) {
@@ -49,6 +50,7 @@ fn fail(size: usize) -> bool {
 }
 unsafe impl GlobalAlloc for Observed {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        trace_allocation(layout.size());
         if fail(layout.size()) {
             return std::ptr::null_mut();
         }
@@ -63,6 +65,7 @@ unsafe impl GlobalAlloc for Observed {
         unsafe { System.dealloc(ptr, layout) };
     }
     unsafe fn realloc(&self, ptr: *mut u8, old: Layout, size: usize) -> *mut u8 {
+        trace_allocation(size);
         if fail(size) {
             return std::ptr::null_mut();
         }
@@ -329,5 +332,236 @@ fn prepared_numeric_generations_share_parents_but_admit_new_builds() {
         check(&graph, options, None, false);
         #[cfg(feature = "experimental-components")]
         check(&graph, options, Some((true, true, true)), false);
+    }
+}
+
+// This fixed-size ledger is entirely TLS/stack storage. Tracing is opt-in, so
+// legacy admission/failure injection above retains its existing behavior.
+#[derive(Clone, Copy, Default, Debug)]
+struct AllocationLedger {
+    pending_bytes: Option<usize>,
+    gates: usize,
+    allocations: usize,
+    mismatch: Option<(Option<usize>, usize)>,
+}
+
+fn trace_allocation(bytes: usize) {
+    let _ = TRACE.try_with(|trace| {
+        if let Some(mut ledger) = trace.get() {
+            if ledger.pending_bytes != Some(bytes) && ledger.mismatch.is_none() {
+                ledger.mismatch = Some((ledger.pending_bytes, bytes));
+            }
+            ledger.pending_bytes = None;
+            ledger.allocations += 1;
+            trace.set(Some(ledger));
+        }
+    });
+}
+
+fn allocation_control(boundary: BuildBoundary, stop_at: Option<usize>) -> BuildDecision {
+    let BuildOperation::Allocation { bytes } = boundary.operation else {
+        return BuildDecision::Continue;
+    };
+    TRACE.with(|trace| {
+        let mut ledger = trace.get().unwrap();
+        let index = ledger.gates;
+        ledger.gates += 1;
+        if ledger.pending_bytes.is_some() && ledger.mismatch.is_none() {
+            // A second gate arrived without consuming the previous nonempty
+            // request. Keep this evidence rather than overwrite the token.
+            ledger.mismatch = Some((ledger.pending_bytes, bytes));
+        }
+        let decision = if stop_at == Some(index) {
+            BuildDecision::Interrupted
+        } else {
+            ledger.pending_bytes = (bytes != 0).then_some(bytes);
+            BuildDecision::Continue
+        };
+        trace.set(Some(ledger));
+        decision
+    })
+}
+
+struct AllocationTrace;
+impl AllocationTrace {
+    fn start() -> Self {
+        TRACE.with(|trace| {
+            assert!(trace.get().is_none());
+            trace.set(Some(AllocationLedger::default()));
+        });
+        Self
+    }
+    fn finish(self) -> AllocationLedger {
+        TRACE.with(|trace| trace.take().unwrap())
+    }
+}
+impl Drop for AllocationTrace {
+    fn drop(&mut self) {
+        TRACE.with(|trace| trace.set(None));
+    }
+}
+
+fn check_controlled_allocations<T>(
+    bound: usize,
+    mut construct: impl FnMut(&mut dyn BuildControl) -> Result<T, CmgError>,
+) {
+    let before = live();
+    PEAK.with(|peak| peak.set(before));
+    let trace = AllocationTrace::start();
+    let result = construct(&mut |boundary| allocation_control(boundary, None));
+    let ledger = trace.finish();
+    let peak = (PEAK.with(Cell::get) - before) as usize;
+    let result = result.unwrap();
+    assert_eq!(
+        ledger.mismatch, None,
+        "ungated or differently sized allocation"
+    );
+    assert_eq!(ledger.pending_bytes, None, "unused allocation gate");
+    assert!(ledger.allocations > 0);
+    assert!(
+        peak <= bound,
+        "controlled peak {peak} exceeds bound {bound}"
+    );
+    drop(result);
+    assert_eq!(live(), before, "successful candidate drop leaked storage");
+
+    // Stop before each allocation, including zero-length requests and Arc
+    // owners. No allocator failure injection or callback allocation is needed.
+    for index in 0..ledger.gates {
+        PEAK.with(|peak| peak.set(before));
+        let trace = AllocationTrace::start();
+        let result = construct(&mut |boundary| allocation_control(boundary, Some(index)));
+        let cancelled = trace.finish();
+        assert!(
+            matches!(
+                result,
+                Err(CmgError::BuildStopped {
+                    reason: BuildStopReason::Interrupted,
+                    ..
+                })
+            ),
+            "allocation gate {index} did not stop construction"
+        );
+        assert_eq!(cancelled.gates, index + 1);
+        assert_eq!(
+            cancelled.mismatch, None,
+            "gate {index}: allocation mismatch"
+        );
+        assert_eq!(
+            cancelled.pending_bytes, None,
+            "gate {index}: stale allocation token"
+        );
+        drop(result);
+        assert_eq!(
+            live(),
+            before,
+            "allocation gate {index}: cancelled candidate leaked storage"
+        );
+        assert!((PEAK.with(Cell::get) - before) as usize <= bound);
+    }
+}
+
+#[test]
+fn controlled_graph_allocations_are_gated_bounded_and_released() {
+    for (vertices, edges) in [
+        (0, vec![]),
+        (9, vec![]),
+        (
+            9,
+            vec![(0, 1, 1.0), (1, 0, 2.0), (1, 2, 0.125), (4, 7, 3.0)],
+        ),
+        (
+            12,
+            (0..12)
+                .flat_map(|v| (0..v).map(move |u| (u, v, 1.0 + (u + v) as f64)))
+                .collect(),
+        ),
+    ] {
+        // Independent requested-layout model: two compact edge banks, one
+        // diagonal, and Arc<Vec<Edge>>, Arc<Vec<f64>>, Arc<()> owners.
+        let arc_counts = Layout::new::<[usize; 2]>();
+        let arc_edges = arc_counts
+            .extend(Layout::new::<Vec<Edge>>())
+            .unwrap()
+            .0
+            .pad_to_align()
+            .size();
+        let arc_diagonal = arc_counts
+            .extend(Layout::new::<Vec<f64>>())
+            .unwrap()
+            .0
+            .pad_to_align()
+            .size();
+        let arc_identity = arc_counts
+            .extend(Layout::new::<()>())
+            .unwrap()
+            .0
+            .pad_to_align()
+            .size();
+        let bound = 2 * edges.len() * std::mem::size_of::<Edge>()
+            + vertices * std::mem::size_of::<f64>()
+            + arc_edges
+            + arc_diagonal
+            + arc_identity;
+        check_controlled_allocations(bound, |control| {
+            Laplacian::from_edges_controlled(vertices, &edges, bound, u64::MAX, control)
+        });
+    }
+}
+
+#[cfg(feature = "experimental-components")]
+#[test]
+fn controlled_preconditioner_and_workspace_allocations_are_gated_bounded_and_released() {
+    let fixtures = [
+        Laplacian::from_edges(0, []).unwrap(),
+        Laplacian::from_edges(11, []).unwrap(),
+        Laplacian::from_edges(23, (1..19).map(|v| (v - 1, v, 1.0))).unwrap(),
+        Laplacian::from_edges(16, (0..16).flat_map(|v| (0..v).map(move |u| (u, v, 1.0)))).unwrap(),
+        Laplacian::from_edges(
+            29,
+            (1..17)
+                .map(|v| (v - 1, v, 1.0))
+                .chain([(20, 22, 2.0), (22, 24, 3.0)]),
+        )
+        .unwrap(),
+    ];
+    for graph in &fixtures {
+        for direct_threshold in [4, 32] {
+            let options = CmgOptions {
+                direct_threshold,
+                max_levels: 5,
+                ..CmgOptions::default()
+            };
+            for factor_terminal_components in [false, true] {
+                let experiment = ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    preserve_unpruned_stopping: true,
+                    factor_terminal_components,
+                };
+                let bound = CmgPreconditioner::component_serial_construction_allocation_bound(
+                    graph.vertex_count(),
+                    graph.edge_count(),
+                    options,
+                    experiment,
+                )
+                .unwrap();
+                let construct = |control: &mut dyn BuildControl| {
+                    CmgPreconditioner::build_component_experiment_serial_controlled(
+                        graph,
+                        options,
+                        experiment,
+                        bound,
+                        u64::MAX,
+                        control,
+                    )
+                };
+                check_controlled_allocations(bound, construct);
+                let preconditioner = construct(&mut |_| BuildDecision::Continue).unwrap();
+                let workspace_bound = preconditioner.workspace_allocation_bytes().unwrap();
+                check_controlled_allocations(workspace_bound, |control| {
+                    preconditioner.try_workspace_controlled(u64::MAX, control)
+                });
+            }
+        }
     }
 }

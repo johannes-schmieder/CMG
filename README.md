@@ -352,3 +352,5 @@ Rust port and record the version or source commit used.
 
 GNU GPL version 3 only. See [`LICENSE`](LICENSE) and
 [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
+
+Controlled serial candidate construction, cooperative cancellation, and scalar workspace preparation are documented in [controlled construction](docs/controlled-construction.md).

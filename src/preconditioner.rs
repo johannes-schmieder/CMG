@@ -523,7 +523,9 @@ crate::storage::storage_fields!(
 crate::storage::storage_fields!(ParallelCmgPlan, level_operators, level_lineages);
 
 impl CmgPreconditioner {
-    pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
+    /// Checked requested layouts for one scalar application workspace.
+    /// Excludes allocator overhead and the retained preconditioner itself.
+    pub fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
         CmgWorkspace::allocation_bytes(
             &self.hierarchy,
             self.direct_terminal.as_ref(),
@@ -706,6 +708,121 @@ impl CmgPreconditioner {
                 GroundedLdl::factor_with_budget(graph, budget_bytes)
             })
         }
+    }
+
+    /// Build the serial component candidate with cooperative, precharged work.
+    ///
+    /// This uses the same hierarchy, stopping rules and arithmetic as the admitted
+    /// serial builder. The caller-supplied graph is already prepared; construction
+    /// owns only private candidate state until success. Computational chunks have
+    /// at most 1024 primitive work units. Allocator/OS and cleanup latency are
+    /// separately excluded, and allocations are gated before they begin. The work
+    /// budget includes conservative allowances rather than measured CPU time.
+    /// No thread pool or parallel application plan is created. The callback may
+    /// block to park construction, then grant the next chunk or drain the build.
+    #[cfg(feature = "experimental-components")]
+    pub fn build_component_experiment_serial_controlled(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        budget_bytes: usize,
+        work_budget: u64,
+        control: &mut dyn crate::BuildControl,
+    ) -> Result<Self, CmgError> {
+        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
+        // The allocation-bound formula uses fixed-work checked scalar arithmetic.
+        meter.work("preconditioner admission", 1024)?;
+        crate::storage::admit(
+            Self::component_serial_construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+                experiment,
+            )?,
+            budget_bytes,
+        )?;
+        let mut hierarchy =
+            CmgHierarchy::build_component_controlled(graph, options, experiment, &mut meter)?;
+        meter.work("preconditioner finest components", 64)?;
+        let finest = hierarchy
+            .levels()
+            .first()
+            .ok_or(CmgError::InvalidHierarchy {
+                context: "hierarchy contains no finest level",
+            })?;
+        let finest_components = if let Some(components) = finest.graph().prepared_components() {
+            Arc::clone(components)
+        } else {
+            let components = Components::try_from_endpoints_controlled(
+                finest.graph().vertex_count(),
+                finest
+                    .graph()
+                    .edges()
+                    .iter()
+                    .map(|edge| (edge.u(), edge.v())),
+                &mut meter,
+            )?;
+            meter.allocation(
+                "finest component owner",
+                crate::storage::arc_bytes::<Components>()?,
+            )?;
+            Arc::new(components)
+        };
+        let mut coarse_centering =
+            meter.try_capacity(hierarchy.levels().len() - 1, "coarse centering plans")?;
+        for level in hierarchy.levels().iter().skip(1) {
+            meter.work("coarse centering plan", 32)?;
+            coarse_centering.push(CenteringPlan::try_from_laplacian_controlled(
+                level.graph(),
+                &mut meter,
+            )?);
+        }
+        meter.work("preconditioner terminal decision", 64)?;
+        let direct_terminal = if hierarchy.report().terminal_reason() == TerminalReason::Direct {
+            let terminal = hierarchy
+                .levels()
+                .last()
+                .ok_or(CmgError::InvalidHierarchy {
+                    context: "hierarchy contains no terminal level",
+                })?;
+            Some(if experiment.factor_terminal_components {
+                GroundedLdl::factor_by_component_controlled(
+                    terminal.graph(),
+                    budget_bytes,
+                    &mut meter,
+                )?
+            } else {
+                GroundedLdl::factor_controlled(terminal.graph(), budget_bytes, &mut meter)?
+            })
+        } else {
+            None
+        };
+        let mut repeat_counts =
+            meter.try_capacity(hierarchy.levels().len(), "preconditioner repeat counts")?;
+        for level in hierarchy.levels() {
+            meter.work("preconditioner repeat counts", 16)?;
+            repeat_counts.push(level.repeat());
+        }
+        meter.work("preconditioner factor repeat adjustment", 128)?;
+        if hierarchy.levels().len() >= 2 {
+            if let Some(factor) = &direct_terminal {
+                let penultimate = hierarchy.levels().len() - 2;
+                let repeat = repeat_from_nonzeros(
+                    hierarchy.levels()[penultimate].graph().matrix_nnz(),
+                    factor.factor_nonzeros(),
+                );
+                repeat_counts[penultimate] = repeat;
+                hierarchy.set_repeat(penultimate, repeat)?;
+            }
+        }
+        meter.work("preconditioner publication", 64)?;
+        Ok(Self {
+            hierarchy,
+            finest_components,
+            coarse_centering,
+            direct_terminal,
+            repeat_counts,
+        })
     }
 
     /// New CMG-owned layouts for an admitted executor-aware ordinary build.
@@ -1067,6 +1184,27 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
+        )
+    }
+
+    /// Fallibly prepare scalar application storage with bounded work gates.
+    ///
+    /// Allocation requests are reported separately to the callback. This does
+    /// not create an application plan or an executor. Use the existing scalar
+    /// `apply_compatible_into` with the returned workspace for a fixed cycle.
+    #[cfg(feature = "experimental-components")]
+    pub fn try_workspace_controlled(
+        &self,
+        work_budget: u64,
+        control: &mut dyn crate::BuildControl,
+    ) -> Result<CmgWorkspace, CmgError> {
+        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
+        CmgWorkspace::try_new_controlled(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+            &mut meter,
         )
     }
 

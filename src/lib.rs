@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod build_control;
 #[cfg(feature = "cycle-profiling")]
 mod cmg_profile;
 mod coarsen;
@@ -37,6 +38,9 @@ mod sddm_solver;
 mod storage;
 mod workspace;
 
+pub use build_control::{
+    BuildBoundary, BuildControl, BuildDecision, BuildOperation, BuildStopReason,
+};
 #[cfg(feature = "cycle-profiling")]
 pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
 pub use coarsen::Aggregation;
