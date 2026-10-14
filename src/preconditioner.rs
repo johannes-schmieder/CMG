@@ -533,6 +533,26 @@ impl CmgPreconditioner {
             &self.coarse_centering,
         )
     }
+    /// Count scalar workspace layouts with bounded work gates and no allocation.
+    ///
+    /// Returns the same requested byte count as `workspace_allocation_bytes`,
+    /// excluding allocator overhead and the retained preconditioner itself.
+    #[cfg(feature = "experimental-components")]
+    pub fn workspace_allocation_bytes_controlled(
+        &self,
+        work_budget: u64,
+        control: &mut dyn crate::BuildControl,
+    ) -> Result<usize, CmgError> {
+        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
+        CmgWorkspace::allocation_bytes_controlled(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+            &mut meter,
+        )
+    }
+
     #[cfg(feature = "parallel")]
     pub(crate) fn workspace_bytes(&self) -> usize {
         CmgWorkspace::required_bytes(

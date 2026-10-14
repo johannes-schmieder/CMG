@@ -74,6 +74,46 @@ impl CmgWorkspace {
         )
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn allocation_bytes_controlled(
+        hierarchy: &CmgHierarchy,
+        direct_terminal: Option<&GroundedLdl>,
+        finest_components: &Components,
+        coarse_centering: &[CenteringPlan],
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<usize, CmgError> {
+        use crate::storage::{add, bytes};
+        meter.work("CMG workspace allocation fixed layouts", 128)?;
+        let levels = hierarchy.levels();
+        let mut total = add(
+            bytes::<LevelWorkspace>(levels.len())?,
+            bytes::<usize>(levels.len())?,
+        )?;
+        total = add(total, bytes::<CenteringWorkspace>(coarse_centering.len())?)?;
+        total = add(total, bytes::<f64>(levels[0].graph().vertex_count())?)?;
+        total = add(
+            total,
+            ComponentWorkspace::allocation_bytes(finest_components.count())?,
+        )?;
+        for plan in coarse_centering {
+            meter.work("CMG workspace allocation centering layouts", 32)?;
+            total = add(total, plan.workspace_allocation_bytes()?)?;
+        }
+        for (index, level) in levels.iter().enumerate() {
+            meter.work("CMG workspace allocation level layouts", 64)?;
+            total = add(total, bytes::<f64>(level.graph().vertex_count())?)?;
+            let coarse = levels
+                .get(index + 1)
+                .map_or(0, |l| l.graph().vertex_count());
+            total = add(total, bytes::<[f64; 2]>(coarse)?)?;
+        }
+        meter.work("CMG workspace allocation terminal layouts", 32)?;
+        add(
+            total,
+            bytes::<[f64; 2]>(direct_terminal.map_or(0, GroundedLdl::active_dimension))?,
+        )
+    }
+
     #[cfg(feature = "parallel")]
     pub(crate) fn required_bytes(
         hierarchy: &CmgHierarchy,
@@ -682,6 +722,93 @@ mod controlled_workspace_tests {
                     && chunk_id == expected.chunk_id
                     && charged_work == expected.charged_work));
             }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod controlled_workspace_allocation_tests {
+    use crate::build_control::{BuildBoundary, BuildDecision, BuildOperation, BuildStopReason};
+    use crate::{CmgError, CmgOptions, CmgPreconditioner, Laplacian};
+
+    #[test]
+    fn controlled_allocation_bytes_match_and_stop_before_each_chunk() {
+        for direct_threshold in [2, 128] {
+            let graph =
+                Laplacian::from_edges(66, (0..63).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
+            let preconditioner = CmgPreconditioner::build(
+                &graph,
+                CmgOptions {
+                    direct_threshold,
+                    ..CmgOptions::default()
+                },
+            )
+            .unwrap();
+            let expected_bytes = preconditioner.workspace_allocation_bytes().unwrap();
+            let mut boundaries = Vec::new();
+            let mut record = |boundary| {
+                boundaries.push(boundary);
+                BuildDecision::Continue
+            };
+            assert_eq!(
+                preconditioner
+                    .workspace_allocation_bytes_controlled(u64::MAX, &mut record)
+                    .unwrap(),
+                expected_bytes
+            );
+            let mut complete_budget = 0;
+            for expected in &boundaries {
+                let BuildOperation::Work { units } = expected.operation else {
+                    panic!("layout counting must not request allocation");
+                };
+                assert!((1..=1024).contains(&units));
+                complete_budget = expected.charged_work + u64::from(units);
+                for (decision, reason) in [
+                    (BuildDecision::StopUnused, BuildStopReason::StopUnused),
+                    (BuildDecision::Interrupted, BuildStopReason::Interrupted),
+                ] {
+                    let mut observed = Vec::new();
+                    let mut control = |boundary: BuildBoundary| {
+                        observed.push(boundary);
+                        if boundary.chunk_id == expected.chunk_id {
+                            decision
+                        } else {
+                            BuildDecision::Continue
+                        }
+                    };
+                    let error = preconditioner
+                        .workspace_allocation_bytes_controlled(u64::MAX, &mut control)
+                        .unwrap_err();
+                    assert_eq!(observed, boundaries[..=expected.chunk_id as usize]);
+                    assert!(matches!(error, CmgError::BuildStopped {
+                        reason: actual_reason, phase, chunk_id, charged_work,
+                    } if actual_reason == reason
+                        && phase == expected.phase
+                        && chunk_id == expected.chunk_id
+                        && charged_work == expected.charged_work));
+                }
+                let mut calls = 0;
+                let mut control = |_| {
+                    calls += 1;
+                    BuildDecision::Continue
+                };
+                let error = preconditioner
+                    .workspace_allocation_bytes_controlled(complete_budget - 1, &mut control)
+                    .unwrap_err();
+                assert_eq!(calls, expected.chunk_id);
+                assert!(matches!(error, CmgError::BuildStopped {
+                    reason: BuildStopReason::WorkBudgetExhausted, phase, chunk_id, charged_work,
+                } if phase == expected.phase
+                    && chunk_id == expected.chunk_id
+                    && charged_work == expected.charged_work));
+            }
+            let mut control = |_| BuildDecision::Continue;
+            assert_eq!(
+                preconditioner
+                    .workspace_allocation_bytes_controlled(complete_budget, &mut control)
+                    .unwrap(),
+                expected_bytes
+            );
         }
     }
 }
