@@ -172,3 +172,47 @@ residual certification and solver restart work. A handoff caller must reserve
 those costs separately before starting the first cycle. Metadata tests cover
 known direct factors including packed zeros, multilevel repetition, checked
 overflow, deterministic cancellation and work-budget denial.
+
+## Cumulative grants and retained construction
+
+`BuildPrefix` is an allocation-free controller ledger. It starts with a fixed
+full allowance B and grant G=0. `grant(G)` accepts only monotone cumulative
+values within B. `admit` precharges each complete operation or returns `Park`
+without changing its charged work or ordinal. A repeated parked admission must
+supply exactly the same boundary. The constructing callback blocks on its
+existing worker stack; returning and rebuilding is not a continuation.
+Entrypoint-local counters may reset while the prefix's global task/ordinal
+identity continues across input preparation, graph, hierarchy and workspace.
+Callers must route their own preprocessing and wrapper construction through the
+same ledger and pass the full cap, rather than G, to each CMG constructor.
+
+`drain_issued_prefix` freezes the current grant. The first chunk that cannot fit
+is retained as the pending frontier, with unused grant remainder intact.
+`PrefixSnapshot::drained()` checks the pending price against the current grant;
+pending identity alone cannot acknowledge draining after a newer grant.
+Allocation gates have zero computational price and remain in their original
+position before that frontier. `abandon_unissued_suffix` runs the same issued
+prefix before returning `StopUnused`. It cannot truncate issued work based on
+when the command arrives. A chunk that cannot fit even B terminates with
+`BudgetExhausted`. `interrupt` requests Break immediately; an earlier fatal
+outcome is still retained for diagnostics. `finish` records completion or a
+fatal kind. The last admitted operation identifies an executed failure site;
+a pending boundary identifies an unexecuted operation, not a hypothetical fault.
+
+The ledger supplies neither an executor nor synchronization. The enclosing
+service owns commands, blocking, the persistent Low-session lifetime, logical
+certificate/epoch order and terminal arbitration. Completion and fatal outcomes
+never release a worker themselves. The service must hold its existing worker
+until its prescribed ownership boundary and join before publication or rollback.
+Repeated full construction under differently sized grants has identical admitted
+boundary traces, hierarchy/factors and scalar-cycle outputs.
+
+A service can preallocate its fixed synchronization and owned inputs before
+launch, then admit later fallible typed allocations at stable logical gates.
+This is distinct from preallocating all hierarchy arenas before launch. It
+preserves the bounded work and requested-layout admission contract, not a bound
+on allocation latency or schedule independence of real operating-system OOM.
+Successful arithmetic and faults injected at fixed logical gates must remain
+repeatable. Existing small infallible Arc allocations retain the limitation
+stated above; a caller requiring every runtime allocation to be fallible must
+account for that separately before claiming overlap eligibility.

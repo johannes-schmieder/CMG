@@ -203,3 +203,77 @@ fn callback_can_park_then_grant_or_drain_without_building_a_pool() {
         }
     }
 }
+
+#[test]
+fn prefix_parking_preserves_full_construction_and_global_trace() {
+    use cmg::{BuildPrefix, PrefixDecision, PrefixOutcome};
+    let edges: Vec<_> = (0..16).map(|i| (i, i + 1, 1.0 + (i % 3) as f64)).collect();
+    let construct = |control: &mut dyn cmg::BuildControl| {
+        let graph = Laplacian::from_edges_controlled(17, &edges, usize::MAX, u64::MAX, control)?;
+        let built = CmgPreconditioner::build_component_experiment_serial_controlled(
+            &graph,
+            CmgOptions {
+                direct_threshold: 3,
+                ..Default::default()
+            },
+            ComponentBuildOptions::default(),
+            usize::MAX,
+            u64::MAX,
+            control,
+        )?;
+        built.try_workspace_controlled(u64::MAX, control)?;
+        Ok::<_, CmgError>((graph, built))
+    };
+    let mut reference = BuildPrefix::new(11, u64::MAX);
+    reference.grant(u64::MAX).unwrap();
+    let mut expected = Vec::new();
+    let (graph, old) = construct(&mut |boundary| {
+        assert_eq!(reference.admit(boundary).unwrap(), PrefixDecision::Continue);
+        expected.push(reference.snapshot().last_admitted.unwrap());
+        BuildDecision::Continue
+    })
+    .unwrap();
+    let cap = reference.snapshot().charged;
+    for quantum in [257, 4096] {
+        let (park_tx, park_rx) = std::sync::mpsc::sync_channel(0);
+        let (grant_tx, grant_rx) = std::sync::mpsc::sync_channel(0);
+        let (new, actual) = std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                let mut prefix = BuildPrefix::new(11, cap);
+                let mut actual = Vec::new();
+                let (_, built) = construct(&mut |boundary| loop {
+                    match prefix.admit(boundary).unwrap() {
+                        PrefixDecision::Continue => {
+                            actual.push(prefix.snapshot().last_admitted.unwrap());
+                            break BuildDecision::Continue;
+                        }
+                        PrefixDecision::Park => {
+                            prefix.drain_issued_prefix().unwrap();
+                            park_tx.send(Some(prefix.snapshot())).unwrap();
+                            prefix.grant(grant_rx.recv().unwrap()).unwrap();
+                        }
+                        other => panic!("unexpected decision: {other:?}"),
+                    }
+                })
+                .unwrap();
+                prefix.finish(PrefixOutcome::Complete).unwrap();
+                park_tx.send(None).unwrap();
+                (built, actual)
+            });
+            while let Some(parked) = park_rx.recv().unwrap() {
+                assert!(parked.charged <= parked.issued);
+                assert!(parked.drained());
+                let next = parked.issued.saturating_add(quantum).min(cap);
+                grant_tx.send(next).unwrap();
+            }
+            worker.join().unwrap()
+        });
+        assert_eq!(actual, expected);
+        assert_eq!(new.hierarchy(), old.hierarchy());
+        assert_eq!(new.terminal_factor(), old.terminal_factor());
+        let rhs = graph
+            .matvec(&(0..17).map(|i| i as f64).collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(new.apply(&rhs).unwrap(), old.apply(&rhs).unwrap());
+    }
+}

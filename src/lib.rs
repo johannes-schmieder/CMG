@@ -9,6 +9,7 @@
 #![deny(missing_docs)]
 
 mod build_control;
+mod build_prefix;
 #[cfg(feature = "cycle-profiling")]
 mod cmg_profile;
 mod coarsen;
@@ -40,6 +41,9 @@ mod workspace;
 
 pub use build_control::{
     BuildBoundary, BuildControl, BuildDecision, BuildOperation, BuildStopReason,
+};
+pub use build_prefix::{
+    BuildPrefix, PrefixDecision, PrefixError, PrefixLocation, PrefixOutcome, PrefixSnapshot,
 };
 #[cfg(feature = "cycle-profiling")]
 pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
