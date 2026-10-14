@@ -134,3 +134,41 @@ storage-report undercount: a zero-sized Arc payload address could equal an
 adjacent vector allocation base. Commit `977b1e3` separates those identity
 namespaces, adds a deterministic regression, and restores those checks. No
 performance or cross-platform qualification claim follows from this validation.
+
+## Bounded metadata and first-application reservation
+
+`workspace_allocation_bytes_controlled` evaluates the same requested-layout
+formula as `workspace_allocation_bytes`, with separate bounded work gates for
+each level and centering plan and no allocations. Use it when the metadata scan
+is itself inside an optional preparation budget.
+
+`scalar_cycle_work_bound_controlled` computes a checked primitive-work allowance
+for one `apply_compatible_into` call with a valid workspace. The metadata query
+is also gated per level. For a level with n vertices, m edges and c child
+vertices, one nonterminal stationary iteration is bounded by
+
+    D = 256 + 64 n + 64 m + 64 c.
+
+This covers up to three edge matvecs (the first iteration needs only two), both
+smoothing sweeps, restriction/prolongation, coarse component centering and
+fixed bookkeeping. Transfers contain at most n entries and coarse component
+counts are at most c. The construction query evaluates the stored recursive
+repeat counts bottom-up: a nonterminal call with k iterations costs at most
+k times (D plus its child call bound). A zero-dimensional child is skipped.
+Terminal calls ignore k, as the application kernel does. A diagonal terminal
+costs at most 64 + 8 n. A direct terminal costs at most 256 + 32 n + 32 s,
+where s is the actual strict factor storage traversed once in each triangular
+solve. For packed factors this includes explicitly stored zero slots; the
+numerical nonzero count cannot bound packed traversal. At the top, 128 plus
+128 times the level count covers workspace/public validation. These are
+conservative scalar arithmetic, record-access, comparison and move allowances,
+not instruction or elapsed-time estimates. Compiler loop/runtime mechanics
+and callback/OS latency are not an instruction-count contract.
+
+Checked overflow declines the query through `BuildStopped::CounterOverflow`;
+a wrapped or saturated underestimate is never returned. The allowance excludes
+caller gather/scatter, RHS preparation, coefficient reconstruction, original
+residual certification and solver restart work. A handoff caller must reserve
+those costs separately before starting the first cycle. Metadata tests cover
+known direct factors including packed zeros, multilevel repetition, checked
+overflow, deterministic cancellation and work-budget denial.

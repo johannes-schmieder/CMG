@@ -88,7 +88,7 @@ impl<'a> BuildMeter<'a> {
         }
     }
 
-    fn stopped(&self, phase: &'static str, reason: BuildStopReason) -> CmgError {
+    pub(crate) fn stopped(&self, phase: &'static str, reason: BuildStopReason) -> CmgError {
         CmgError::BuildStopped {
             reason,
             phase,

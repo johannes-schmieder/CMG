@@ -647,6 +647,16 @@ impl GroundedLdl {
             )
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn scalar_solve_slots(&self) -> usize {
+        // Packed solves traverse explicit zeros too: factor_nonzeros is not a
+        // safe work bound for that representation.
+        match &self.lower {
+            LowerFactor::Packed { values } => values.len(),
+            LowerFactor::Sparse { row_values, .. } => row_values.len(),
+        }
+    }
+
     /// Solve a compatible Laplacian system using default validation tolerances.
     pub fn solve(&self, rhs: &[f64]) -> Result<Vec<f64>, CmgError> {
         self.solve_with_validation(rhs, ValidationOptions::default())
