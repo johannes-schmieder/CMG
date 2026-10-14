@@ -48,7 +48,15 @@ impl CmgStorageReport {
                 for other in roots {
                     other.visit(&mut |candidate| {
                         if !candidate.runtime {
-                            if previous < ordinal && candidate.address == allocation.address {
+                            // Arc identity is its payload pointer, whereas a vector's
+                            // identity is its backing-allocation base. An Arc<()>
+                            // payload can be one-past the header and coincide with
+                            // the base of an adjacent vector allocation. Keep these
+                            // two identity namespaces distinct.
+                            if previous < ordinal
+                                && candidate.address == allocation.address
+                                && candidate.arc == allocation.arc
+                            {
                                 duplicate = true;
                             }
                             previous = add(previous, 1)?;
@@ -328,5 +336,42 @@ impl Storage for CmgError {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod allocation_identity_tests {
+    use super::*;
+
+    struct AdjacentOwners;
+    impl Storage for AdjacentOwners {
+        fn visit(
+            &self,
+            visitor: &mut dyn FnMut(Allocation) -> Result<(), CmgError>,
+        ) -> Result<(), CmgError> {
+            // A zero-sized Arc payload can equal the next allocation's base.
+            visitor(Allocation {
+                address: 0x1010,
+                bytes: 16,
+                arc: true,
+                runtime: false,
+            })?;
+            visitor(Allocation {
+                address: 0x1010,
+                bytes: 24,
+                arc: false,
+                runtime: false,
+            })
+        }
+    }
+
+    #[test]
+    fn zero_sized_arc_payload_does_not_alias_adjacent_vector_base() {
+        let owners = AdjacentOwners;
+        let report = CmgStorageReport::measure(&[&owners, &owners]).unwrap();
+        assert_eq!(report.total_bytes().unwrap(), 40);
+        assert_eq!(report.arc_allocation_bytes(), 16);
+        assert_eq!(report.capacity_bytes(), 24);
+        assert_eq!(report.allocation_count(), 2);
     }
 }
