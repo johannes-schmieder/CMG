@@ -523,6 +523,28 @@ crate::storage::storage_fields!(
 crate::storage::storage_fields!(ParallelCmgPlan, level_operators, level_lineages);
 
 impl CmgPreconditioner {
+    /// Conservative requested storage for one scalar application workspace,
+    /// before constructing a hierarchy or its caches.
+    ///
+    /// Bounds [`Self::workspace_allocation_bytes`] when the initial vertex count,
+    /// every level dimension/component count, and terminal active dimension are
+    /// at most `vertices`, with at most `options.max_levels` stored levels. This
+    /// includes level/dimension/centering descriptors, finest projection banks,
+    /// per-level residual/coarse/centering arrays, and terminal factor work arrays.
+    ///
+    /// The query allocates nothing and takes constant work. All options are
+    /// validated first; invalid options or size/layout overflow return an error.
+    /// The bound excludes the retained preconditioner, input/output buffers,
+    /// batch workspaces, parallel runtime/caches, inline root values and allocator
+    /// overhead. It is neither cumulative construction admission nor an RSS bound.
+    pub fn scalar_workspace_allocation_bound(
+        vertices: usize,
+        options: CmgOptions,
+    ) -> Result<usize, CmgError> {
+        let options = options.validate()?;
+        CmgWorkspace::allocation_bound(vertices, options.max_levels)
+    }
+
     /// Checked requested layouts for one scalar application workspace.
     /// Excludes allocator overhead and the retained preconditioner itself.
     pub fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {

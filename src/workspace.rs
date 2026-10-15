@@ -40,6 +40,36 @@ pub struct CmgWorkspace {
 }
 
 impl CmgWorkspace {
+    /// Dimension-only bound for the same requested layouts as `allocation_bytes`.
+    /// The public caller has validated `max_levels >= 1`.
+    pub(crate) fn allocation_bound(vertices: usize, max_levels: usize) -> Result<usize, CmgError> {
+        use crate::storage::{add, bytes};
+        let coarse_levels = max_levels - 1;
+        let repeated = |size: usize, count: usize| {
+            size.checked_mul(count).ok_or(CmgError::InvalidHierarchy {
+                context: "CMG scalar workspace bound overflows",
+            })
+        };
+        let mut total = add(
+            bytes::<LevelWorkspace>(max_levels)?,
+            bytes::<usize>(max_levels)?,
+        )?;
+        total = add(total, bytes::<CenteringWorkspace>(coarse_levels)?)?;
+        // Finest projected RHS and its component projection banks.
+        total = add(total, bytes::<f64>(vertices)?)?;
+        total = add(total, ComponentWorkspace::allocation_bytes(vertices)?)?;
+        // Every level retains a residual. Every nonterminal level additionally
+        // retains two coarse vectors and one centering workspace.
+        total = add(total, repeated(bytes::<f64>(vertices)?, max_levels)?)?;
+        let coarse = add(
+            bytes::<[f64; 2]>(vertices)?,
+            CenteringWorkspace::allocation_bytes(vertices)?,
+        )?;
+        total = add(total, repeated(coarse, coarse_levels)?)?;
+        // Only the terminal level can own factor forward/solution banks.
+        add(total, bytes::<[f64; 2]>(vertices)?)
+    }
+
     pub(crate) fn allocation_bytes(
         hierarchy: &CmgHierarchy,
         direct_terminal: Option<&GroundedLdl>,

@@ -167,6 +167,10 @@ pub(crate) struct CenteringWorkspace {
 }
 
 impl CenteringWorkspace {
+    pub(crate) fn allocation_bytes(component_count: usize) -> Result<usize, CmgError> {
+        crate::storage::bytes::<[f64; 3]>(component_count)
+    }
+
     fn new(component_count: usize) -> Self {
         Self {
             sums: vec![0.0; component_count],
@@ -347,7 +351,7 @@ impl CenteringPlan {
         })
     }
     pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
-        crate::storage::bytes::<[f64; 3]>(self.sizes.len())
+        CenteringWorkspace::allocation_bytes(self.sizes.len())
     }
     pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
         let Components { labels, sizes, .. } = Components::from_laplacian(graph);
