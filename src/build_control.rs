@@ -48,6 +48,15 @@ pub struct BuildBoundary {
 /// A stop unwinds through ordinary `Result` returns and drops private partial
 /// state. Allocator/deallocator and operating-system latency are not bounded.
 pub trait BuildControl {
+    /// Opt into groups of at most eight ordered dense-factor update terms.
+    /// Each term retains its 128-unit tariff, so one complete group is prepaid
+    /// with at most 1024 units before arithmetic starts. Allocation gates and
+    /// arithmetic order are unchanged. The default preserves primitive frontiers.
+    /// This preference is sampled once per controlled entrypoint.
+    fn group_dense_work(&self) -> bool {
+        false
+    }
+
     /// Decide whether the operation described by `boundary` may begin.
     fn checkpoint(&mut self, boundary: BuildBoundary) -> BuildDecision;
 }
@@ -76,16 +85,27 @@ pub(crate) struct BuildMeter<'a> {
     budget: u64,
     charged: u64,
     ordinal: u64,
+    #[cfg(feature = "experimental-components")]
+    dense_chunk_len: usize,
 }
 
 impl<'a> BuildMeter<'a> {
     pub(crate) fn new(budget: u64, control: &'a mut dyn BuildControl) -> Self {
+        #[cfg(feature = "experimental-components")]
+        let dense_chunk_len = if control.group_dense_work() { 8 } else { 1 };
         Self {
             control,
             budget,
             charged: 0,
             ordinal: 0,
+            #[cfg(feature = "experimental-components")]
+            dense_chunk_len,
         }
+    }
+
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn dense_chunk_len(&self) -> usize {
+        self.dense_chunk_len
     }
 
     pub(crate) fn stopped(&self, phase: &'static str, reason: BuildStopReason) -> CmgError {

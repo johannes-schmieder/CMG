@@ -1451,6 +1451,7 @@ fn factor_dense_controlled(
     meter: &mut BuildMeter<'_>,
 ) -> Result<(Vec<Vec<f64>>, Vec<f64>), CmgError> {
     let dimension = permutation.len();
+    let chunk = meter.dense_chunk_len();
     let mut dense_lower = dense_bank_controlled(dimension, meter)?;
     let mut diagonal = meter.try_filled(dimension, 0.0, "terminal diagonal")?;
     for (row, values) in dense_lower.iter_mut().enumerate() {
@@ -1461,10 +1462,13 @@ fn factor_dense_controlled(
     for column in 0..dimension {
         meter.work("terminal dense numeric", 128)?;
         let mut pivot = matrix[column][column];
-        for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
-            meter.work("terminal dense numeric", 128)?;
-            let value = dense_lower[column][previous];
-            pivot -= value * value * diagonal_value;
+        for first in (0..column).step_by(chunk) {
+            let end = (first + chunk).min(column);
+            meter.work("terminal dense numeric", (128 * (end - first)) as u16)?;
+            for (previous, &diagonal_value) in diagonal.iter().enumerate().take(end).skip(first) {
+                let value = dense_lower[column][previous];
+                pivot -= value * value * diagonal_value;
+            }
         }
         if !pivot.is_finite() || pivot <= 0.0 {
             return Err(CmgError::NonPositivePivot {
@@ -1477,10 +1481,14 @@ fn factor_dense_controlled(
         for row in (column + 1)..dimension {
             meter.work("terminal dense numeric", 128)?;
             let mut value = matrix[row][column];
-            for (previous, diagonal_value) in diagonal.iter().copied().enumerate().take(column) {
-                meter.work("terminal dense numeric", 128)?;
-                value -=
-                    dense_lower[row][previous] * dense_lower[column][previous] * diagonal_value;
+            for first in (0..column).step_by(chunk) {
+                let end = (first + chunk).min(column);
+                meter.work("terminal dense numeric", (128 * (end - first)) as u16)?;
+                for (previous, &diagonal_value) in diagonal.iter().enumerate().take(end).skip(first)
+                {
+                    value -=
+                        dense_lower[row][previous] * dense_lower[column][previous] * diagonal_value;
+                }
             }
             dense_lower[row][column] = value / pivot;
         }

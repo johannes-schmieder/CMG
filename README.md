@@ -354,3 +354,17 @@ GNU GPL version 3 only. See [`LICENSE`](LICENSE) and
 [`docs/UPSTREAM.md`](docs/UPSTREAM.md).
 
 Controlled serial candidate construction, cooperative cancellation, and scalar workspace preparation are documented in [controlled construction](docs/controlled-construction.md).
+
+### Opt-in dense construction chunks
+
+Experimental controlled builders accept `BuildControl::group_dense_work()`
+(default false). Enabling it prepays up to eight consecutive dense-factor update
+terms per checkpoint, retaining 128 tariff units per term and the 1024-unit
+maximum. Arithmetic order, factor storage, allocation admission and the ordinary
+builder are unchanged. Primitive mode preserves the original frontier sequence;
+grouped mode changes only work frontiers and callback frequency. The existing
+control still owns parking and interruption. This bounds primitive work between
+checkpoints, not allocator, cleanup or operating-system latency. Exact factor,
+hierarchy and cycle witnesses, equal total primitive tariffs and pre-execution
+stopping/budget tests cover this opt-in path. This is an experimental API; no
+production performance claim follows from it.

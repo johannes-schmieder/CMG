@@ -277,3 +277,124 @@ fn prefix_parking_preserves_full_construction_and_global_trace() {
         assert_eq!(new.apply(&rhs).unwrap(), old.apply(&rhs).unwrap());
     }
 }
+
+#[test]
+fn grouped_dense_work_preserves_bits_tariffs_and_prepaid_stops() {
+    struct Control {
+        grouped: bool,
+        stop: usize,
+        trace: Vec<BuildBoundary>,
+    }
+    impl cmg::BuildControl for Control {
+        fn group_dense_work(&self) -> bool {
+            self.grouped
+        }
+        fn checkpoint(&mut self, boundary: BuildBoundary) -> BuildDecision {
+            self.trace.push(boundary);
+            if self.trace.len() - 1 == self.stop {
+                BuildDecision::StopUnused
+            } else {
+                BuildDecision::Continue
+            }
+        }
+    }
+    let graph = graph(65);
+    let build = |budget, control: &mut Control| {
+        CmgPreconditioner::build_component_experiment_serial_controlled(
+            &graph,
+            CmgOptions::default(),
+            ComponentBuildOptions::default(),
+            usize::MAX,
+            budget,
+            control,
+        )
+    };
+    let mut plain = Control {
+        grouped: false,
+        stop: usize::MAX,
+        trace: vec![],
+    };
+    let mut grouped = Control {
+        grouped: true,
+        stop: usize::MAX,
+        trace: vec![],
+    };
+    let old = build(u64::MAX, &mut plain).unwrap();
+    let new = build(u64::MAX, &mut grouped).unwrap();
+    assert_eq!(old.hierarchy(), new.hierarchy());
+    assert_eq!(old.terminal_factor(), new.terminal_factor());
+    assert_eq!(old.repeat_counts(), new.repeat_counts());
+    let rhs = graph
+        .matvec(&(0..65).map(|i| (i % 7) as f64).collect::<Vec<_>>())
+        .unwrap();
+    assert_eq!(
+        old.apply(&rhs)
+            .unwrap()
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>(),
+        new.apply(&rhs)
+            .unwrap()
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>()
+    );
+    let work = |trace: &[BuildBoundary]| {
+        trace
+            .iter()
+            .map(|b| match b.operation {
+                BuildOperation::Work { units } => u64::from(units),
+                _ => 0,
+            })
+            .sum::<u64>()
+    };
+    assert_eq!(work(&plain.trace), work(&grouped.trace));
+    assert!(grouped.trace.len() < plain.trace.len());
+    assert!(grouped.trace.iter().all(|b| match b.operation {
+        BuildOperation::Work { units } => (1..=1024).contains(&units),
+        _ => true,
+    }));
+    // Stop before the first, middle and final eight-term groups; a stopped group
+    // never publishes a partial factor. Existing tests cover every primitive gate.
+    let groups: Vec<_> = grouped
+        .trace
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| {
+            b.phase == "terminal dense numeric"
+                && b.operation == BuildOperation::Work { units: 1024 }
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert!(groups.len() > 3);
+    for stop in [groups[0], groups[groups.len() / 2], *groups.last().unwrap()] {
+        let mut c = Control {
+            grouped: true,
+            stop,
+            trace: vec![],
+        };
+        assert!(matches!(
+            build(u64::MAX, &mut c),
+            Err(CmgError::BuildStopped {
+                reason: BuildStopReason::StopUnused,
+                ..
+            })
+        ));
+        assert_eq!(c.trace, grouped.trace[..=stop]);
+    }
+    let mut c = Control {
+        grouped: true,
+        stop: usize::MAX,
+        trace: vec![],
+    };
+    assert!(matches!(
+        build(work(&grouped.trace) - 1, &mut c),
+        Err(CmgError::BuildStopped {
+            reason: BuildStopReason::WorkBudgetExhausted,
+            ..
+        })
+    ));
+    c.trace.clear();
+    build(work(&grouped.trace), &mut c).unwrap();
+    assert_eq!(c.trace, grouped.trace);
+}
