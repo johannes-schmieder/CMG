@@ -565,3 +565,62 @@ fn controlled_preconditioner_and_workspace_allocations_are_gated_bounded_and_rel
         }
     }
 }
+
+#[cfg(feature = "experimental-components")]
+#[test]
+fn factor_preflight_extra_coarsening_keeps_allocation_gates_and_original_peak_bound() {
+    let graph = Laplacian::from_edges(24, (1..24).map(|v| (v - 1, v, 1.0))).unwrap();
+    let options = CmgOptions {
+        max_levels: 8,
+        ..Default::default()
+    };
+    let experiment = ComponentBuildOptions {
+        prune_coarse_isolates: true,
+        preserve_unpruned_stopping: true,
+        factor_terminal_components: true,
+    };
+    let bound = CmgPreconditioner::component_serial_construction_allocation_bound(
+        graph.vertex_count(),
+        graph.edge_count(),
+        options,
+        experiment,
+    )
+    .unwrap();
+    let construct = |budget_bytes, control: &mut dyn BuildControl| {
+        CmgPreconditioner::build_component_experiment_serial_controlled_with_factor_preflight(
+            &graph,
+            options,
+            experiment,
+            budget_bytes,
+            200_000,
+            control,
+        )
+    };
+    let candidate = construct(bound, &mut |_| BuildDecision::Continue).unwrap();
+    assert!(
+        candidate.hierarchy().levels().len() > 1,
+        "root direct factor must be declined"
+    );
+    drop(candidate);
+    let calls = CALLS.with(Cell::get);
+    assert!(matches!(
+        construct(bound - 1, &mut |_| BuildDecision::Continue),
+        Err(CmgError::MemoryBudgetExceeded { .. })
+    ));
+    assert_eq!(CALLS.with(Cell::get), calls, "short budget allocated");
+    check_controlled_allocations(bound, |control| construct(bound, control));
+    // One late exogenous fallible allocation failure in the changed hierarchy;
+    // Arc-size exclusions remain those documented by this allocator above.
+    let before = live();
+    let start = FALLIBLE.with(Cell::get);
+    let result = construct(bound, &mut |_| BuildDecision::Continue).unwrap();
+    let fallible = FALLIBLE.with(Cell::get) - start;
+    drop(result);
+    assert_eq!(live(), before);
+    assert!(fallible > 0);
+    FAIL.with(|fail| fail.set(Some(fallible - 1)));
+    let result = construct(bound, &mut |_| BuildDecision::Continue);
+    FAIL.with(|fail| fail.set(None));
+    assert!(matches!(result, Err(CmgError::AllocationFailed { .. })));
+    assert_eq!(live(), before);
+}

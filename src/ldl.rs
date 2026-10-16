@@ -1283,6 +1283,79 @@ impl LowerFactor {
     }
 }
 
+// Conservative charged-work bound for factor_by_component_controlled only.
+// Let d=max(n-1,0), T=choose(d,2), U=choose(d,3). Disconnected components and
+// isolates only decrease the total active dimension; sum choose(a,k)<=choose(d,k).
+//
+// Component discovery C=64+112n+80m+24 choose(n,2): non-find work is at most
+// 64+88n+32m. There are 2m+n finds; a path of length ell performs ell-1 strictly
+// decreasing compression updates and one last edge. Union-to-min-root and
+// compression only decrease parent indices, so there are <=sum(v)=choose(n,2)
+// strict decreases in the whole run. Walk+compression charge 24 per path edge.
+//
+// Heapsort S(d) counts 16 setup, 16 per extraction, and 64 per sift loop.
+// Each of floor(d/2)+max(d-1,0) sifts has at most floor(log2(max(d,1)))+1 loops.
+//
+// For each grounded block a>=2 with b internal input edges, append_block costs
+// <=200+440a+392b+392 choose(a,2)+128 choose(a,3). Every fill update corresponds
+// to one ordered triple k<column<row; there is no sparsity assumption. Grouping,
+// capacities, both compactions (<=32+16T), and the larger conversion allowance
+// (sparse <=80+272d+272T, packed includes all global triangular zero slots)
+// give <=264+8n+840d+632c+656m+680T+128U before factor_impl preparation, c<=n.
+// Including anchors, permutation, admission128, C and S yields
+// F=456+C+936n+968d+784m+680T+128U+S(d).
+//
+// All arithmetic below is checked u128 and the result is checked u64. Overflow
+// declines admission. The fixed expression uses fewer than 80 scalar arithmetic,
+// comparison/conversion steps (including the helpers), within the separately
+// charged 1024-unit preflight; there is no scan, allocation or floating operation.
+// This bounds factor work only, not intervening finalization or later startup.
+#[cfg(feature = "experimental-components")]
+pub(crate) fn component_factor_work_bound(vertices: usize, edges: usize) -> Option<u64> {
+    let n = vertices as u128;
+    let m = edges as u128;
+    let d = n.saturating_sub(1);
+    let triangular = choose_two(d)?;
+    let triples = triangular
+        .checked_mul(d.saturating_sub(2))?
+        .checked_div(3)?;
+    let terms = [
+        456,
+        component_discovery_work_bound(n, m)?,
+        936_u128.checked_mul(n)?,
+        968_u128.checked_mul(d)?,
+        784_u128.checked_mul(m)?,
+        680_u128.checked_mul(triangular)?,
+        128_u128.checked_mul(triples)?,
+        permutation_sort_work_bound(d)?,
+    ];
+    let total = terms.into_iter().try_fold(0_u128, u128::checked_add)?;
+    u64::try_from(total).ok()
+}
+
+#[cfg(feature = "experimental-components")]
+fn choose_two(n: u128) -> Option<u128> {
+    n.checked_mul(n.saturating_sub(1))?.checked_div(2)
+}
+
+#[cfg(feature = "experimental-components")]
+fn component_discovery_work_bound(n: u128, m: u128) -> Option<u128> {
+    64_u128
+        .checked_add(112_u128.checked_mul(n)?)?
+        .checked_add(80_u128.checked_mul(m)?)?
+        .checked_add(24_u128.checked_mul(choose_two(n)?)?)
+}
+
+#[cfg(feature = "experimental-components")]
+fn permutation_sort_work_bound(d: u128) -> Option<u128> {
+    let extractions = d.saturating_sub(1);
+    let height = u128::from(u128::BITS - d.max(1).leading_zeros());
+    let loops = (d / 2).checked_add(extractions)?.checked_mul(height)?;
+    16_u128
+        .checked_add(16_u128.checked_mul(extractions)?)?
+        .checked_add(64_u128.checked_mul(loops)?)
+}
+
 impl GroundedLdl {
     #[cfg(feature = "experimental-components")]
     pub(crate) fn factor_controlled(
@@ -1924,6 +1997,181 @@ mod controlled_factor_tests {
                     ..
                 })
             ));
+        }
+    }
+}
+
+#[cfg(all(test, feature = "experimental-components"))]
+mod factor_work_bound_tests {
+    use super::*;
+    use crate::{BuildDecision, BuildOperation};
+
+    #[test]
+    fn complete_factor_work_fits_bound_for_all_small_graphs_and_weighted_families() {
+        let mut cases = 0;
+        let mut packed = false;
+        let mut sparse = false;
+        let mut check = |graph: Laplacian| {
+            let bound =
+                component_factor_work_bound(graph.vertex_count(), graph.edge_count()).unwrap();
+            let mut charged = 0;
+            let factor = GroundedLdl::factor_by_component_controlled(
+                &graph,
+                usize::MAX,
+                &mut BuildMeter::new(u64::MAX, &mut |event: crate::BuildBoundary| {
+                    if let BuildOperation::Work { units } = event.operation {
+                        charged += u64::from(units);
+                    }
+                    BuildDecision::Continue
+                }),
+            )
+            .unwrap();
+            assert!(
+                charged <= bound,
+                "n={} m={}: {charged}>{bound}",
+                graph.vertex_count(),
+                graph.edge_count()
+            );
+            packed |= matches!(factor.lower, LowerFactor::Packed { .. });
+            sparse |= matches!(factor.lower, LowerFactor::Sparse { .. });
+            cases += 1;
+        };
+        // All labeled simple graphs through five vertices include every small
+        // disconnected/isolated topology, not only convenient connected examples.
+        for n in 0..=5 {
+            let edges: Vec<_> = (0..n)
+                .flat_map(|u| ((u + 1)..n).map(move |v| (u, v)))
+                .collect();
+            for mask in 0..(1_usize << edges.len()) {
+                check(
+                    Laplacian::from_edges(
+                        n,
+                        edges
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| mask & (1 << i) != 0)
+                            .map(|(_, &(u, v))| (u, v, 1.0)),
+                    )
+                    .unwrap(),
+                );
+            }
+        }
+        for n in [8, 17, 33] {
+            for scale in [1e-90, 1.0, 1e90] {
+                for family in 0..6 {
+                    let edges = (0..n).flat_map(|u| {
+                        ((u + 1)..n)
+                            .filter(move |&v| match family {
+                                0 => v == u + 1,
+                                1 => v == u + 1 || (u == 0 && v == n - 1),
+                                2 => u == 0,
+                                3 => true,
+                                4 => u % 3 == v % 3 && v == u + 3,
+                                _ => false,
+                            })
+                            .map(move |v| {
+                                (
+                                    u,
+                                    v,
+                                    scale
+                                        * if u == n / 2 {
+                                            1.0 / 65536.0
+                                        } else {
+                                            1.0 + ((u + v) % 5) as f64
+                                        },
+                                )
+                            })
+                    });
+                    check(Laplacian::from_edges(n + 2, edges).unwrap());
+                }
+            }
+        }
+        assert_eq!(cases, 1154);
+        assert!(
+            packed && sparse,
+            "both final conversion representations must be covered"
+        );
+    }
+
+    #[test]
+    fn component_discovery_bound_covers_exhaustive_union_sequences_and_long_chains() {
+        let endpoints = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+        let check = |n, edges: &[(usize, usize)]| {
+            let mut charged = 0;
+            Components::try_from_endpoints_controlled(
+                n,
+                edges.iter().copied(),
+                &mut BuildMeter::new(u64::MAX, &mut |event: crate::BuildBoundary| {
+                    if let BuildOperation::Work { units } = event.operation {
+                        charged += u128::from(units);
+                    }
+                    BuildDecision::Continue
+                }),
+            )
+            .unwrap();
+            assert!(
+                charged <= component_discovery_work_bound(n as u128, edges.len() as u128).unwrap()
+            );
+        };
+        // All ordered sequences of up to five edges, including repeated unions.
+        for len in 0..=5 {
+            for mut code in 0..6_usize.pow(len) {
+                let mut edges = Vec::new();
+                for _ in 0..len {
+                    edges.push(endpoints[code % 6]);
+                    code /= 6;
+                }
+                check(4, &edges);
+            }
+        }
+        for n in [0, 1, 17, 65] {
+            let chain: Vec<_> = (1..n)
+                .rev()
+                .map(|v| (v, v - 1))
+                .chain((1..n).rev().map(|v| (v, 0)))
+                .collect();
+            check(n, &chain);
+        }
+    }
+
+    #[test]
+    fn permutation_sort_bound_covers_empty_singleton_and_heap_height_boundaries() {
+        for n in [0, 1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 65] {
+            for order in 0..3 {
+                let mut values: Vec<_> = (0..n)
+                    .map(|i| match order {
+                        0 => i,
+                        1 => n - i,
+                        _ => (i * 37) % n.max(1),
+                    })
+                    .collect();
+                let mut charged = 0;
+                BuildMeter::new(u64::MAX, &mut |event: crate::BuildBoundary| {
+                    if let BuildOperation::Work { units } = event.operation {
+                        charged += u128::from(units);
+                    }
+                    BuildDecision::Continue
+                })
+                .sort_by(&mut values, usize::cmp, "test heap")
+                .unwrap();
+                assert!(values.windows(2).all(|pair| pair[0] <= pair[1]));
+                assert!(charged <= permutation_sort_work_bound(n as u128).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn factor_bound_handles_trivial_dimensions_and_refuses_all_overflow_kinds() {
+        assert_eq!(component_factor_work_bound(0, 0), Some(536));
+        assert_eq!(component_factor_work_bound(1, 0), Some(1584));
+        assert!(component_factor_work_bound(usize::MAX, 0).is_none());
+        assert!(component_factor_work_bound(usize::MAX, usize::MAX).is_none());
+        assert!(component_discovery_work_bound(u128::MAX, 0).is_none());
+        assert!(component_discovery_work_bound(0, u128::MAX).is_none());
+        assert!(permutation_sort_work_bound(u128::MAX).is_none());
+        // Fits all u128 intermediates but not the public meter's u64 currency.
+        if usize::BITS >= 64 {
+            assert!(component_factor_work_bound(1_000_000_000, 0).is_none());
         }
     }
 }

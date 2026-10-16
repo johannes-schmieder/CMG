@@ -771,6 +771,66 @@ impl CmgPreconditioner {
         work_budget: u64,
         control: &mut dyn crate::BuildControl,
     ) -> Result<Self, CmgError> {
+        Self::build_component_controlled_impl::<false>(
+            graph,
+            options,
+            experiment,
+            budget_bytes,
+            work_budget,
+            control,
+        )
+    }
+
+    /// Controlled component construction with an opt-in factor-affordability screen.
+    ///
+    /// Requires `experiment.factor_terminal_components`. At an otherwise direct
+    /// terminal, charge 1024 work units for a checked, dimension-only bound on
+    /// the complete component factor's charged work. Admit direct factorization
+    /// only if that bound fits the then-remaining work budget. Otherwise continue
+    /// the existing coarsening/stopping path, before any factor allocation or
+    /// numeric work; an empty/singleton refusal returns work-budget exhaustion.
+    /// Overflow in the factor bound also declines direct factorization.
+    ///
+    /// This is a screen, not a reservation or completion guarantee: reporting,
+    /// centering, factorization and later obligations retain all existing gates
+    /// and can still fail. Memory admission, thresholds and stopping limits are
+    /// unchanged. The completed action is fixed across applications, but its
+    /// hierarchy may differ from the ordinary controlled constructor under a
+    /// finite budget. That constructor remains exact and pays no new charges.
+    #[cfg(feature = "experimental-components")]
+    pub fn build_component_experiment_serial_controlled_with_factor_preflight(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        budget_bytes: usize,
+        work_budget: u64,
+        control: &mut dyn crate::BuildControl,
+    ) -> Result<Self, CmgError> {
+        if !experiment.factor_terminal_components {
+            return Err(CmgError::InvalidOption {
+                name: "factor_terminal_components",
+                value: 0.0,
+            });
+        }
+        Self::build_component_controlled_impl::<true>(
+            graph,
+            options,
+            experiment,
+            budget_bytes,
+            work_budget,
+            control,
+        )
+    }
+
+    #[cfg(feature = "experimental-components")]
+    fn build_component_controlled_impl<const FACTOR_PREFLIGHT: bool>(
+        graph: &Laplacian,
+        options: CmgOptions,
+        experiment: crate::ComponentBuildOptions,
+        budget_bytes: usize,
+        work_budget: u64,
+        control: &mut dyn crate::BuildControl,
+    ) -> Result<Self, CmgError> {
         let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
         // The allocation-bound formula uses fixed-work checked scalar arithmetic.
         meter.work("preconditioner admission", 1024)?;
@@ -783,8 +843,9 @@ impl CmgPreconditioner {
             )?,
             budget_bytes,
         )?;
-        let mut hierarchy =
-            CmgHierarchy::build_component_controlled(graph, options, experiment, &mut meter)?;
+        let mut hierarchy = CmgHierarchy::build_component_controlled::<FACTOR_PREFLIGHT>(
+            graph, options, experiment, &mut meter,
+        )?;
         meter.work("preconditioner finest components", 64)?;
         let finest = hierarchy
             .levels()
@@ -2342,7 +2403,107 @@ fn repeat_from_nonzeros(fine_nonzeros: usize, denominator_nonzeros: usize) -> us
 #[cfg(all(test, feature = "experimental-components"))]
 mod controlled_cycle_bound_tests {
     use super::*;
-    use crate::{BuildDecision, BuildOperation, BuildStopReason};
+    use crate::{BuildDecision, BuildOperation, BuildStopReason, ComponentBuildOptions};
+
+    #[test]
+    fn rounded_matvec_probe_matches_unchanged_cycle_on_the_selected_hierarchy() {
+        // Preserve the original weak-edge probe as a diagnostic, not as a
+        // relaxed linearity certificate. Floating L*x and affine combinations
+        // need not lie exactly in the component range, and cancellation can be
+        // amplified by the weak edge. Exact compatible dipoles retain the
+        // independent 1e-11 checks in tests/factor_preflight.rs.
+        for disconnected in [false, true] {
+            for scale in [1e-90, 1.0, 1e90] {
+                let components = if disconnected { 2 } else { 1 };
+                let n = if disconnected { 50 } else { 24 };
+                let graph = Laplacian::from_edges(
+                    n,
+                    (0..components).flat_map(|c| {
+                        (1..24).map(move |v| {
+                            (
+                                c * 24 + v - 1,
+                                c * 24 + v,
+                                scale
+                                    * if v == 12 {
+                                        1.0 / 65536.0
+                                    } else {
+                                        1.0 + (v % 5) as f64 / 4.0
+                                    },
+                            )
+                        })
+                    }),
+                )
+                .unwrap();
+                let selected = CmgPreconditioner::build_component_experiment_serial_controlled_with_factor_preflight(
+                    &graph,
+                    CmgOptions { max_levels: 8, ..Default::default() },
+                    ComponentBuildOptions {
+                        prune_coarse_isolates: true,
+                        preserve_unpruned_stopping: true,
+                        factor_terminal_components: true,
+                    },
+                    usize::MAX,
+                    200_000,
+                    &mut |_| BuildDecision::Continue,
+                ).unwrap();
+                let legacy = CmgPreconditioner::from_hierarchy_with_factor(
+                    selected.hierarchy.clone(),
+                    GroundedLdl::factor_by_component,
+                )
+                .unwrap();
+                assert_eq!(selected, legacy);
+                let u = graph
+                    .matvec(&(0..n).map(|i| (i % 7) as f64 - 3.0).collect::<Vec<_>>())
+                    .unwrap();
+                let v = graph
+                    .matvec(
+                        &(0..n)
+                            .map(|i| ((i * 3) % 11) as f64 - 5.0)
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                let input: Vec<_> = u.iter().zip(&v).map(|(a, b)| 1.25 * a - 0.75 * b).collect();
+                let outputs: Vec<_> = [&u, &v, &input]
+                    .into_iter()
+                    .map(|rhs| {
+                        let output = selected.apply(rhs).unwrap();
+                        let old = legacy.apply(rhs).unwrap();
+                        assert_eq!(
+                            output.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                            old.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                        );
+                        output
+                    })
+                    .collect();
+                let expected: Vec<_> = outputs[0]
+                    .iter()
+                    .zip(&outputs[1])
+                    .map(|(a, b)| 1.25 * a - 0.75 * b)
+                    .collect();
+                let output_scale = outputs[2]
+                    .iter()
+                    .chain(&expected)
+                    .fold(0.0_f64, |s, x| s.max(x.abs()));
+                let defect = outputs[2]
+                    .iter()
+                    .zip(&expected)
+                    .fold(0.0_f64, |s, (a, b)| s.max((a - b).abs()))
+                    / output_scale;
+                let moment_defect = [&u, &v, &input]
+                    .into_iter()
+                    .flat_map(|rhs| {
+                        (0..components).map(move |c| {
+                            rhs[c * 24..(c + 1) * 24].iter().sum::<f64>().abs() / scale
+                        })
+                    })
+                    .fold(0.0_f64, f64::max);
+                assert!(defect.is_finite() && moment_defect.is_finite());
+                eprintln!(
+                    "rounded matvec diagnostic: disconnected={disconnected}, scale={scale:e}, relative_linearity_defect={defect:e}, component_sum_defect_over_edge_scale={moment_defect:e}; legacy selected-hierarchy action is bit-exact"
+                );
+            }
+        }
+    }
 
     #[test]
     fn direct_bound_counts_packed_zero_slots_and_ignores_terminal_repeats() {

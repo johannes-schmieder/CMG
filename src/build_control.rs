@@ -88,6 +88,12 @@ impl<'a> BuildMeter<'a> {
         }
     }
 
+    #[cfg(feature = "experimental-components")]
+    pub(crate) fn remaining(&self) -> u64 {
+        // gate only commits a charged value after checking it against budget.
+        self.budget - self.charged
+    }
+
     pub(crate) fn stopped(&self, phase: &'static str, reason: BuildStopReason) -> CmgError {
         CmgError::BuildStopped {
             reason,
