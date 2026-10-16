@@ -18,7 +18,8 @@ pub enum BuildDecision {
 pub enum BuildOperation {
     /// Primitive arithmetic, record visit, comparison and move allowance.
     Work {
-        /// Conservative allowance; always in `1..=1024`.
+        /// Conservative allowance; `1..=1024` by default, up to 65535
+        /// only when the caller opts into cooperative batching.
         units: u16,
     },
     /// Allocator operation, whose elapsed time is not computationally bounded.
@@ -48,6 +49,17 @@ pub struct BuildBoundary {
 /// A stop unwinds through ordinary `Result` returns and drops private partial
 /// state. Allocator/deallocator and operating-system latency are not bounded.
 pub trait BuildControl {
+    /// Opt into coarse cancellation-only work admission. Zero (the default)
+    /// preserves every legacy boundary. Nonzero values are clamped to at least
+    /// 1024, with a maximum of 65535. A chunk is prepaid before its first
+    /// operation and may span source phases; unused allowance remains charged.
+    /// Allocation callbacks still occur immediately before allocations. The
+    /// computational cancellation allowance is this batch size, not 1024.
+    /// This mode is not the primitive-frontier/BuildPrefix scheduling contract.
+    fn cooperative_work_batch(&self) -> u16 {
+        0
+    }
+
     /// Opt into groups of at most eight ordered dense-factor update terms.
     /// Each term retains its 128-unit tariff, so one complete group is prepaid
     /// with at most 1024 units before arithmetic starts. Allocation gates and
@@ -85,19 +97,35 @@ pub(crate) struct BuildMeter<'a> {
     budget: u64,
     charged: u64,
     ordinal: u64,
+    batch: u16,
+    available: u16,
     #[cfg(feature = "experimental-components")]
     dense_chunk_len: usize,
 }
 
 impl<'a> BuildMeter<'a> {
     pub(crate) fn new(budget: u64, control: &'a mut dyn BuildControl) -> Self {
+        let requested = control.cooperative_work_batch();
+        let batch = if requested == 0 {
+            0
+        } else {
+            requested.max(1024)
+        };
         #[cfg(feature = "experimental-components")]
-        let dense_chunk_len = if control.group_dense_work() { 8 } else { 1 };
+        let dense_chunk_len = if batch != 0 {
+            usize::from(batch / 128)
+        } else if control.group_dense_work() {
+            8
+        } else {
+            1
+        };
         Self {
             control,
             budget,
             charged: 0,
             ordinal: 0,
+            batch,
+            available: 0,
             #[cfg(feature = "experimental-components")]
             dense_chunk_len,
         }
@@ -152,13 +180,28 @@ impl<'a> BuildMeter<'a> {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn work(&mut self, phase: &'static str, units: u16) -> Result<(), CmgError> {
-        if units == 0 || units > 1024 {
+        let maximum = if self.batch == 0 { 1024 } else { self.batch };
+        if units == 0 || units > maximum {
             return Err(CmgError::InvalidHierarchy {
                 context: "invalid controlled build chunk allowance",
             });
         }
-        self.gate(phase, BuildOperation::Work { units })
+        if self.batch == 0 {
+            return self.gate(phase, BuildOperation::Work { units });
+        }
+        if self.available < units {
+            let remaining = self.budget - self.charged;
+            let grant = u64::from(self.batch - self.available).min(remaining) as u16;
+            if self.available.saturating_add(grant) < units {
+                return Err(self.stopped(phase, BuildStopReason::WorkBudgetExhausted));
+            }
+            self.gate(phase, BuildOperation::Work { units: grant })?;
+            self.available += grant;
+        }
+        self.available -= units;
+        Ok(())
     }
 
     pub(crate) fn allocation(&mut self, phase: &'static str, bytes: usize) -> Result<(), CmgError> {
@@ -212,6 +255,19 @@ impl<'a> BuildMeter<'a> {
         mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
         phase: &'static str,
     ) -> Result<(), CmgError> {
+        if self.batch != 0 {
+            let depth = 2 * (usize::BITS - values.len().max(1).leading_zeros()) as usize;
+            return self.introsort(values, &mut compare, phase, depth);
+        }
+        self.heapsort(values, &mut compare, phase)
+    }
+
+    fn heapsort<T: Copy>(
+        &mut self,
+        values: &mut [T],
+        mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+        phase: &'static str,
+    ) -> Result<(), CmgError> {
         fn sift<T: Copy>(
             meter: &mut BuildMeter<'_>,
             values: &mut [T],
@@ -248,5 +304,376 @@ impl<'a> BuildMeter<'a> {
             sift(self, values, 0, end, &mut compare, phase)?;
         }
         Ok(())
+    }
+    fn introsort<T: Copy>(
+        &mut self,
+        mut values: &mut [T],
+        compare: &mut impl FnMut(&T, &T) -> core::cmp::Ordering,
+        phase: &'static str,
+        mut depth: usize,
+    ) -> Result<(), CmgError> {
+        while values.len() > 16 {
+            if depth == 0 {
+                return self.heapsort(values, compare, phase);
+            }
+            depth -= 1;
+            self.work(phase, 128)?;
+            let mut pivot = [
+                values[0],
+                values[values.len() / 2],
+                values[values.len() - 1],
+            ];
+            if compare(&pivot[0], &pivot[1]).is_gt() {
+                pivot.swap(0, 1);
+            }
+            if compare(&pivot[1], &pivot[2]).is_gt() {
+                pivot.swap(1, 2);
+            }
+            if compare(&pivot[0], &pivot[1]).is_gt() {
+                pivot.swap(0, 1);
+            }
+            let pivot = pivot[1];
+            let mut left = 0;
+            let mut right = values.len();
+            loop {
+                while left < right {
+                    self.work(phase, 64)?;
+                    if !compare(&values[left], &pivot).is_lt() {
+                        break;
+                    }
+                    left += 1;
+                }
+                while left < right {
+                    self.work(phase, 64)?;
+                    if !compare(&values[right - 1], &pivot).is_gt() {
+                        break;
+                    }
+                    right -= 1;
+                }
+                if left >= right {
+                    break;
+                }
+                self.work(phase, 32)?;
+                values.swap(left, right - 1);
+                left += 1;
+                right -= 1;
+            }
+            let split = left;
+            // Defensive no-progress fallback; the median pivot normally prevents it.
+            if split == 0 || split == values.len() {
+                return self.heapsort(values, compare, phase);
+            }
+            let (a, b) = values.split_at_mut(split);
+            if a.len() < b.len() {
+                self.introsort(a, compare, phase, depth)?;
+                values = b;
+            } else {
+                self.introsort(b, compare, phase, depth)?;
+                values = a;
+            }
+        }
+        for i in 1..values.len() {
+            let mut j = i;
+            while j > 0 {
+                self.work(phase, 64)?;
+                if !compare(&values[j], &values[j - 1]).is_lt() {
+                    break;
+                }
+                values.swap(j, j - 1);
+                j -= 1;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cooperative_tests {
+    use super::*;
+    struct Observer {
+        boundaries: Vec<BuildBoundary>,
+        stop: Option<usize>,
+        batch: u16,
+    }
+    impl BuildControl for Observer {
+        fn cooperative_work_batch(&self) -> u16 {
+            self.batch
+        }
+        fn checkpoint(&mut self, b: BuildBoundary) -> BuildDecision {
+            self.boundaries.push(b);
+            if self.stop == Some(self.boundaries.len() - 1) {
+                BuildDecision::Interrupted
+            } else {
+                BuildDecision::Continue
+            }
+        }
+    }
+    #[test]
+    fn prepaid_reservoir_handles_small_remaining_budget_and_allocation_interrupt() {
+        let mut c = Observer {
+            boundaries: vec![],
+            stop: None,
+            batch: u16::MAX,
+        };
+        {
+            let mut m = BuildMeter::new(150, &mut c);
+            m.work("first", 128).unwrap();
+            assert_eq!((m.charged, m.available), (150, 22));
+            m.work("last", 22).unwrap();
+            assert_eq!(m.available, 0);
+            assert!(matches!(
+                m.work("exhausted", 1),
+                Err(CmgError::BuildStopped {
+                    reason: BuildStopReason::WorkBudgetExhausted,
+                    ..
+                })
+            ));
+        }
+        assert_eq!(c.boundaries.len(), 1);
+        let mut c = Observer {
+            boundaries: vec![],
+            stop: Some(1),
+            batch: u16::MAX,
+        };
+        let mut m = BuildMeter::new(u64::MAX, &mut c);
+        m.work("first", 1).unwrap();
+        assert_eq!(m.available, 65534);
+        assert!(matches!(
+            m.allocation("allocate", 64),
+            Err(CmgError::BuildStopped {
+                reason: BuildStopReason::Interrupted,
+                ..
+            })
+        ));
+        let mut c = Observer {
+            boundaries: vec![],
+            stop: None,
+            batch: 0,
+        };
+        let mut m = BuildMeter::new(129, &mut c);
+        m.work("one", 128).unwrap();
+        m.work("two", 1).unwrap();
+        assert_eq!(
+            c.boundaries
+                .iter()
+                .map(|b| (b.phase, b.chunk_id, b.charged_work))
+                .collect::<Vec<_>>(),
+            vec![("one", 0, 0), ("two", 1, 128)]
+        );
+    }
+    #[test]
+    fn cooperative_sort_matches_reference_on_adversarial_orders_and_stops() {
+        for n in [0, 1, 15, 16, 17, 127, 1024] {
+            let cases = vec![
+                (0..n).collect::<Vec<_>>(),
+                (0..n).rev().collect(),
+                vec![4; n],
+                (0..n).map(|i| (i * 97) % 37).collect(),
+                (0..n).map(|i| i.min(n - i)).collect(),
+            ];
+            for values in cases {
+                let mut expected = values.clone();
+                expected.sort_unstable();
+                let mut c = Observer {
+                    boundaries: vec![],
+                    stop: None,
+                    batch: 1024,
+                };
+                let mut actual = values.clone();
+                BuildMeter::new(u64::MAX, &mut c)
+                    .sort_by(&mut actual, usize::cmp, "sort")
+                    .unwrap();
+                assert_eq!(actual, expected);
+                for stop in 0..c.boundaries.len() {
+                    let mut observer = Observer {
+                        boundaries: vec![],
+                        stop: Some(stop),
+                        batch: 1024,
+                    };
+                    assert!(matches!(
+                        BuildMeter::new(u64::MAX, &mut observer).sort_by(
+                            &mut values.clone(),
+                            usize::cmp,
+                            "sort"
+                        ),
+                        Err(CmgError::BuildStopped {
+                            reason: BuildStopReason::Interrupted,
+                            ..
+                        })
+                    ));
+                }
+                let mut c = Observer {
+                    boundaries: vec![],
+                    stop: None,
+                    batch: u16::MAX,
+                };
+                let mut actual = values.clone();
+                BuildMeter::new(u64::MAX, &mut c)
+                    .introsort(&mut actual, &mut usize::cmp, "forced fallback", 0)
+                    .unwrap();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+    #[test]
+    #[cfg(feature = "experimental-components")]
+    fn graph_and_preconditioner_remain_exact_with_cooperative_batches() {
+        use crate::{CmgOptions, CmgPreconditioner, ComponentBuildOptions, Laplacian};
+        let mut input = vec![];
+        for i in 0..511 {
+            input.extend([
+                (i, i + 1, 1e-8),
+                (i, i + 1, 1.),
+                (i, i + 1, 1e8),
+                (i, i + 1, 1.),
+            ]);
+        }
+        for i in 0..509 {
+            input.push((i, i + 3, 0.3));
+        }
+        for reverse in [false, true] {
+            if reverse {
+                input.reverse();
+            }
+            let graph = Laplacian::from_edges(513, input.iter().copied()).unwrap();
+            for bits in 0..8 {
+                let experiment = ComponentBuildOptions {
+                    prune_coarse_isolates: bits & 1 != 0,
+                    preserve_unpruned_stopping: bits & 2 != 0,
+                    factor_terminal_components: bits & 4 != 0,
+                };
+                let expected = CmgPreconditioner::build_component_experiment_serial_with_budget(
+                    &graph,
+                    CmgOptions::default(),
+                    experiment,
+                    usize::MAX,
+                )
+                .unwrap();
+                for batch in [1024, 8192, u16::MAX] {
+                    let mut c = Observer {
+                        boundaries: vec![],
+                        stop: None,
+                        batch,
+                    };
+                    let actual =
+                        Laplacian::from_edges_controlled(513, &input, usize::MAX, u64::MAX, &mut c)
+                            .unwrap();
+                    assert_eq!(actual, graph);
+                    let pre = CmgPreconditioner::build_component_experiment_serial_controlled(
+                        &actual,
+                        CmgOptions::default(),
+                        experiment,
+                        usize::MAX,
+                        u64::MAX,
+                        &mut c,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        pre.hierarchy().levels().len(),
+                        expected.hierarchy().levels().len()
+                    );
+                    for (a, b) in pre
+                        .hierarchy()
+                        .levels()
+                        .iter()
+                        .zip(expected.hierarchy().levels())
+                    {
+                        assert_eq!(a.graph(), b.graph());
+                        assert_eq!(a.repeat(), b.repeat());
+                    }
+                    let mut rhs = vec![0.; 513];
+                    rhs[0] = 1.;
+                    rhs[510] = -1.;
+                    let mut a = vec![0.; 513];
+                    let mut b = a.clone();
+                    pre.apply_compatible_into(&rhs, &mut a, &mut pre.workspace())
+                        .unwrap();
+                    expected
+                        .apply_compatible_into(&rhs, &mut b, &mut expected.workspace())
+                        .unwrap();
+                    assert_eq!(a, b);
+                    assert_eq!(pre.hierarchy(), expected.hierarchy());
+                    assert_eq!(pre.terminal_factor(), expected.terminal_factor());
+                    assert_eq!(pre.repeat_counts(), expected.repeat_counts());
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-components")]
+    fn cooperative_candidate_denies_every_boundary_and_reservoir_refills() {
+        use crate::{CmgOptions, CmgPreconditioner, ComponentBuildOptions, Laplacian};
+        let graph = Laplacian::from_edges(12, (0..11).map(|i| (i, i + 1, 1.))).unwrap();
+        let mut trace = Observer {
+            boundaries: vec![],
+            stop: None,
+            batch: 1024,
+        };
+        CmgPreconditioner::build_component_experiment_serial_controlled(
+            &graph,
+            CmgOptions::default(),
+            ComponentBuildOptions::default(),
+            usize::MAX,
+            u64::MAX,
+            &mut trace,
+        )
+        .unwrap();
+        assert!(
+            trace
+                .boundaries
+                .iter()
+                .any(|b| b.phase == "terminal dense numeric")
+        );
+        struct StopAt {
+            seen: usize,
+            stop: usize,
+            decision: BuildDecision,
+        }
+        impl BuildControl for StopAt {
+            fn cooperative_work_batch(&self) -> u16 {
+                1024
+            }
+            fn checkpoint(&mut self, _: BuildBoundary) -> BuildDecision {
+                let stop = self.seen == self.stop;
+                self.seen += 1;
+                if stop {
+                    self.decision
+                } else {
+                    BuildDecision::Continue
+                }
+            }
+        }
+        for stop in 0..trace.boundaries.len() {
+            for decision in [BuildDecision::Interrupted, BuildDecision::StopUnused] {
+                let mut c = StopAt {
+                    seen: 0,
+                    stop,
+                    decision,
+                };
+                let error = CmgPreconditioner::build_component_experiment_serial_controlled(
+                    &graph,
+                    CmgOptions::default(),
+                    ComponentBuildOptions::default(),
+                    usize::MAX,
+                    u64::MAX,
+                    &mut c,
+                )
+                .unwrap_err();
+                assert!(matches!(error, CmgError::BuildStopped { .. }));
+                assert_eq!(c.seen, stop + 1);
+            }
+        }
+        let mut c = Observer {
+            boundaries: vec![],
+            stop: None,
+            batch: 1024,
+        };
+        let mut m = BuildMeter::new(1030, &mut c);
+        m.work("first", 1020).unwrap();
+        assert_eq!(m.available, 4);
+        m.work("tail", 10).unwrap();
+        assert_eq!((m.charged, m.available), (1030, 0));
+        assert!(m.work("beyond", 1).is_err());
     }
 }

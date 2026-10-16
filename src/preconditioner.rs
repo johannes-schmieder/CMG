@@ -757,7 +757,8 @@ impl CmgPreconditioner {
     /// This uses the same hierarchy, stopping rules and arithmetic as the admitted
     /// serial builder. The caller-supplied graph is already prepared; construction
     /// owns only private candidate state until success. Computational chunks have
-    /// at most 1024 primitive work units. Allocator/OS and cleanup latency are
+    /// at most 1024 primitive work units by default; opt-in cooperative batching
+    /// uses the caller's bounded prepaid allowance (at most 65535). Allocator/OS and cleanup latency are
     /// separately excluded, and allocations are gated before they begin. The work
     /// budget includes conservative allowances rather than measured CPU time.
     /// No thread pool or parallel application plan is created. The callback may

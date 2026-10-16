@@ -368,3 +368,24 @@ checkpoints, not allocator, cleanup or operating-system latency. Exact factor,
 hierarchy and cycle witnesses, equal total primitive tariffs and pre-execution
 stopping/budget tests cover this opt-in path. This is an experimental API; no
 production performance claim follows from it.
+
+
+### Experimental cooperative construction batches
+
+`BuildControl::cooperative_work_batch` defaults to zero and preserves the prior
+controlled frontiers. A nonzero value requests a prepaid local work reservoir
+(clamped to at least 1024, at most 65535 primitive allowance units). The next
+operation is admitted before executing, allocations retain unconditional
+callbacks, and unused prepaid allowance remains charged. This cancellation-only
+mode is not the primitive-frontier `BuildPrefix` scheduling contract. Its
+computational cancellation allowance is the requested batch size; allocator,
+OS and destruction latency remain excluded. Dense factor terms keep their
+original evaluation order. Controlled sorting uses bounded-depth introsort
+with metered comparisons and swaps and a heapsort fallback, without scratch
+allocation. Ordinary and default controlled construction remain available.
+
+This opt-in change is experimental and requires complete-solve performance
+confirmation by its caller; it does not repair or qualify previous controlled
+performance results. Exact graph/hierarchy/action witnesses cover duplicate
+weights and ordering; unit tests exercise budget tails, allocation interruption,
+adversarial sorting and the fallback. No numerical tolerance changes.

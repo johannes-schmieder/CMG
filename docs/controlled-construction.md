@@ -6,8 +6,8 @@ The optional component builder provides
 component options, terminal factor arithmetic, and scalar cycle as
 `build_component_experiment_serial_with_budget`. Existing entrypoints retain
 their implementations. The controlled path replaces opaque setup traversals
-with fallible bounded traversals and replaces sorting with deterministic
-heapsort. Edge ordering remains endpoint pair then total-ordered weight;
+with fallible bounded traversals and, by default, replaces sorting with
+deterministic heapsort. Edge ordering remains endpoint pair then total-ordered weight;
 terminal permutation keys include the original vertex as the final tie-break.
 Thus sorting changes record movement without changing arithmetic order.
 
@@ -28,7 +28,7 @@ previously admitted work allowance. Each entrypoint starts a new ordinal and
 work counter. A caller composing graph, hierarchy, and workspace construction
 can use one callback-owned ledger to account across those calls.
 
-`Work { units }` precharges a conservative allowance of 1 through 1024 primitive
+In default mode, `Work { units }` precharges a conservative allowance of 1 through 1024 primitive
 arithmetic, record visit, comparison, and move units. Inner tree/root walks,
 forest splitting, edge merging, dense/sparse factor updates, sorting comparisons
 and swaps, and storage initialization all contain these boundaries. Scalar
@@ -243,3 +243,27 @@ routes are not promised. Neither early completion nor a fatal result authorizes
 returning a leased worker early. Drain reaches the issued frontier or an intrinsic
 terminal event; explicit Break may truncate it. The host joins before publishing
 or rolling back and only then transfers worker and candidate ownership.
+
+
+## Opt-in cooperative batching
+
+`BuildControl::cooperative_work_batch()` defaults to zero, retaining the original
+frontiers and heapsort. A nonzero request (clamped to at least 1024 and at most
+65535) enables a prepaid work reservoir and allocation-free introsort. This is
+a cancellation-only alternative, not the primitive-frontier `BuildPrefix`
+contract. An operation consumes its allowance before execution; replenishment
+respects the remaining budget and may be smaller than the configured reservoir.
+Unused allowance remains charged, so reported work is reserved allowance rather
+than an exact count of executed primitive operations. Allocation gates remain
+unconditional, even while computational allowance remains available.
+
+At most the configured allowance can execute between callbacks; allocator,
+cleanup, callback and OS latency remain excluded. A reservation may span source
+phases, so its phase names the first operation requesting replenishment, not
+every covered operation. Dense-factor chunks preserve term evaluation order.
+Introsort charges pivot selection, scans and swaps, recurses on the smaller
+partition, and uses the existing metered heapsort if the depth budget expires.
+The graph and terminal keys retain their canonical total orders. Tests cover
+all component option combinations, complete hierarchy/factor/repeat equality,
+application bits, adversarial sort inputs, budget tails and interruption or
+StopUnused at every boundary of a small complete candidate.
