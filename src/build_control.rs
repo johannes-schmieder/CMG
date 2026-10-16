@@ -180,8 +180,20 @@ impl<'a> BuildMeter<'a> {
         Ok(())
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn work(&mut self, phase: &'static str, units: u16) -> Result<(), CmgError> {
+        // Credit is always <= batch, and primitive mode retains zero credit.
+        // A nonzero funded operation therefore already satisfies admission and
+        // maximum-unit checks; consuming it changes no boundary or counter.
+        if units != 0 && units <= self.available {
+            self.available -= units;
+            return Ok(());
+        }
+        self.work_slow(phase, units)
+    }
+
+    #[inline(never)]
+    fn work_slow(&mut self, phase: &'static str, units: u16) -> Result<(), CmgError> {
         let maximum = if self.batch == 0 { 1024 } else { self.batch };
         if units == 0 || units > maximum {
             return Err(CmgError::InvalidHierarchy {
@@ -405,6 +417,59 @@ mod cooperative_tests {
                 BuildDecision::Interrupted
             } else {
                 BuildDecision::Continue
+            }
+        }
+    }
+    #[test]
+    fn funded_fast_path_preserves_every_boundary_error_and_counter() {
+        struct Trace {
+            batch: u16,
+            stop: Option<(usize, BuildDecision)>,
+            boundaries: Vec<BuildBoundary>,
+        }
+        impl BuildControl for Trace {
+            fn cooperative_work_batch(&self) -> u16 {
+                self.batch
+            }
+            fn checkpoint(&mut self, b: BuildBoundary) -> BuildDecision {
+                self.boundaries.push(b);
+                self.stop
+                    .filter(|(i, _)| *i + 1 == self.boundaries.len())
+                    .map_or(BuildDecision::Continue, |(_, decision)| decision)
+            }
+        }
+        for batch in [0, 1024, u16::MAX] {
+            for budget in [0, 150, 1024, 65535, 65700, u64::MAX] {
+                for decision in [BuildDecision::Interrupted, BuildDecision::StopUnused] {
+                    for stop in [None, Some(0), Some(1), Some(3)] {
+                        let trace = || Trace {
+                            batch,
+                            stop: stop.map(|i| (i, decision)),
+                            boundaries: vec![],
+                        };
+                        let mut actual_control = trace();
+                        let mut expected_control = trace();
+                        {
+                            let mut actual = BuildMeter::new(budget, &mut actual_control);
+                            let mut expected = BuildMeter::new(budget, &mut expected_control);
+                            for units in [1, 0, 128, 0, u16::MAX, 22, 8, 1024, 65000, 500, 1] {
+                                // work_slow is the unchanged pre-optimization body.
+                                let a = actual.work("trace", units);
+                                let b = expected.work_slow("trace", units);
+                                assert_eq!(a, b);
+                                assert_eq!(
+                                    (actual.available, actual.charged, actual.ordinal),
+                                    (expected.available, expected.charged, expected.ordinal)
+                                );
+                                assert_eq!(
+                                    actual.allocation("allocation", 32),
+                                    expected.allocation("allocation", 32)
+                                );
+                            }
+                        }
+                        assert_eq!(actual_control.boundaries, expected_control.boundaries);
+                    }
+                }
             }
         }
     }
