@@ -1625,7 +1625,7 @@ mod controlled_component_tests {
             Laplacian::from_edges(8, [(0, 2, 1.0), (1, 3, 1.0), (2, 4, 2.0)]).unwrap(),
         ] {
             let mut allow = |_| BuildDecision::Continue;
-            let mut meter = BuildMeter::new(u64::MAX, &mut allow);
+            let mut meter: BuildMeter<'_> = BuildMeter::new(u64::MAX, &mut allow);
             let controlled = Components::try_from_endpoints_controlled(
                 graph.vertex_count(),
                 graph.edges().iter().rev().map(|edge| (edge.u(), edge.v())),

@@ -159,12 +159,12 @@ impl Laplacian {
     /// including modeled control blocks. Allocator overhead and latency are not
     /// bounded. Work is precharged through `control`; a stopped build publishes
     /// no graph. Canonical ordering and arithmetic match [`Self::from_edges`].
-    pub fn from_edges_controlled(
+    pub fn from_edges_controlled<C: crate::BuildControl + ?Sized>(
         vertex_count: usize,
         edges: &[(usize, usize, f64)],
         budget_bytes: usize,
         work_budget: u64,
-        control: &mut dyn crate::BuildControl,
+        control: &mut C,
     ) -> Result<Self, CmgError> {
         let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
         meter.work("input graph memory bound", 128)?;
@@ -254,10 +254,10 @@ impl Laplacian {
     }
 
     /// Build a canonical coarse graph with bounded, precharged setup work.
-    pub(crate) fn from_compact_edges_controlled(
+    pub(crate) fn from_compact_edges_controlled<C: crate::BuildControl + ?Sized>(
         vertex_count: usize,
         mut raw: Vec<Edge>,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::build_control::BuildMeter<'_, C>,
     ) -> Result<Self, CmgError> {
         // Sorting by the full comparator gives precisely the order used by the
         // original endpoint sort followed by each duplicate group's weight sort.

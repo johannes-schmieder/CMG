@@ -1915,7 +1915,7 @@ mod controlled_factor_tests {
                         let graph = Laplacian::from_edges(n + 2, edges).unwrap();
                         for blocks in [false, true] {
                             let mut allow = |_| BuildDecision::Continue;
-                            let mut meter = BuildMeter::new(u64::MAX, &mut allow);
+                            let mut meter: BuildMeter<'_> = BuildMeter::new(u64::MAX, &mut allow);
                             let actual = build(&graph, blocks, &mut meter).unwrap();
                             #[cfg(feature = "experimental-components")]
                             let expected = if blocks {

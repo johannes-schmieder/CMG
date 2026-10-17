@@ -19,6 +19,15 @@ already constructed graph; callers must include their own input preparation in
 their resource protocol or use this graph constructor. Preparation of scalar
 application storage is available through `try_workspace_controlled`.
 
+The graph constructor accepts either a concrete `BuildControl` implementation
+or a borrowed `dyn BuildControl`, including callbacks that borrow local state.
+Concrete callbacks allow static dispatch through graph validation, sorting and
+aggregation. Both forms retain the same work/allocation boundaries, counters,
+budget and error precedence, and arithmetic. Hierarchy, component and workspace
+entrypoints continue to use their existing dynamic callback interfaces. This
+dispatch choice does not change the controlled-construction contract or imply
+a performance improvement without separate measurement.
+
 ## Admission and stopping contract
 
 `BuildControl::checkpoint` receives a `BuildBoundary` before each proposed
@@ -111,6 +120,21 @@ adds no adaptive selection during application and does not itself bound or
 interrupt the application kernel.
 
 ## Validation
+
+`tests/controlled_dispatch.rs` is a finite dispatch-equivalence witness. The
+same source (SHA256
+`b7d8da5d011783cdf1077d58d18f8c8a809d3c42ecedb8f6e9f53a50ce6c3a7d`)
+was run on parent `3422b0408023769f08f33391b90a613745601e7d` and the generic
+graph-constructor candidate. Five empty, singleton, duplicate/disconnected,
+small-scale path and large-scale dense fixtures produced identical 77,090-byte
+transcripts with 611 full boundary records, graph/matvec/cycle bits, terminal
+reasons and repeat counts (transcript SHA256
+`34b6fadefd1e01c9100c51eccfcbe3454932d932aaeaa7f99aca2aa537c95e93`).
+The test checks both concrete and erased borrowed callbacks, exact/one-less/zero
+work budgets, six invalid inputs with competing callback/memory/work failures,
+and both stop reasons at all 80 boundaries of the duplicate/disconnected graph.
+Run the test with `--nocapture` to reproduce the text between its transcript
+markers. This is a finite exact-replay witness, not a timing or all-input proof.
 
 The controlled unit and integration tests compare complete hierarchy/factor
 structures, floating-point factor and cycle bits, and repeat counts with the

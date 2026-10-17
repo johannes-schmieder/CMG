@@ -71,15 +71,15 @@ pub enum BuildStopReason {
     CounterOverflow,
 }
 
-pub(crate) struct BuildMeter<'a> {
-    control: &'a mut dyn BuildControl,
+pub(crate) struct BuildMeter<'a, C: BuildControl + ?Sized = dyn BuildControl + 'a> {
+    control: &'a mut C,
     budget: u64,
     charged: u64,
     ordinal: u64,
 }
 
-impl<'a> BuildMeter<'a> {
-    pub(crate) fn new(budget: u64, control: &'a mut dyn BuildControl) -> Self {
+impl<'a, C: BuildControl + ?Sized> BuildMeter<'a, C> {
+    pub(crate) fn new(budget: u64, control: &'a mut C) -> Self {
         Self {
             control,
             budget,
@@ -198,8 +198,8 @@ impl<'a> BuildMeter<'a> {
         mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
         phase: &'static str,
     ) -> Result<(), CmgError> {
-        fn sift<T: Copy>(
-            meter: &mut BuildMeter<'_>,
+        fn sift<T: Copy, C: BuildControl + ?Sized>(
+            meter: &mut BuildMeter<'_, C>,
             values: &mut [T],
             mut root: usize,
             end: usize,
