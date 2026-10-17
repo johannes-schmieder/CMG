@@ -100,6 +100,8 @@ pub use pcg::{
 };
 #[cfg(feature = "profiling")]
 pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan};
+#[cfg(feature = "experimental-components")]
+pub use preconditioner::CmgBatchRequirements;
 #[cfg(feature = "parallel")]
 pub use preconditioner::ParallelCmgPlan;
 pub use preconditioner::{CmgBatchWorkspace, CmgPreconditioner};

@@ -1,6 +1,8 @@
 //! Stationary recursive CMG preconditioner application.
 
 mod batch;
+#[cfg(feature = "experimental-components")]
+pub use batch::CmgBatchRequirements;
 pub use batch::CmgBatchWorkspace;
 
 #[cfg(feature = "cycle-profiling")]

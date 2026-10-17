@@ -1,5 +1,10 @@
 //! Interleaved, fixed-cycle CMG applications sharing one hierarchy traversal.
 
+#[cfg(feature = "experimental-components")]
+mod controlled;
+#[cfg(feature = "experimental-components")]
+pub use controlled::CmgBatchRequirements;
+
 use super::CmgPreconditioner;
 #[cfg(feature = "parallel")]
 use super::ParallelCmgPlan;
@@ -201,6 +206,37 @@ impl CmgBatchWorkspace {
 }
 
 impl CmgPreconditioner {
+    // Work-bound audit for serial INTERLEAVED storage and k=columns>=1.
+    // The existing scalar_cycle_work_bound_controlled allowance times k is
+    // conservative under its primitive-work convention (not CPU instructions):
+    //
+    // * Validation checks four shape dimensions per level and two caller lengths;
+    //   128+128L covers this once, hence also k times. No capacity-sized data is
+    //   scanned. Capacity-one storage instead delegates to the existing scalar
+    //   path; callers retaining that path need no new batch preparation query.
+    // * Every array slice below is rows*k, coarse_rows*k, factor_rows*k or
+    //   components*k. Matvec/output clears and compensated-centering clears use
+    //   those slices, never allocated capacity. Terminal scratch is at most k.
+    // * One nonterminal iteration has at most three edge matvecs, two smoothing
+    //   sweeps, restriction/prolongation of at most n entries and one coarse
+    //   centering pass. The scalar 256+64(n+m+c) allowance per lane covers the
+    //   same multiply/add/load/store operations plus interleaved indexing:
+    //   64m pays all three edge passes; 64n pays vector/transfer passes; 64c
+    //   pays coarse zeroing and both compensated-centering passes, including
+    //   component-bank initialization and means because component_count<=c.
+    // * A diagonal terminal performs one multiply and its row/lane accesses
+    //   per entry, within 64+8n per lane. A direct terminal traverses the same
+    //   s strict factor slots twice (including packed zeros), initializes at
+    //   most n entries and scatters at most n entries: 256+32n+32s per lane
+    //   covers indexing, both triangular passes and the live scratch clears.
+    // * Each recursive call uses the identical stored repeats. Centering is
+    //   paid on EVERY parent iteration, and a zero-dimensional child is skipped
+    //   in both paths. Terminal calls ignore the iterations argument in both.
+    // No RHS-dependent work, fine projection or allocation is added by tiling.
+    // Empty calls still validate metadata: multiplying by zero does NOT bound
+    // them. A wrapper must skip them or retain a positive submitted-RHS charge.
+    // Caller packing, masks, scratch, startup/restart and certificates remain
+    // separately charged by that wrapper; this audit is only the CMG kernel.
     /// Apply the fixed stationary cycle to component-compatible right-hand sides.
     ///
     /// Inputs and outputs have exactly `vertex_count * columns` entries, with

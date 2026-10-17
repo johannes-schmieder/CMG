@@ -197,6 +197,62 @@ those costs separately before starting the first cycle. Metadata tests cover
 known direct factors including packed zeros, multilevel repetition, checked
 overflow, deterministic cancellation and work-budget denial.
 
+## Controlled serial batch preparation
+
+With `experimental-components`, `CmgBatchWorkspace::requirements_controlled`
+returns `CmgBatchRequirements { allocation_bytes, initialization_work }` without
+allocating. The query's work is charged immediately. The initialization field
+bounds the complete subsequent `try_new_controlled` call, including its repeated
+requirements query; it excludes the already-paid first query. It is not a credit
+reservation. Construction revalidates sizes, admits all requested bytes before
+the first allocation, and gates every capacity operation and initialization.
+Layout/work arithmetic overflow returns `BuildStopped::CounterOverflow`; real
+allocator failures during selected construction remain `AllocationFailed`.
+Neither error authorizes retry/refund inside CMG.
+
+For capacity b>1 and L levels, let
+
+    V = b * sum_l(n_l + 2*c_l + 2*f_l + 3*g_l).
+
+Requested bytes are `L*sizeof(BatchLevel) + 8*V`. With Q the charged query work,
+the complete constructor charge is `Q + 144 + 288*L + 8*V`: admission64, root
+capacity16, finish64, then per-level metadata128, eight capacity operations16
+and store32. Every initialized entry costs8. Capacity one retains the existing
+scalar representation. Its constructor charge is
+`Q + 272 + 160*L + 96*P + 8*(n0 + 7*C + V)`, where P is the scalar centering
+plan count and C the finest component count. Existing scalar APIs, including
+their callback sequence, do not use these new queries or charges.
+
+For serial interleaved storage and a positive live width k, the existing scalar
+cycle allowance multiplied by k conservatively covers the batch kernel. The
+source audit beside `apply_compatible_batch_into` accounts for validation,
+indexing, diagonal/direct terminals, every repeated coarse-centering pass and
+all cleared slices. All banks are addressed through live prefixes, including a
+short one-lane tile in a wider workspace. Capacity does not replace live width
+in this bound. Empty calls still validate metadata; callers must skip them or
+retain a positive submitted-RHS charge. Caller gather/scatter, masking, scratch,
+projection, startup/restart and residual checks remain separate obligations.
+No faster-work discount or cycle arithmetic change follows from batching.
+
+The controlled batch tests verify exact reported layouts and initialization
+charges on 20 hierarchy/capacity combinations, existing batch and scalar result
+bits across alternating live widths, allocation-free queries/application,
+admission before allocation, every small-case stop/interrupt boundary and every
+actual allocation failure with cleanup. Existing direct, diagonal, multilevel,
+disconnected and component-pruned application witnesses remain enabled.
+
+The unchanged scalar preparation path has a separate parent-compatible witness,
+`tests/controlled_scalar_migration.rs` (SHA256
+`c6e61dbb6f3dd869276cd63e82f8c3b0df2b2939e50a3988732b08f7e4680a47`).
+The same source ran on parent `3422b0408023769f08f33391b90a613745601e7d` and
+the batch-preparation candidate. Its four fixtures record graph/hierarchy,
+scalar workspace sizing/construction, cycle-work query, exact/one-less/zero
+budgets and application bits. The 463,217-byte transcript with 3,763 boundaries
+is identical (SHA256
+`ac79ddb1babd3d2da4b910e3576c63b0b594b0b7792746b727aca0f98419597a`).
+Run with `--nocapture` to reproduce its marked transcript. This finite witness
+does not qualify any downstream route or claim a performance improvement.
+
 ## Cumulative grants and retained construction
 
 `BuildPrefix` is an allocation-free controller ledger. It starts with a fixed

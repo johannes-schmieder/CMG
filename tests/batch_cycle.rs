@@ -5,10 +5,18 @@ use cmg::{
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+#[cfg(feature = "experimental-components")]
+#[path = "batch_cycle/controlled.rs"]
+mod controlled;
+
 thread_local! {
     static CALLS: Cell<usize> = const { Cell::new(0) };
     static LIVE: Cell<isize> = const { Cell::new(0) };
     static FAIL: Cell<Option<usize>> = const { Cell::new(None) };
+    #[cfg(feature = "experimental-components")]
+    static AUDIT: Cell<bool> = const { Cell::new(false) };
+    #[cfg(feature = "experimental-components")]
+    static PENDING: Cell<Option<usize>> = const { Cell::new(None) };
 }
 struct Observed;
 fn fail() -> bool {
@@ -28,6 +36,8 @@ fn fail() -> bool {
 }
 unsafe impl GlobalAlloc for Observed {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        #[cfg(feature = "experimental-components")]
+        controlled::observe_allocation(layout.size());
         if fail() {
             return std::ptr::null_mut();
         }
@@ -42,6 +52,8 @@ unsafe impl GlobalAlloc for Observed {
         unsafe { System.dealloc(ptr, layout) };
     }
     unsafe fn realloc(&self, ptr: *mut u8, old: Layout, size: usize) -> *mut u8 {
+        #[cfg(feature = "experimental-components")]
+        controlled::observe_allocation(size);
         if fail() {
             return std::ptr::null_mut();
         }
