@@ -1,10 +1,7 @@
 //! Initial input graph only: bounded mapping and canonical parallel sorting.
 
 use super::{Edge, Laplacian, compare_raw_edges};
-use crate::{
-    BuildDecision, BuildOperation, BuildStopReason, CmgError, ControlledStage, InstalledTeam,
-    build_control::BuildMeter,
-};
+use crate::{CmgError, ControlledStage, InstalledTeam, cancel::CancelMeter};
 
 const MIN_EDGES: usize = 65_536;
 const CHUNK: usize = 8;
@@ -13,37 +10,27 @@ impl Laplacian {
     /// Construct an initial graph on an already admitted host team.
     ///
     /// At least 65,536 input edges use fixed logical chunks for validation,
-    /// mapping and sorting. The logical algorithm and work charges are identical
-    /// at every worker ceiling, including one. Smaller inputs retain the serial
-    /// algorithm after a 64-unit policy charge. Coarse/hierarchy builders are
-    /// unaffected. Successful graph bits match [`Self::from_edges_controlled`].
+    /// mapping and sorting. The logical chunking is identical at every worker
+    /// ceiling, including one. Smaller inputs retain the serial algorithm.
+    /// Coarse/hierarchy builders are unaffected. Successful graph bits match
+    /// [`Self::from_edges_controlled`].
     ///
     /// The borrowed input and host runtime are excluded from `budget_bytes`.
     /// The bound is unchanged: two compact edge banks, the diagonal, and three
-    /// Arc layouts. All scratch and work are admitted before use. No partial
-    /// stage is retried. The serial controller stays on the coordinator; workers
-    /// use only `cancelled`, a cheap, sticky, allocation-free cancellation query.
-    /// All work joins before return or unwind. Cancellation dominates worker
-    /// errors after joining; otherwise the earliest logical invalid edge wins.
-    #[allow(clippy::too_many_arguments)]
+    /// Arc layouts. All scratch is admitted before use. No partial stage is
+    /// retried. `cancelled` is a cheap, sticky, allocation-free cancellation
+    /// query polled by the coordinator between bounded serial operations and by
+    /// workers before every logical chunk. All work joins before return or
+    /// unwind. Cancellation dominates worker errors after joining; otherwise the
+    /// earliest logical invalid edge wins.
     pub fn from_edges_hosted_controlled(
         vertex_count: usize,
         edges: &[(usize, usize, f64)],
         budget_bytes: usize,
-        work_budget: u64,
         team: &InstalledTeam<'_>,
-        cancelled: impl Fn() -> bool + Sync,
-        control: &mut dyn crate::BuildControl,
+        cancelled: crate::Cancellation<'_>,
     ) -> Result<Self, CmgError> {
-        let mut checked_control = |boundary| {
-            if cancelled() {
-                BuildDecision::Interrupted
-            } else {
-                control.checkpoint(boundary)
-            }
-        };
-        let mut meter = BuildMeter::new(work_budget, &mut checked_control);
-        meter.work("hosted input graph policy", 64)?;
+        let mut meter = CancelMeter::new(cancelled);
         if edges.len() < MIN_EDGES {
             return Self::from_edges_metered(vertex_count, edges, budget_bytes, &mut meter);
         }
@@ -57,12 +44,11 @@ impl Laplacian {
         crate::storage::admit(required, budget_bytes)?;
         let mut raw = initialized_bank(edges.len(), &mut meter)?;
         stage(
-            &mut meter,
             "hosted input edge mapping",
-            (CHUNK, 1024),
+            CHUNK,
             team,
             &mut raw,
-            &cancelled,
+            cancelled,
             |chunk, output| {
                 for (index, value) in output.iter_mut().enumerate() {
                     *value = map_edge(vertex_count, edges[chunk * CHUNK + index])?;
@@ -70,17 +56,17 @@ impl Laplacian {
                 Ok(())
             },
         )?;
-        sort(&mut raw, &mut meter, team, &cancelled)?;
+        sort(&mut raw, &mut meter, team, cancelled)?;
         // The spare sort bank has been dropped. Canonical compensated duplicate
         // reduction and diagonal additions are the exact existing serial loop.
         Self::from_sorted_edges_controlled(vertex_count, raw, &mut meter)
     }
 }
 
-fn initialized_bank(len: usize, meter: &mut BuildMeter<'_>) -> Result<Vec<Edge>, CmgError> {
+fn initialized_bank(len: usize, meter: &mut CancelMeter<'_>) -> Result<Vec<Edge>, CmgError> {
     let mut values = meter.try_capacity(len, "hosted input edge bank")?;
     // Safe Rust requires initialized disjoint output storage. Its first-touch
-    // cost remains charged, and the bank never grows after admission.
+    // cost is counted for cancellation polling; the bank never grows after admission.
     for start in (0..len).step_by(128) {
         let count = (len - start).min(128);
         meter.work("hosted input edge initialization", (8 * count) as u16)?;
@@ -137,64 +123,31 @@ fn map_edge(
     Ok(Edge::from_compact_parts(u as u32, v as u32, weight))
 }
 
-/// Forward all stage charges through one global meter. The local dispatcher
-/// meter is only a finite shape/counter proof; it never owns a second allowance.
+/// Dispatch one stage of fixed logical chunks, translating its cancellation to
+/// the stage's phase. Chunk boundaries never depend on the worker ceiling.
 fn stage(
-    meter: &mut BuildMeter<'_>,
     phase: &'static str,
-    packet: (usize, u16),
+    chunk_len: usize,
     team: &InstalledTeam<'_>,
     values: &mut [Edge],
-    cancelled: &(impl Fn() -> bool + Sync),
+    cancelled: crate::Cancellation<'_>,
     kernel: impl Fn(usize, &mut [Edge]) -> Result<(), CmgError> + Sync,
 ) -> Result<(), CmgError> {
-    let (chunk_len, kernel_work) = packet;
-    let mut failure = None;
-    let admitted = ControlledStage::admit(
-        values.len(),
-        chunk_len,
-        kernel_work,
-        u64::MAX,
-        &mut |boundary: crate::BuildBoundary| {
-            let result = match boundary.operation {
-                BuildOperation::Work { units } => meter.work(phase, units),
-                BuildOperation::Allocation { .. } => {
-                    unreachable!("stage admission cannot allocate")
-                }
-            };
-            match result {
-                Ok(()) => BuildDecision::Continue,
-                Err(error) => {
-                    failure = Some(error);
-                    BuildDecision::StopUnused
-                }
-            }
-        },
-    );
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    let result = admitted?.run(team, values, cancelled, kernel);
-    // Translate dispatcher-local cancellation coordinates to the global meter.
-    match result {
-        Err(CmgError::BuildStopped {
-            reason: BuildStopReason::Interrupted,
-            ..
-        }) => Err(meter.stopped(phase, BuildStopReason::Interrupted)),
+    match ControlledStage::admit(values.len(), chunk_len)?.run(team, values, cancelled, kernel) {
+        Err(CmgError::Cancelled { .. }) => Err(CancelMeter::cancelled(phase)),
         other => other,
     }
 }
 
 fn sort(
     values: &mut Vec<Edge>,
-    meter: &mut BuildMeter<'_>,
+    meter: &mut CancelMeter<'_>,
     team: &InstalledTeam<'_>,
-    cancelled: &(impl Fn() -> bool + Sync),
+    cancelled: crate::Cancellation<'_>,
 ) -> Result<(), CmgError> {
     stage(
-        meter,
         "hosted input sort runs",
-        (CHUNK, 512),
+        CHUNK,
         team,
         values,
         cancelled,
@@ -215,11 +168,10 @@ fn sort(
     let mut width = CHUNK;
     while width < values.len() {
         meter.work("hosted input merge planning", 64)?;
-        let (chunk_len, allowance) = merge_policy(width)?;
+        let (chunk_len, _) = merge_policy(width)?;
         stage(
-            meter,
             "hosted input merge",
-            (chunk_len, allowance),
+            chunk_len,
             team,
             &mut scratch,
             cancelled,

@@ -555,25 +555,6 @@ impl CmgPreconditioner {
             &self.coarse_centering,
         )
     }
-    /// Count scalar workspace layouts with bounded work gates and no allocation.
-    ///
-    /// Returns the same requested byte count as `workspace_allocation_bytes`,
-    /// excluding allocator overhead and the retained preconditioner itself.
-    #[cfg(feature = "experimental-components")]
-    pub fn workspace_allocation_bytes_controlled(
-        &self,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
-    ) -> Result<usize, CmgError> {
-        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
-        CmgWorkspace::allocation_bytes_controlled(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-            &mut meter,
-        )
-    }
 
     #[cfg(feature = "parallel")]
     pub(crate) fn workspace_bytes(&self) -> usize {
@@ -752,86 +733,36 @@ impl CmgPreconditioner {
         }
     }
 
-    /// Build the serial component candidate with cooperative, precharged work.
+    /// Build the serial component candidate with cooperative cancellation.
     ///
     /// This uses the same hierarchy, stopping rules and arithmetic as the admitted
     /// serial builder. The caller-supplied graph is already prepared; construction
-    /// owns only private candidate state until success. Computational chunks have
-    /// at most 1024 primitive work units. Allocator/OS and cleanup latency are
-    /// separately excluded, and allocations are gated before they begin. The work
-    /// budget includes conservative allowances rather than measured CPU time.
-    /// No thread pool or parallel application plan is created. The callback may
-    /// block to park construction, then grant the next chunk or drain the build.
+    /// owns only private candidate state until success. Kernels poll `cancel`
+    /// after a fixed number of counted primitive operations and before every
+    /// allocation, so work between polls is bounded; allocator, operating-system
+    /// and cleanup latency are not. Allocation is admitted against `budget_bytes`
+    /// before it begins. No thread pool or parallel application plan is created.
+    /// A cancellation returns [`CmgError::Cancelled`] and no partial state.
     #[cfg(feature = "experimental-components")]
     pub fn build_component_experiment_serial_controlled(
         graph: &Laplacian,
         options: CmgOptions,
         experiment: crate::ComponentBuildOptions,
         budget_bytes: usize,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
+        cancel: crate::Cancellation<'_>,
     ) -> Result<Self, CmgError> {
-        Self::build_component_controlled_impl::<false>(
-            graph,
-            options,
-            experiment,
-            budget_bytes,
-            work_budget,
-            control,
-        )
+        let mut meter = crate::cancel::CancelMeter::new(cancel);
+        Self::build_component_controlled_impl(graph, options, experiment, budget_bytes, &mut meter)
     }
 
-    /// Controlled component construction with an opt-in factor-affordability screen.
-    ///
-    /// Requires `experiment.factor_terminal_components`. At an otherwise direct
-    /// terminal, charge 1024 work units for a checked, dimension-only bound on
-    /// the complete component factor's charged work. Admit direct factorization
-    /// only if that bound fits the then-remaining work budget. Otherwise continue
-    /// the existing coarsening/stopping path, before any factor allocation or
-    /// numeric work; an empty/singleton refusal returns work-budget exhaustion.
-    /// Overflow in the factor bound also declines direct factorization.
-    ///
-    /// This is a screen, not a reservation or completion guarantee: reporting,
-    /// centering, factorization and later obligations retain all existing gates
-    /// and can still fail. Memory admission, thresholds and stopping limits are
-    /// unchanged. The completed action is fixed across applications, but its
-    /// hierarchy may differ from the ordinary controlled constructor under a
-    /// finite budget. That constructor remains exact and pays no new charges.
     #[cfg(feature = "experimental-components")]
-    pub fn build_component_experiment_serial_controlled_with_factor_preflight(
+    fn build_component_controlled_impl(
         graph: &Laplacian,
         options: CmgOptions,
         experiment: crate::ComponentBuildOptions,
         budget_bytes: usize,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
-        if !experiment.factor_terminal_components {
-            return Err(CmgError::InvalidOption {
-                name: "factor_terminal_components",
-                value: 0.0,
-            });
-        }
-        Self::build_component_controlled_impl::<true>(
-            graph,
-            options,
-            experiment,
-            budget_bytes,
-            work_budget,
-            control,
-        )
-    }
-
-    #[cfg(feature = "experimental-components")]
-    fn build_component_controlled_impl<const FACTOR_PREFLIGHT: bool>(
-        graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        budget_bytes: usize,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
-    ) -> Result<Self, CmgError> {
-        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
         // The allocation-bound formula uses fixed-work checked scalar arithmetic.
         meter.work("preconditioner admission", 1024)?;
         crate::storage::admit(
@@ -843,9 +774,8 @@ impl CmgPreconditioner {
             )?,
             budget_bytes,
         )?;
-        let mut hierarchy = CmgHierarchy::build_component_controlled::<FACTOR_PREFLIGHT>(
-            graph, options, experiment, &mut meter,
-        )?;
+        let mut hierarchy =
+            CmgHierarchy::build_component_controlled(graph, options, experiment, meter)?;
         meter.work("preconditioner finest components", 64)?;
         let finest = hierarchy
             .levels()
@@ -863,7 +793,7 @@ impl CmgPreconditioner {
                     .edges()
                     .iter()
                     .map(|edge| (edge.u(), edge.v())),
-                &mut meter,
+                meter,
             )?;
             meter.allocation(
                 "finest component owner",
@@ -877,7 +807,7 @@ impl CmgPreconditioner {
             meter.work("coarse centering plan", 32)?;
             coarse_centering.push(CenteringPlan::try_from_laplacian_controlled(
                 level.graph(),
-                &mut meter,
+                meter,
             )?);
         }
         meter.work("preconditioner terminal decision", 64)?;
@@ -889,13 +819,9 @@ impl CmgPreconditioner {
                     context: "hierarchy contains no terminal level",
                 })?;
             Some(if experiment.factor_terminal_components {
-                GroundedLdl::factor_by_component_controlled(
-                    terminal.graph(),
-                    budget_bytes,
-                    &mut meter,
-                )?
+                GroundedLdl::factor_by_component_controlled(terminal.graph(), budget_bytes, meter)?
             } else {
-                GroundedLdl::factor_controlled(terminal.graph(), budget_bytes, &mut meter)?
+                GroundedLdl::factor_controlled(terminal.graph(), budget_bytes, meter)?
             })
         } else {
             None
@@ -1288,115 +1214,6 @@ impl CmgPreconditioner {
             &self.finest_components,
             &self.coarse_centering,
         )
-    }
-
-    /// Fallibly prepare scalar application storage with bounded work gates.
-    ///
-    /// Allocation requests are reported separately to the callback. This does
-    /// not create an application plan or an executor. Use the existing scalar
-    /// `apply_compatible_into` with the returned workspace for a fixed cycle.
-    #[cfg(feature = "experimental-components")]
-    pub fn try_workspace_controlled(
-        &self,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
-    ) -> Result<CmgWorkspace, CmgError> {
-        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
-        CmgWorkspace::try_new_controlled(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-            &mut meter,
-        )
-    }
-
-    /// Bound primitive scalar work for one fixed compatible cycle.
-    ///
-    /// The returned allowance includes workspace validation, stored recursive
-    /// repeats, smoothing, transfers, centering, and terminal triangular solves.
-    /// Packed factors count stored zero slots as well as nonzeros. It excludes
-    /// caller gather/scatter, RHS preparation, allocation, and residual checks.
-    /// This metadata query itself is bounded and cancellable; the application
-    /// kernel is unchanged and does not call the control callback. Overflow is
-    /// reported as `BuildStopped` with `CounterOverflow` before a bound is used.
-    #[cfg(feature = "experimental-components")]
-    pub fn scalar_cycle_work_bound_controlled(
-        &self,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
-    ) -> Result<u64, CmgError> {
-        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
-        let phase = "scalar cycle work bound";
-        meter.work(phase, 128)?;
-        let mut child = 0u64;
-        for (index, level) in self.hierarchy.levels().iter().enumerate().rev() {
-            meter.work(phase, 256)?;
-            let error = || meter.stopped(phase, crate::BuildStopReason::CounterOverflow);
-            let n = u64::try_from(level.graph().vertex_count()).map_err(|_| error())?;
-            let m = u64::try_from(level.graph().edge_count()).map_err(|_| error())?;
-            let checked_sum = |terms: &[u64]| {
-                terms
-                    .iter()
-                    .try_fold(0u64, |a, &b| a.checked_add(b))
-                    .ok_or_else(error)
-            };
-            child = match level.terminal_reason() {
-                Some(TerminalReason::Direct) => {
-                    let factor =
-                        self.direct_terminal
-                            .as_ref()
-                            .ok_or(CmgError::InvalidHierarchy {
-                                context: "direct terminal is missing its LDL factor",
-                            })?;
-                    let slots = u64::try_from(factor.scalar_solve_slots()).map_err(|_| error())?;
-                    checked_sum(&[
-                        256,
-                        n.checked_mul(32).ok_or_else(error)?,
-                        slots.checked_mul(32).ok_or_else(error)?,
-                    ])?
-                }
-                Some(_) => checked_sum(&[64, n.checked_mul(8).ok_or_else(error)?])?,
-                None => {
-                    let c = self
-                        .hierarchy
-                        .levels()
-                        .get(index + 1)
-                        .ok_or(CmgError::InvalidHierarchy {
-                            context: "nonterminal level has no child",
-                        })?
-                        .graph()
-                        .vertex_count();
-                    let coarse = u64::try_from(c).map_err(|_| error())?;
-                    let dimensions = checked_sum(&[n, m, coarse])?;
-                    let local = checked_sum(&[256, dimensions.checked_mul(64).ok_or_else(error)?])?;
-                    let one = checked_sum(&[local, if c == 0 { 0 } else { child }])?;
-                    let iterations = if index == 0 {
-                        1
-                    } else {
-                        self.repeat_counts[index - 1]
-                    };
-                    if iterations == 0 {
-                        return Err(CmgError::InvalidHierarchy {
-                            context: "nonterminal level has zero stationary iterations",
-                        });
-                    }
-                    one.checked_mul(u64::try_from(iterations).map_err(|_| error())?)
-                        .ok_or_else(error)?
-                }
-            };
-        }
-        meter.work(phase, 64)?;
-        let count = u64::try_from(self.hierarchy.levels().len())
-            .map_err(|_| meter.stopped(phase, crate::BuildStopReason::CounterOverflow))?;
-        child
-            .checked_add(128)
-            .and_then(|value| {
-                count
-                    .checked_mul(128)
-                    .and_then(|validation| value.checked_add(validation))
-            })
-            .ok_or_else(|| meter.stopped(phase, crate::BuildStopReason::CounterOverflow))
     }
 
     /// Apply the preconditioner using a newly allocated workspace.
@@ -2401,9 +2218,9 @@ fn repeat_from_nonzeros(fine_nonzeros: usize, denominator_nonzeros: usize) -> us
 }
 
 #[cfg(all(test, feature = "experimental-components"))]
-mod controlled_cycle_bound_tests {
+mod controlled_build_tests {
     use super::*;
-    use crate::{BuildDecision, BuildOperation, BuildStopReason, ComponentBuildOptions};
+    use crate::ComponentBuildOptions;
 
     #[test]
     fn rounded_matvec_probe_matches_unchanged_cycle_on_the_selected_hierarchy() {
@@ -2411,7 +2228,7 @@ mod controlled_cycle_bound_tests {
         // relaxed linearity certificate. Floating L*x and affine combinations
         // need not lie exactly in the component range, and cancellation can be
         // amplified by the weak edge. Exact compatible dipoles retain the
-        // independent 1e-11 checks in tests/factor_preflight.rs.
+        // independent 1e-11 checks in tests/controlled_build.rs.
         for disconnected in [false, true] {
             for scale in [1e-90, 1.0, 1e90] {
                 let components = if disconnected { 2 } else { 1 };
@@ -2434,18 +2251,21 @@ mod controlled_cycle_bound_tests {
                     }),
                 )
                 .unwrap();
-                let selected = CmgPreconditioner::build_component_experiment_serial_controlled_with_factor_preflight(
+                let selected = CmgPreconditioner::build_component_experiment_serial_controlled(
                     &graph,
-                    CmgOptions { max_levels: 8, ..Default::default() },
+                    CmgOptions {
+                        max_levels: 8,
+                        ..Default::default()
+                    },
                     ComponentBuildOptions {
                         prune_coarse_isolates: true,
                         preserve_unpruned_stopping: true,
                         factor_terminal_components: true,
                     },
                     usize::MAX,
-                    200_000,
-                    &mut |_| BuildDecision::Continue,
-                ).unwrap();
+                    &|| false,
+                )
+                .unwrap();
                 let legacy = CmgPreconditioner::from_hierarchy_with_factor(
                     selected.hierarchy.clone(),
                     GroundedLdl::factor_by_component,
@@ -2503,128 +2323,5 @@ mod controlled_cycle_bound_tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn direct_bound_counts_packed_zero_slots_and_ignores_terminal_repeats() {
-        for (n, edges, expected) in [
-            (0, vec![], 512),
-            (1, vec![], 544),
-            (2, vec![(0, 1, 1.0)], 576),
-            (3, vec![(0, 1, 1.0), (0, 2, 1.0), (1, 2, 1.0)], 640),
-            // Two independent triangles: four active vertices, six packed
-            // strict slots, including four explicit zeros between components.
-            (
-                6,
-                vec![
-                    (0, 1, 1.0),
-                    (0, 2, 1.0),
-                    (1, 2, 1.0),
-                    (3, 4, 1.0),
-                    (3, 5, 1.0),
-                    (4, 5, 1.0),
-                ],
-                896,
-            ),
-        ] {
-            let graph = Laplacian::from_edges(n, edges).unwrap();
-            let mut pre = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
-            assert_eq!(
-                pre.scalar_cycle_work_bound_controlled(u64::MAX, &mut |_| BuildDecision::Continue)
-                    .unwrap(),
-                expected
-            );
-            pre.repeat_counts[0] = usize::MAX;
-            assert_eq!(
-                pre.scalar_cycle_work_bound_controlled(u64::MAX, &mut |_| BuildDecision::Continue)
-                    .unwrap(),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn cycle_bound_covers_recursion_and_has_checked_cancellable_metadata() {
-        let edges = (0..256).flat_map(|v| {
-            [
-                (v % 16 < 15).then_some((v, v + 1, 1.0)),
-                (v < 240).then_some((v, v + 16, 2.0)),
-            ]
-            .into_iter()
-            .flatten()
-        });
-        let graph = Laplacian::from_edges(256, edges).unwrap();
-        let mut pre = CmgPreconditioner::build(
-            &graph,
-            CmgOptions {
-                direct_threshold: 2,
-                ..CmgOptions::default()
-            },
-        )
-        .unwrap();
-        assert!(pre.hierarchy.levels().len() >= 3);
-        let mut trace = Vec::new();
-        let bound = pre
-            .scalar_cycle_work_bound_controlled(u64::MAX, &mut |event| {
-                trace.push(event);
-                BuildDecision::Continue
-            })
-            .unwrap();
-        assert!(bound > 64 * (graph.vertex_count() + graph.edge_count()) as u64);
-        assert_eq!(trace.len(), pre.hierarchy.levels().len() + 2);
-        assert!(
-            trace
-                .iter()
-                .all(|event| matches!(event.operation, BuildOperation::Work { units: 1..=1024 }))
-        );
-        for stop in 0..trace.len() {
-            let mut seen = 0;
-            let result = pre.scalar_cycle_work_bound_controlled(u64::MAX, &mut |event| {
-                assert_eq!(trace[seen], event);
-                seen += 1;
-                if seen == stop + 1 {
-                    BuildDecision::Interrupted
-                } else {
-                    BuildDecision::Continue
-                }
-            });
-            assert!(matches!(
-                result,
-                Err(CmgError::BuildStopped {
-                    reason: BuildStopReason::Interrupted,
-                    ..
-                })
-            ));
-            assert_eq!(seen, stop + 1);
-        }
-        let budget = trace
-            .iter()
-            .map(|event| match event.operation {
-                BuildOperation::Work { units } => u64::from(units),
-                _ => 0,
-            })
-            .sum();
-        assert_eq!(
-            pre.scalar_cycle_work_bound_controlled(budget, &mut |_| BuildDecision::Continue)
-                .unwrap(),
-            bound
-        );
-        assert!(matches!(
-            pre.scalar_cycle_work_bound_controlled(budget - 1, &mut |_| BuildDecision::Continue),
-            Err(CmgError::BuildStopped {
-                reason: BuildStopReason::WorkBudgetExhausted,
-                ..
-            })
-        ));
-        // The child is nonterminal, so its repetitions multiply all of its
-        // descendant work, and a nonrepresentable result must never wrap.
-        pre.repeat_counts[0] = usize::MAX;
-        assert!(matches!(
-            pre.scalar_cycle_work_bound_controlled(u64::MAX, &mut |_| BuildDecision::Continue),
-            Err(CmgError::BuildStopped {
-                reason: BuildStopReason::CounterOverflow,
-                ..
-            })
-        ));
     }
 }

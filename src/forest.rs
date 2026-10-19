@@ -121,7 +121,7 @@ pub(crate) fn build_forest_aggregation_labels_admitted(
 pub(crate) fn build_forest_aggregation_labels_controlled(
     graph: &Laplacian,
     threshold: f64,
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<(Vec<usize>, usize), CmgError> {
     meter.work("forest threshold", 16)?;
     validate_low_effective_degree_threshold(threshold)?;
@@ -156,7 +156,7 @@ fn apply_low_effective_degree_correction_controlled(
     threshold: f64,
     selected_weight: &[f64],
     parent: &mut [usize],
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<(), CmgError> {
     let mut has_low_effective_degree = false;
     for (&degree, &weight) in graph.diagonal().iter().zip(selected_weight) {
@@ -196,7 +196,7 @@ fn apply_low_effective_degree_correction_controlled(
 #[cfg(feature = "experimental-components")]
 fn split_forest_controlled<I: ForestIndegree>(
     parent: &[usize],
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<Vec<usize>, CmgError> {
     let n = parent.len();
     let mut forest = meter.copy_slice(parent, "forest split parents")?;
@@ -328,7 +328,7 @@ fn split_forest_controlled<I: ForestIndegree>(
 #[cfg(feature = "experimental-components")]
 fn forest_component_labels_controlled(
     parent: &[usize],
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<(Vec<usize>, usize), CmgError> {
     let n = parent.len();
     let mut disjoint_set = meter.try_capacity(n, "forest union find")?;
@@ -376,7 +376,7 @@ fn forest_component_labels_controlled(
 fn find_root_controlled(
     parent: &mut [usize],
     vertex: usize,
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<usize, CmgError> {
     let mut root = vertex;
     loop {
@@ -1002,9 +1002,7 @@ mod controlled_forest_tests {
     use super::{
         build_forest_aggregation_labels_admitted, build_forest_aggregation_labels_controlled,
     };
-    use crate::build_control::{
-        BuildBoundary, BuildDecision, BuildMeter, BuildOperation, BuildStopReason,
-    };
+    use crate::cancel::{CancelMeter, StopAt};
     use crate::{CmgError, Laplacian};
 
     fn fixtures() -> Vec<Laplacian> {
@@ -1035,41 +1033,33 @@ mod controlled_forest_tests {
         ]
     }
 
-    fn recording_run(graph: &Laplacian, threshold: f64) -> Vec<BuildBoundary> {
+    fn counting_run(graph: &Laplacian, threshold: f64) -> usize {
         let expected = build_forest_aggregation_labels_admitted(graph, threshold).unwrap();
-        let mut boundaries = Vec::new();
-        let mut control = |boundary| {
-            boundaries.push(boundary);
-            BuildDecision::Continue
-        };
+        let count = StopAt::never();
+        let query = || count.query();
         let actual = build_forest_aggregation_labels_controlled(
             graph,
             threshold,
-            &mut BuildMeter::new(u64::MAX, &mut control),
+            &mut CancelMeter::every_operation(&query),
         )
         .unwrap();
         assert_eq!(actual, expected);
-        boundaries
+        count.polls()
     }
 
     #[test]
-    fn controlled_labels_match_admitted_and_boundaries_repeat_exactly() {
+    fn controlled_labels_match_admitted_and_polls_repeat_exactly() {
         for graph in fixtures() {
             for threshold in [0.0, 0.125, 0.9, 1.0] {
-                let first = recording_run(&graph, threshold);
-                assert_eq!(recording_run(&graph, threshold), first);
-                for (ordinal, boundary) in first.iter().enumerate() {
-                    assert_eq!(boundary.chunk_id, ordinal as u64);
-                    if let BuildOperation::Work { units } = boundary.operation {
-                        assert!((1..=1024).contains(&units));
-                    }
-                }
+                let first = counting_run(&graph, threshold);
+                assert!(first > 0);
+                assert_eq!(counting_run(&graph, threshold), first);
             }
         }
     }
 
     #[test]
-    fn either_stop_decision_returns_at_each_forest_boundary() {
+    fn cancellation_returns_at_each_forest_poll() {
         let graph = Laplacian::from_edges(
             8,
             [
@@ -1084,76 +1074,17 @@ mod controlled_forest_tests {
             ],
         )
         .unwrap();
-        let boundaries = recording_run(&graph, 0.9);
-        for expected in &boundaries {
-            for (decision, reason) in [
-                (BuildDecision::StopUnused, BuildStopReason::StopUnused),
-                (BuildDecision::Interrupted, BuildStopReason::Interrupted),
-            ] {
-                let mut observed = Vec::new();
-                let mut control = |boundary: BuildBoundary| {
-                    observed.push(boundary);
-                    if boundary.chunk_id == expected.chunk_id {
-                        decision
-                    } else {
-                        BuildDecision::Continue
-                    }
-                };
-                let error = build_forest_aggregation_labels_controlled(
-                    &graph,
-                    0.9,
-                    &mut BuildMeter::new(u64::MAX, &mut control),
-                )
-                .unwrap_err();
-                assert_eq!(observed, boundaries[..=expected.chunk_id as usize]);
-                assert!(matches!(error, CmgError::BuildStopped {
-                    reason: actual_reason, phase, chunk_id, charged_work,
-                } if actual_reason == reason
-                    && phase == expected.phase
-                    && chunk_id == expected.chunk_id
-                    && charged_work == expected.charged_work));
-            }
-        }
-    }
-
-    #[test]
-    fn budget_denies_each_work_boundary_before_callback() {
-        let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 2.0)]).unwrap();
-        let boundaries = recording_run(&graph, 0.125);
-        let mut complete_budget = 0;
-        for expected in &boundaries {
-            let BuildOperation::Work { units } = expected.operation else {
-                continue;
-            };
-            complete_budget = expected.charged_work + u64::from(units);
-            let mut calls = 0;
-            let mut control = |_boundary| {
-                calls += 1;
-                BuildDecision::Continue
-            };
+        for stop in 0..counting_run(&graph, 0.9) {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
             let error = build_forest_aggregation_labels_controlled(
                 &graph,
-                0.125,
-                &mut BuildMeter::new(complete_budget - 1, &mut control),
+                0.9,
+                &mut CancelMeter::every_operation(&query),
             )
             .unwrap_err();
-            assert_eq!(calls, expected.chunk_id);
-            assert!(matches!(error, CmgError::BuildStopped {
-                reason: BuildStopReason::WorkBudgetExhausted, phase, chunk_id, charged_work,
-            } if phase == expected.phase
-                && chunk_id == expected.chunk_id
-                && charged_work == expected.charged_work));
+            assert_eq!(cancel.polls(), stop + 1);
+            assert!(matches!(error, CmgError::Cancelled { .. }));
         }
-        let mut control = |_| BuildDecision::Continue;
-        let result = build_forest_aggregation_labels_controlled(
-            &graph,
-            0.125,
-            &mut BuildMeter::new(complete_budget, &mut control),
-        )
-        .unwrap();
-        assert_eq!(
-            result,
-            build_forest_aggregation_labels_admitted(&graph, 0.125).unwrap()
-        );
     }
 }

@@ -1,9 +1,9 @@
 #![cfg(feature = "experimental-components")]
+//! Cancellation-only controlled construction: exact bits, every poll, parking.
 
-use cmg::{
-    BuildBoundary, BuildDecision, BuildOperation, BuildStopReason, CmgError, CmgOptions,
-    CmgPreconditioner, ComponentBuildOptions, Laplacian,
-};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use cmg::{CmgError, CmgOptions, CmgPreconditioner, ComponentBuildOptions, Laplacian};
 
 fn graph(n: usize) -> Laplacian {
     let mut edges = Vec::new();
@@ -18,8 +18,35 @@ fn graph(n: usize) -> Laplacian {
     Laplacian::from_edges(n, edges).unwrap()
 }
 
+fn bits(v: &[f64]) -> Vec<u64> {
+    v.iter().map(|x| x.to_bits()).collect()
+}
+
+/// Counts polls and requests cancellation from one zero-based poll onwards.
+struct StopAt {
+    polls: AtomicUsize,
+    stop: usize,
+}
+
+impl StopAt {
+    fn new(stop: usize) -> Self {
+        Self {
+            polls: AtomicUsize::new(0),
+            stop,
+        }
+    }
+
+    fn query(&self) -> bool {
+        self.polls.fetch_add(1, Ordering::Relaxed) >= self.stop
+    }
+
+    fn polls(&self) -> usize {
+        self.polls.load(Ordering::Relaxed)
+    }
+}
+
 #[test]
-fn unlimited_control_preserves_hierarchy_factor_and_cycle_bits() {
+fn uncancelled_construction_preserves_hierarchy_factor_and_cycle_bits() {
     for n in [0, 1, 2, 9, 65, 257] {
         let graph = graph(n);
         for prune in [false, true] {
@@ -41,17 +68,14 @@ fn unlimited_control_preserves_hierarchy_factor_and_cycle_bits() {
                         usize::MAX,
                     )
                     .unwrap();
-                    let mut boundaries = Vec::new();
+                    let first = StopAt::new(usize::MAX);
+                    let query = || first.query();
                     let new = CmgPreconditioner::build_component_experiment_serial_controlled(
                         &graph,
                         options,
                         experiment,
                         usize::MAX,
-                        u64::MAX,
-                        &mut |event| {
-                            boundaries.push(event);
-                            BuildDecision::Continue
-                        },
+                        &query,
                     )
                     .unwrap();
                     assert_eq!(old.hierarchy(), new.hierarchy());
@@ -61,30 +85,23 @@ fn unlimited_control_preserves_hierarchy_factor_and_cycle_bits() {
                         .map(|i| ((i * 11 % 17) as f64 - 8.0) * 0.25)
                         .collect();
                     let rhs = graph.matvec(&probe).unwrap();
-                    let old_result = old.apply(&rhs).unwrap();
-                    let new_result = new.apply(&rhs).unwrap();
                     assert_eq!(
-                        old_result.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
-                        new_result.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                        bits(&old.apply(&rhs).unwrap()),
+                        bits(&new.apply(&rhs).unwrap())
                     );
-                    let mut second = Vec::new();
+                    // The poll schedule is a deterministic function of the input.
+                    let second = StopAt::new(usize::MAX);
+                    let query = || second.query();
                     CmgPreconditioner::build_component_experiment_serial_controlled(
                         &graph,
                         options,
                         experiment,
                         usize::MAX,
-                        u64::MAX,
-                        &mut |event| {
-                            second.push(event);
-                            BuildDecision::Continue
-                        },
+                        &query,
                     )
                     .unwrap();
-                    assert_eq!(boundaries, second);
-                    assert!(boundaries.iter().all(|e| match e.operation {
-                        BuildOperation::Work { units } => (1..=1024).contains(&units),
-                        _ => true,
-                    }));
+                    assert!(first.polls() > 0);
+                    assert_eq!(first.polls(), second.polls());
                 }
             }
         }
@@ -92,8 +109,31 @@ fn unlimited_control_preserves_hierarchy_factor_and_cycle_bits() {
 }
 
 #[test]
-fn full_candidate_denies_every_boundary_and_recovers() {
-    let graph = graph(5);
+fn terminal_factor_follows_the_direct_threshold_without_a_work_screen() {
+    // Large direct terminals are factored whenever the hierarchy options say
+    // so; no construction-work allowance can redirect them to coarsening.
+    let graph = graph(600);
+    let experiment = ComponentBuildOptions {
+        prune_coarse_isolates: true,
+        preserve_unpruned_stopping: true,
+        factor_terminal_components: true,
+    };
+    let never = || false;
+    let built = CmgPreconditioner::build_component_experiment_serial_controlled(
+        &graph,
+        CmgOptions::default(),
+        experiment,
+        usize::MAX,
+        &never,
+    )
+    .unwrap();
+    assert_eq!(built.hierarchy().levels().len(), 1);
+    assert!(built.terminal_factor().is_some());
+}
+
+#[test]
+fn cancellation_at_every_poll_returns_cancelled_and_a_fresh_build_recovers() {
+    let graph = graph(65);
     let options = CmgOptions {
         direct_threshold: 3,
         ..CmgOptions::default()
@@ -103,177 +143,158 @@ fn full_candidate_denies_every_boundary_and_recovers() {
         preserve_unpruned_stopping: true,
         factor_terminal_components: true,
     };
-    let mut trace: Vec<BuildBoundary> = Vec::new();
-    let build = |budget, callback: &mut dyn cmg::BuildControl| {
+    let build = |cancel: cmg::Cancellation<'_>| {
         CmgPreconditioner::build_component_experiment_serial_controlled(
             &graph,
             options,
             experiment,
             usize::MAX,
-            budget,
-            callback,
+            cancel,
         )
     };
-    build(u64::MAX, &mut |event| {
-        trace.push(event);
-        BuildDecision::Continue
-    })
-    .unwrap();
-    for stop in 0..trace.len() {
-        for (decision, reason) in [
-            (BuildDecision::StopUnused, BuildStopReason::StopUnused),
-            (BuildDecision::Interrupted, BuildStopReason::Interrupted),
-        ] {
-            let mut seen = 0;
-            let result = build(u64::MAX, &mut |event| {
-                assert_eq!(event, trace[seen]);
-                let result = if seen == stop {
-                    decision
-                } else {
-                    BuildDecision::Continue
-                };
-                seen += 1;
-                result
-            });
-            assert!(
-                matches!(result,Err(CmgError::BuildStopped {reason:r,chunk_id,charged_work,..}) if r==reason && chunk_id==stop as u64 && charged_work==trace[stop].charged_work)
-            );
-            assert_eq!(seen, stop + 1);
-        }
+    let count = StopAt::new(usize::MAX);
+    let query = || count.query();
+    let reference = build(&query).unwrap();
+    for stop in 0..count.polls() {
+        let cancel = StopAt::new(stop);
+        let query = || cancel.query();
+        assert!(matches!(build(&query), Err(CmgError::Cancelled { .. })));
+        // Cancellation is observed at the first true poll, never later.
+        assert_eq!(cancel.polls(), stop + 1);
     }
-    let work: u64 = trace
-        .iter()
-        .map(|event| match event.operation {
-            BuildOperation::Work { units } => u64::from(units),
-            _ => 0,
-        })
-        .sum();
-    build(work, &mut |_| BuildDecision::Continue).unwrap();
-    assert!(matches!(
-        build(work - 1, &mut |_| BuildDecision::Continue),
-        Err(CmgError::BuildStopped {
-            reason: BuildStopReason::WorkBudgetExhausted,
-            ..
-        })
-    ));
-    assert!(matches!(
-        build(0, &mut |_| panic!("zero budget must deny before callback")),
-        Err(CmgError::BuildStopped {
-            reason: BuildStopReason::WorkBudgetExhausted,
-            ..
-        })
-    ));
+    let never = || false;
+    assert_eq!(build(&never).unwrap(), reference);
 }
 
 #[test]
-fn callback_can_park_then_grant_or_drain_without_building_a_pool() {
-    for decision in [
-        BuildDecision::Continue,
-        BuildDecision::StopUnused,
-        BuildDecision::Interrupted,
-    ] {
+fn cancellation_query_can_park_then_continue_or_cancel_without_a_pool() {
+    for cancel in [false, true] {
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
-        let (grant_tx, grant_rx) = std::sync::mpsc::sync_channel(0);
+        let (grant_tx, grant_rx) = std::sync::mpsc::sync_channel::<bool>(0);
         let worker = std::thread::spawn(move || {
             let graph = graph(5);
-            let mut first = true;
+            let first = AtomicBool::new(true);
+            let decided = AtomicBool::new(false);
+            let ready_tx = std::sync::Mutex::new(ready_tx);
+            let grant_rx = std::sync::Mutex::new(grant_rx);
+            let query = || {
+                if first.swap(false, Ordering::Relaxed) {
+                    ready_tx.lock().unwrap().send(()).unwrap();
+                    decided.store(grant_rx.lock().unwrap().recv().unwrap(), Ordering::Relaxed);
+                }
+                decided.load(Ordering::Relaxed)
+            };
             CmgPreconditioner::build_component_experiment_serial_controlled(
                 &graph,
                 CmgOptions::default(),
                 ComponentBuildOptions::default(),
                 usize::MAX,
-                u64::MAX,
-                &mut |_| {
-                    if first {
-                        first = false;
-                        ready_tx.send(()).unwrap();
-                        grant_rx.recv().unwrap()
-                    } else {
-                        BuildDecision::Continue
-                    }
-                },
+                &query,
             )
         });
         ready_rx.recv().unwrap();
-        grant_tx.send(decision).unwrap();
+        grant_tx.send(cancel).unwrap();
         let result = worker.join().unwrap();
-        match decision {
-            BuildDecision::Continue => assert!(result.is_ok()),
-            _ => assert!(matches!(result, Err(CmgError::BuildStopped { .. }))),
+        if cancel {
+            assert!(matches!(result, Err(CmgError::Cancelled { .. })));
+        } else {
+            assert!(result.is_ok());
         }
     }
 }
 
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn close(a: &[f64], b: &[f64]) {
+    let scale = a.iter().chain(b).fold(0.0_f64, |s, x| s.max(x.abs()));
+    for (a, b) in a.iter().zip(b) {
+        assert!(
+            (a - b).abs() <= 1e-11 * scale,
+            "{a} != {b} at scale {scale}"
+        );
+    }
+}
+
 #[test]
-fn prefix_parking_preserves_full_construction_and_global_trace() {
-    use cmg::{BuildPrefix, PrefixDecision, PrefixOutcome};
-    let edges: Vec<_> = (0..16).map(|i| (i, i + 1, 1.0 + (i % 3) as f64)).collect();
-    let construct = |control: &mut dyn cmg::BuildControl| {
-        let graph = Laplacian::from_edges_controlled(17, &edges, usize::MAX, u64::MAX, control)?;
-        let built = CmgPreconditioner::build_component_experiment_serial_controlled(
-            &graph,
-            CmgOptions {
-                direct_threshold: 3,
-                ..Default::default()
-            },
-            ComponentBuildOptions::default(),
-            usize::MAX,
-            u64::MAX,
-            control,
-        )?;
-        built.try_workspace_controlled(u64::MAX, control)?;
-        Ok::<_, CmgError>((graph, built))
+fn controlled_weighted_cycles_are_fixed_linear_symmetric_and_positive_on_the_range() {
+    let experiment = ComponentBuildOptions {
+        prune_coarse_isolates: true,
+        preserve_unpruned_stopping: true,
+        factor_terminal_components: true,
     };
-    let mut reference = BuildPrefix::new(11, u64::MAX);
-    reference.grant(u64::MAX).unwrap();
-    let mut expected = Vec::new();
-    let (graph, old) = construct(&mut |boundary| {
-        assert_eq!(reference.admit(boundary).unwrap(), PrefixDecision::Continue);
-        expected.push(reference.snapshot().last_admitted.unwrap());
-        BuildDecision::Continue
-    })
-    .unwrap();
-    let cap = reference.snapshot().charged;
-    for quantum in [257, 4096] {
-        let (park_tx, park_rx) = std::sync::mpsc::sync_channel(0);
-        let (grant_tx, grant_rx) = std::sync::mpsc::sync_channel(0);
-        let (new, actual) = std::thread::scope(|scope| {
-            let worker = scope.spawn(move || {
-                let mut prefix = BuildPrefix::new(11, cap);
-                let mut actual = Vec::new();
-                let (_, built) = construct(&mut |boundary| loop {
-                    match prefix.admit(boundary).unwrap() {
-                        PrefixDecision::Continue => {
-                            actual.push(prefix.snapshot().last_admitted.unwrap());
-                            break BuildDecision::Continue;
-                        }
-                        PrefixDecision::Park => {
-                            prefix.drain_issued_prefix().unwrap();
-                            park_tx.send(Some(prefix.snapshot())).unwrap();
-                            prefix.grant(grant_rx.recv().unwrap()).unwrap();
-                        }
-                        other => panic!("unexpected decision: {other:?}"),
-                    }
+    for disconnected in [false, true] {
+        for scale in [1e-90, 1.0, 1e90] {
+            let n = if disconnected { 50 } else { 24 };
+            let edges = (0..if disconnected { 2 } else { 1 }).flat_map(|c| {
+                (1..24).map(move |v| {
+                    (
+                        c * 24 + v - 1,
+                        c * 24 + v,
+                        scale
+                            * if v == 12 {
+                                1.0 / 65536.0
+                            } else {
+                                1.0 + (v % 5) as f64 / 4.0
+                            },
+                    )
                 })
-                .unwrap();
-                prefix.finish(PrefixOutcome::Complete).unwrap();
-                park_tx.send(None).unwrap();
-                (built, actual)
             });
-            while let Some(parked) = park_rx.recv().unwrap() {
-                assert!(parked.charged <= parked.issued);
-                assert!(parked.drained());
-                let next = parked.issued.saturating_add(quantum).min(cap);
-                grant_tx.send(next).unwrap();
+            let graph = Laplacian::from_edges(n, edges).unwrap();
+            let options = CmgOptions {
+                max_levels: 8,
+                direct_threshold: 4,
+                ..Default::default()
+            };
+            let never = || false;
+            let build = || {
+                CmgPreconditioner::build_component_experiment_serial_controlled(
+                    &graph,
+                    options,
+                    experiment,
+                    usize::MAX,
+                    &never,
+                )
+                .unwrap()
+            };
+            let pre = build();
+            assert!(pre.hierarchy().levels().len() > 1);
+            let retry = build();
+            assert_eq!(pre, retry);
+            // Exact within-component dipoles are independently in the original
+            // Laplacian range. They avoid contaminating the linearity witness
+            // with a second floating-point matvec's cancellation error.
+            // Check both nearby dipoles and dipoles crossing the weak edge.
+            for (u_end, v_end) in [(1, 3), (23, 21)] {
+                let mut u = vec![0.0; n];
+                let mut v = vec![0.0; n];
+                for c in 0..if disconnected { 2 } else { 1 } {
+                    u[c * 24] = scale;
+                    u[c * 24 + u_end] = -scale;
+                    v[c * 24 + 2] = scale;
+                    v[c * 24 + v_end] = -scale;
+                }
+                let mu = pre.apply(&u).unwrap();
+                let mv = pre.apply(&v).unwrap();
+                assert_eq!(bits(&mu), bits(&retry.apply(&u).unwrap()));
+                assert_eq!(bits(&mu), bits(&pre.apply(&u).unwrap()));
+                let input: Vec<_> = u.iter().zip(&v).map(|(a, b)| 1.25 * a - 0.75 * b).collect();
+                let expected: Vec<_> = mu
+                    .iter()
+                    .zip(&mv)
+                    .map(|(a, b)| 1.25 * a - 0.75 * b)
+                    .collect();
+                close(&pre.apply(&input).unwrap(), &expected);
+                let left = dot(&u, &mv);
+                let right = dot(&mu, &v);
+                assert!((left - right).abs() <= 1e-11 * left.abs().max(right.abs()));
+                assert!(dot(&u, &mu) > 0.0 && dot(&v, &mv) > 0.0);
+                assert!(mu.iter().chain(&mv).all(|x| x.is_finite()));
+                if disconnected {
+                    assert_eq!(&mu[48..], &[0.0, 0.0]);
+                }
             }
-            worker.join().unwrap()
-        });
-        assert_eq!(actual, expected);
-        assert_eq!(new.hierarchy(), old.hierarchy());
-        assert_eq!(new.terminal_factor(), old.terminal_factor());
-        let rhs = graph
-            .matvec(&(0..17).map(|i| i as f64).collect::<Vec<_>>())
-            .unwrap();
-        assert_eq!(new.apply(&rhs).unwrap(), old.apply(&rhs).unwrap());
+        }
     }
 }

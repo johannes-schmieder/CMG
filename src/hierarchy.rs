@@ -856,11 +856,11 @@ impl CmgHierarchy {
     }
 
     #[cfg(feature = "experimental-components")]
-    pub(crate) fn build_component_controlled<const FACTOR_PREFLIGHT: bool>(
+    pub(crate) fn build_component_controlled(
         graph: &Laplacian,
         options: CmgOptions,
         experiment: crate::ComponentBuildOptions,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
         meter.work("hierarchy initialization", 128)?;
         let options = options.validate()?;
@@ -874,19 +874,7 @@ impl CmgHierarchy {
             meter.work("hierarchy terminal decision", 128)?;
             let n = current.vertex_count();
             let decision_n = n + retired_vertices;
-            let mut direct = n == 0 || decision_n <= 1 || decision_n < options.direct_threshold;
-            if FACTOR_PREFLIGHT && direct {
-                meter.work("terminal factor preflight", 1024)?;
-                direct = crate::ldl::component_factor_work_bound(n, current.edge_count())
-                    .is_some_and(|bound| bound <= meter.remaining());
-                if !direct && n <= 1 {
-                    return Err(meter.stopped(
-                        "terminal factor preflight",
-                        crate::BuildStopReason::WorkBudgetExhausted,
-                    ));
-                }
-            }
-            if direct {
+            if n == 0 || decision_n <= 1 || decision_n < options.direct_threshold {
                 terminal_reason = TerminalReason::Direct;
                 let level = make_level_controlled(current, None, 0, Some(terminal_reason), meter)?;
                 meter.work("hierarchy level publication", 32)?;
@@ -1040,7 +1028,7 @@ fn make_level_controlled(
     aggregation: Option<Aggregation>,
     repeat: usize,
     terminal_reason: Option<TerminalReason>,
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<HierarchyLevel, CmgError> {
     let mut inverse_diagonal =
         meter.try_capacity(graph.vertex_count(), "hierarchy inverse diagonal")?;

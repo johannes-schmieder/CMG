@@ -339,46 +339,35 @@ fn prepared_numeric_generations_share_parents_but_admit_new_builds() {
 // legacy admission/failure injection above retains its existing behavior.
 #[derive(Clone, Copy, Default, Debug)]
 struct AllocationLedger {
-    pending_bytes: Option<usize>,
-    gates: usize,
+    polled: bool,
+    polls: usize,
     allocations: usize,
-    mismatch: Option<(Option<usize>, usize)>,
+    ungated: Option<usize>,
 }
 
 fn trace_allocation(bytes: usize) {
     let _ = TRACE.try_with(|trace| {
         if let Some(mut ledger) = trace.get() {
-            if ledger.pending_bytes != Some(bytes) && ledger.mismatch.is_none() {
-                ledger.mismatch = Some((ledger.pending_bytes, bytes));
+            // Controlled construction polls cancellation before every
+            // allocation, so each allocation follows a fresh poll.
+            if !ledger.polled && ledger.ungated.is_none() {
+                ledger.ungated = Some(bytes);
             }
-            ledger.pending_bytes = None;
+            ledger.polled = false;
             ledger.allocations += 1;
             trace.set(Some(ledger));
         }
     });
 }
 
-fn allocation_control(boundary: BuildBoundary, stop_at: Option<usize>) -> BuildDecision {
-    let BuildOperation::Allocation { bytes } = boundary.operation else {
-        return BuildDecision::Continue;
-    };
+fn allocation_poll(stop_at: Option<usize>) -> bool {
     TRACE.with(|trace| {
         let mut ledger = trace.get().unwrap();
-        let index = ledger.gates;
-        ledger.gates += 1;
-        if ledger.pending_bytes.is_some() && ledger.mismatch.is_none() {
-            // A second gate arrived without consuming the previous nonempty
-            // request. Keep this evidence rather than overwrite the token.
-            ledger.mismatch = Some((ledger.pending_bytes, bytes));
-        }
-        let decision = if stop_at == Some(index) {
-            BuildDecision::Interrupted
-        } else {
-            ledger.pending_bytes = (bytes != 0).then_some(bytes);
-            BuildDecision::Continue
-        };
+        let index = ledger.polls;
+        ledger.polls += 1;
+        ledger.polled = true;
         trace.set(Some(ledger));
-        decision
+        stop_at.is_some_and(|stop| index >= stop)
     })
 }
 
@@ -403,20 +392,16 @@ impl Drop for AllocationTrace {
 
 fn check_controlled_allocations<T>(
     bound: usize,
-    mut construct: impl FnMut(&mut dyn BuildControl) -> Result<T, CmgError>,
+    mut construct: impl FnMut(Cancellation<'_>) -> Result<T, CmgError>,
 ) {
     let before = live();
     PEAK.with(|peak| peak.set(before));
     let trace = AllocationTrace::start();
-    let result = construct(&mut |boundary| allocation_control(boundary, None));
+    let result = construct(&|| allocation_poll(None));
     let ledger = trace.finish();
     let peak = (PEAK.with(Cell::get) - before) as usize;
     let result = result.unwrap();
-    assert_eq!(
-        ledger.mismatch, None,
-        "ungated or differently sized allocation"
-    );
-    assert_eq!(ledger.pending_bytes, None, "unused allocation gate");
+    assert_eq!(ledger.ungated, None, "allocation without a preceding poll");
     assert!(ledger.allocations > 0);
     assert!(
         peak <= bound,
@@ -425,37 +410,24 @@ fn check_controlled_allocations<T>(
     drop(result);
     assert_eq!(live(), before, "successful candidate drop leaked storage");
 
-    // Stop before each allocation, including zero-length requests and Arc
-    // owners. No allocator failure injection or callback allocation is needed.
-    for index in 0..ledger.gates {
+    // Cancel at each poll, including those before zero-length requests and
+    // Arc owners. No allocator failure injection or query allocation is needed.
+    for index in 0..ledger.polls {
         PEAK.with(|peak| peak.set(before));
         let trace = AllocationTrace::start();
-        let result = construct(&mut |boundary| allocation_control(boundary, Some(index)));
+        let result = construct(&|| allocation_poll(Some(index)));
         let cancelled = trace.finish();
         assert!(
-            matches!(
-                result,
-                Err(CmgError::BuildStopped {
-                    reason: BuildStopReason::Interrupted,
-                    ..
-                })
-            ),
-            "allocation gate {index} did not stop construction"
+            matches!(result, Err(CmgError::Cancelled { .. })),
+            "poll {index} did not cancel construction"
         );
-        assert_eq!(cancelled.gates, index + 1);
-        assert_eq!(
-            cancelled.mismatch, None,
-            "gate {index}: allocation mismatch"
-        );
-        assert_eq!(
-            cancelled.pending_bytes, None,
-            "gate {index}: stale allocation token"
-        );
+        assert_eq!(cancelled.polls, index + 1);
+        assert_eq!(cancelled.ungated, None, "poll {index}: ungated allocation");
         drop(result);
         assert_eq!(
             live(),
             before,
-            "allocation gate {index}: cancelled candidate leaked storage"
+            "poll {index}: cancelled candidate leaked storage"
         );
         assert!((PEAK.with(Cell::get) - before) as usize <= bound);
     }
@@ -503,15 +475,15 @@ fn controlled_graph_allocations_are_gated_bounded_and_released() {
             + arc_edges
             + arc_diagonal
             + arc_identity;
-        check_controlled_allocations(bound, |control| {
-            Laplacian::from_edges_controlled(vertices, &edges, bound, u64::MAX, control)
+        check_controlled_allocations(bound, |cancel| {
+            Laplacian::from_edges_controlled(vertices, &edges, bound, cancel)
         });
     }
 }
 
 #[cfg(feature = "experimental-components")]
 #[test]
-fn controlled_preconditioner_and_workspace_allocations_are_gated_bounded_and_released() {
+fn controlled_preconditioner_allocations_are_gated_bounded_and_released() {
     let fixtures = [
         Laplacian::from_edges(0, []).unwrap(),
         Laplacian::from_edges(11, []).unwrap(),
@@ -545,22 +517,12 @@ fn controlled_preconditioner_and_workspace_allocations_are_gated_bounded_and_rel
                     experiment,
                 )
                 .unwrap();
-                let construct = |control: &mut dyn BuildControl| {
+                let construct = |cancel: Cancellation<'_>| {
                     CmgPreconditioner::build_component_experiment_serial_controlled(
-                        graph,
-                        options,
-                        experiment,
-                        bound,
-                        u64::MAX,
-                        control,
+                        graph, options, experiment, bound, cancel,
                     )
                 };
                 check_controlled_allocations(bound, construct);
-                let preconditioner = construct(&mut |_| BuildDecision::Continue).unwrap();
-                let workspace_bound = preconditioner.workspace_allocation_bytes().unwrap();
-                check_controlled_allocations(workspace_bound, |control| {
-                    preconditioner.try_workspace_controlled(u64::MAX, control)
-                });
             }
         }
     }
@@ -568,10 +530,11 @@ fn controlled_preconditioner_and_workspace_allocations_are_gated_bounded_and_rel
 
 #[cfg(feature = "experimental-components")]
 #[test]
-fn factor_preflight_extra_coarsening_keeps_allocation_gates_and_original_peak_bound() {
+fn controlled_multilevel_build_reports_a_late_allocation_failure_without_leaking() {
     let graph = Laplacian::from_edges(24, (1..24).map(|v| (v - 1, v, 1.0))).unwrap();
     let options = CmgOptions {
         max_levels: 8,
+        direct_threshold: 4,
         ..Default::default()
     };
     let experiment = ComponentBuildOptions {
@@ -586,40 +549,36 @@ fn factor_preflight_extra_coarsening_keeps_allocation_gates_and_original_peak_bo
         experiment,
     )
     .unwrap();
-    let construct = |budget_bytes, control: &mut dyn BuildControl| {
-        CmgPreconditioner::build_component_experiment_serial_controlled_with_factor_preflight(
+    let never = || false;
+    let construct = |budget_bytes| {
+        CmgPreconditioner::build_component_experiment_serial_controlled(
             &graph,
             options,
             experiment,
             budget_bytes,
-            200_000,
-            control,
+            &never,
         )
     };
-    let candidate = construct(bound, &mut |_| BuildDecision::Continue).unwrap();
-    assert!(
-        candidate.hierarchy().levels().len() > 1,
-        "root direct factor must be declined"
-    );
+    let candidate = construct(bound).unwrap();
+    assert!(candidate.hierarchy().levels().len() > 1);
     drop(candidate);
     let calls = CALLS.with(Cell::get);
     assert!(matches!(
-        construct(bound - 1, &mut |_| BuildDecision::Continue),
+        construct(bound - 1),
         Err(CmgError::MemoryBudgetExceeded { .. })
     ));
     assert_eq!(CALLS.with(Cell::get), calls, "short budget allocated");
-    check_controlled_allocations(bound, |control| construct(bound, control));
-    // One late exogenous fallible allocation failure in the changed hierarchy;
-    // Arc-size exclusions remain those documented by this allocator above.
+    // One late exogenous fallible allocation failure; Arc-size exclusions
+    // remain those documented by this allocator above.
     let before = live();
     let start = FALLIBLE.with(Cell::get);
-    let result = construct(bound, &mut |_| BuildDecision::Continue).unwrap();
+    let result = construct(bound).unwrap();
     let fallible = FALLIBLE.with(Cell::get) - start;
     drop(result);
     assert_eq!(live(), before);
     assert!(fallible > 0);
     FAIL.with(|fail| fail.set(Some(fallible - 1)));
-    let result = construct(bound, &mut |_| BuildDecision::Continue);
+    let result = construct(bound);
     FAIL.with(|fail| fail.set(None));
     assert!(matches!(result, Err(CmgError::AllocationFailed { .. })));
     assert_eq!(live(), before);

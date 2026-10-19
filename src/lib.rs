@@ -2,14 +2,12 @@
 //! preconditioner.
 //!
 //! The implementation is developed against the pinned upstream source recorded
-//! in `UPSTREAM.md`. Numerical modules are added in recoverable checkpoints; the
-//! live status is maintained in `PLAN.md`.
+//! in `docs/UPSTREAM.md`.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-mod build_control;
-mod build_prefix;
+mod cancel;
 #[cfg(feature = "cycle-profiling")]
 mod cmg_profile;
 mod coarsen;
@@ -41,12 +39,7 @@ mod sddm_solver;
 mod storage;
 mod workspace;
 
-pub use build_control::{
-    BuildBoundary, BuildControl, BuildDecision, BuildOperation, BuildStopReason,
-};
-pub use build_prefix::{
-    BuildPrefix, PrefixDecision, PrefixError, PrefixLocation, PrefixOutcome, PrefixSnapshot,
-};
+pub use cancel::Cancellation;
 #[cfg(feature = "cycle-profiling")]
 pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
 pub use coarsen::Aggregation;

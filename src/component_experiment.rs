@@ -158,7 +158,7 @@ pub(crate) fn prune_admitted(
 pub(crate) fn prune_controlled(
     aggregation: &Aggregation,
     coarse: &Laplacian,
-    meter: &mut crate::build_control::BuildMeter<'_>,
+    meter: &mut crate::cancel::CancelMeter<'_>,
 ) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
     let Some((map, graph)) = coarse.without_isolated_vertices_controlled(meter)? else {
         return Ok(None);
@@ -290,10 +290,10 @@ mod residual_restriction_tests {
 #[cfg(test)]
 mod controlled_prune_tests {
     use super::*;
-    use crate::build_control::{BuildBoundary, BuildDecision, BuildMeter, BuildStopReason};
+    use crate::cancel::{CancelMeter, StopAt};
 
     #[test]
-    fn controlled_pruning_matches_and_stops_at_every_boundary() {
+    fn controlled_pruning_matches_and_cancels_at_every_poll() {
         let aggregation = Aggregation::new(vec![0, 0, 1, 2, 3, 4, 4, 5], 6).unwrap();
         // Exercise interspersed isolates, suffix isolates, no isolates, and all isolates.
         for edges in [
@@ -310,47 +310,27 @@ mod controlled_prune_tests {
         ] {
             let graph = Laplacian::from_edges(6, edges).unwrap();
             let expected = prune_admitted(&aggregation, &graph).unwrap();
-            let mut boundaries = Vec::new();
-            let actual = {
-                let mut control = |boundary: BuildBoundary| {
-                    boundaries.push(boundary);
-                    BuildDecision::Continue
-                };
-                prune_controlled(
-                    &aggregation,
-                    &graph,
-                    &mut BuildMeter::new(u64::MAX, &mut control),
-                )
-                .unwrap()
-            };
+            let count = StopAt::never();
+            let query = || count.query();
+            let actual = prune_controlled(
+                &aggregation,
+                &graph,
+                &mut CancelMeter::every_operation(&query),
+            )
+            .unwrap();
             assert_eq!(actual, expected);
-            for (stop, &boundary) in boundaries.iter().enumerate() {
-                let mut seen = 0;
-                let mut control = |candidate: BuildBoundary| {
-                    assert_eq!(candidate, boundaries[seen]);
-                    seen += 1;
-                    if candidate.chunk_id == stop as u64 {
-                        BuildDecision::Interrupted
-                    } else {
-                        BuildDecision::Continue
-                    }
-                };
+            assert!(count.polls() > 0);
+            for stop in 0..count.polls() {
+                let cancel = StopAt::at(Some(stop));
+                let query = || cancel.query();
                 let error = prune_controlled(
                     &aggregation,
                     &graph,
-                    &mut BuildMeter::new(u64::MAX, &mut control),
+                    &mut CancelMeter::every_operation(&query),
                 )
                 .unwrap_err();
-                assert_eq!(seen, stop + 1);
-                assert_eq!(
-                    error,
-                    CmgError::BuildStopped {
-                        reason: BuildStopReason::Interrupted,
-                        phase: boundary.phase,
-                        chunk_id: boundary.chunk_id,
-                        charged_work: boundary.charged_work
-                    }
-                );
+                assert_eq!(cancel.polls(), stop + 1);
+                assert!(matches!(error, CmgError::Cancelled { .. }));
             }
         }
     }

@@ -122,7 +122,7 @@ impl Aggregation {
     pub(crate) fn from_forest_labels_controlled(
         labels: Vec<usize>,
         aggregate_count: usize,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
         let labels = if aggregate_count <= (u32::MAX as usize).saturating_add(1) {
             meter.allocation(
@@ -384,7 +384,7 @@ impl Aggregation {
     pub(crate) fn contract_controlled(
         &self,
         graph: &Laplacian,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;
         meter.allocation(
@@ -650,10 +650,10 @@ mod residual_restriction_tests {
 #[cfg(all(test, feature = "experimental-components"))]
 mod controlled_aggregation_tests {
     use super::*;
-    use crate::build_control::{BuildBoundary, BuildDecision, BuildMeter, BuildStopReason};
+    use crate::cancel::{CancelMeter, StopAt};
 
     #[test]
-    fn controlled_labels_and_contraction_preserve_values_and_stop() {
+    fn controlled_labels_and_contraction_preserve_values_and_cancel() {
         let labels = vec![0, 0, 1, 1, 2, 2, 3, 3, 4];
         let graph = Laplacian::from_edges(
             9,
@@ -670,36 +670,37 @@ mod controlled_aggregation_tests {
         .unwrap();
         let original = graph.clone();
         let expected = Aggregation::from_forest_labels_admitted(labels.clone(), 5).unwrap();
-        let mut control = |_: BuildBoundary| BuildDecision::Continue;
+        let never = || false;
         let actual = Aggregation::from_forest_labels_controlled(
             labels.clone(),
             5,
-            &mut BuildMeter::new(u64::MAX, &mut control),
+            &mut CancelMeter::every_operation(&never),
         )
         .unwrap();
         assert_eq!(actual, expected);
+        let count = StopAt::never();
+        let query = || count.query();
         let coarse = actual
-            .contract_controlled(&graph, &mut BuildMeter::new(u64::MAX, &mut control))
+            .contract_controlled(&graph, &mut CancelMeter::every_operation(&query))
             .unwrap();
         assert_eq!(coarse, expected.contract_admitted(&graph).unwrap());
-        let mut stop = |_: BuildBoundary| BuildDecision::Interrupted;
-        assert!(matches!(
-            actual.contract_controlled(&graph, &mut BuildMeter::new(u64::MAX, &mut stop)),
-            Err(CmgError::BuildStopped {
-                reason: BuildStopReason::Interrupted,
-                ..
-            })
-        ));
+        for stop in 0..count.polls() {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            assert!(matches!(
+                actual.contract_controlled(&graph, &mut CancelMeter::every_operation(&query)),
+                Err(CmgError::Cancelled { .. })
+            ));
+            assert_eq!(cancel.polls(), stop + 1);
+        }
+        let always = || true;
         assert!(matches!(
             Aggregation::from_forest_labels_controlled(
                 labels,
                 5,
-                &mut BuildMeter::new(u64::MAX, &mut stop)
+                &mut CancelMeter::every_operation(&always)
             ),
-            Err(CmgError::BuildStopped {
-                reason: BuildStopReason::Interrupted,
-                ..
-            })
+            Err(CmgError::Cancelled { .. })
         ));
         assert_eq!(graph, original);
     }

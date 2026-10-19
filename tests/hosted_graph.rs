@@ -1,12 +1,9 @@
 #![cfg(feature = "parallel")]
 
-use cmg::{
-    BuildBoundary, BuildDecision, BuildOperation, BuildStopReason, CmgError, CmgOptions,
-    CmgPreconditioner, HostExecutor, Laplacian,
-};
+use cmg::{Cancellation, CmgError, CmgOptions, CmgPreconditioner, HostExecutor, Laplacian};
 use std::sync::{
     Barrier,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 const THRESHOLD: usize = 65_536;
@@ -30,50 +27,71 @@ fn hosted(
     ceiling: usize,
     edges: &[(usize, usize, f64)],
     memory: usize,
-    work: u64,
-    control: &mut (dyn cmg::BuildControl + Send),
+    cancel: Cancellation<'_>,
 ) -> Result<Laplacian, CmgError> {
     pool.install(|| {
         HostExecutor::new(pool, ceiling)
             .unwrap()
             .with_installed(|team| {
-                Laplacian::from_edges_hosted_controlled(
-                    514,
-                    edges,
-                    memory,
-                    work,
-                    &team,
-                    || false,
-                    control,
-                )
+                Laplacian::from_edges_hosted_controlled(514, edges, memory, &team, cancel)
             })
             .unwrap()
     })
 }
 
-fn charge(trace: &[BuildBoundary]) -> u64 {
-    trace
-        .iter()
-        .map(|b| match b.operation {
-            BuildOperation::Work { units } => u64::from(units),
-            _ => 0,
-        })
-        .sum()
+/// Counts polls from every thread and cancels from one zero-based poll onwards.
+struct StopAt {
+    polls: AtomicUsize,
+    stop: usize,
+}
+
+impl StopAt {
+    fn new(stop: usize) -> Self {
+        Self {
+            polls: AtomicUsize::new(0),
+            stop,
+        }
+    }
+    fn query(&self) -> bool {
+        self.polls.fetch_add(1, Ordering::SeqCst) >= self.stop
+    }
+    fn polls(&self) -> usize {
+        self.polls.load(Ordering::SeqCst)
+    }
+}
+
+fn cancelled_phase(
+    pool: &rayon::ThreadPool,
+    ceiling: usize,
+    edges: &[(usize, usize, f64)],
+    stop: usize,
+) -> &'static str {
+    let cancel = StopAt::new(stop);
+    let query = || cancel.query();
+    match hosted(pool, ceiling, edges, usize::MAX, &query) {
+        Err(CmgError::Cancelled { phase }) => phase,
+        other => panic!("cancellation at poll {stop} did not stop: {other:?}"),
+    }
+}
+
+/// Zero-based index of the first poll issued inside the mapping stage. Every
+/// earlier poll belongs to serial admission and bank initialization.
+fn first_mapping_poll(pool: &rayon::ThreadPool, edges: &[(usize, usize, f64)]) -> usize {
+    (0..)
+        .find(|&stop| cancelled_phase(pool, 1, edges, stop) == "hosted input edge mapping")
+        .unwrap()
 }
 
 #[test]
-fn threshold_and_large_uneven_graph_preserve_bits_hierarchy_cycle_and_canonical_charges() {
+fn threshold_and_large_uneven_graph_preserve_bits_hierarchy_cycle_and_poll_schedule() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
         .unwrap();
+    let never = || false;
     for len in [THRESHOLD - 1, THRESHOLD, THRESHOLD + 17] {
         let edges = input(len);
-        let serial =
-            Laplacian::from_edges_controlled(514, &edges, usize::MAX, u64::MAX, &mut |_| {
-                BuildDecision::Continue
-            })
-            .unwrap();
+        let serial = Laplacian::from_edges_controlled(514, &edges, usize::MAX, &never).unwrap();
         let options = CmgOptions {
             direct_threshold: 8,
             ..Default::default()
@@ -86,12 +104,9 @@ fn threshold_and_large_uneven_graph_preserve_bits_hierarchy_cycle_and_canonical_
         let mut reference = None;
         for ceiling in [1, 2, 4] {
             for _ in 0..2 {
-                let mut trace = Vec::new();
-                let graph = hosted(&pool, ceiling, &edges, usize::MAX, u64::MAX, &mut |b| {
-                    trace.push(b);
-                    BuildDecision::Continue
-                })
-                .unwrap();
+                let count = StopAt::new(usize::MAX);
+                let query = || count.query();
+                let graph = hosted(&pool, ceiling, &edges, usize::MAX, &query).unwrap();
                 assert_eq!(graph, serial);
                 assert_eq!(
                     graph
@@ -105,23 +120,13 @@ fn threshold_and_large_uneven_graph_preserve_bits_hierarchy_cycle_and_canonical_
                         .map(|v| v.to_bits())
                         .collect::<Vec<_>>()
                 );
-                assert_eq!(
-                    trace.iter().any(|b| b.phase == "hosted input edge mapping"),
-                    len >= THRESHOLD
-                );
-                let mut used = 0;
-                for (ordinal, b) in trace.iter().enumerate() {
-                    assert_eq!(b.chunk_id, ordinal as u64);
-                    assert_eq!(b.charged_work, used);
-                    if let BuildOperation::Work { units } = b.operation {
-                        assert!((1..=1024).contains(&units));
-                        used += u64::from(units);
-                    }
-                }
-                if let Some(expected_trace) = &reference {
-                    assert_eq!(&trace, expected_trace);
+                // Hosted stages poll before every logical chunk of eight edges.
+                assert_eq!(count.polls() > len / 8, len >= THRESHOLD);
+                // The poll schedule depends on the input, never on the ceiling.
+                if let Some(polls) = reference {
+                    assert_eq!(count.polls(), polls);
                 } else {
-                    reference = Some(trace);
+                    reference = Some(count.polls());
                 }
                 let new = CmgPreconditioner::build(&graph, options).unwrap();
                 assert_eq!(new.hierarchy(), old.hierarchy());
@@ -134,102 +139,52 @@ fn threshold_and_large_uneven_graph_preserve_bits_hierarchy_cycle_and_canonical_
 }
 
 #[test]
-fn finite_work_and_memory_refusals_are_not_retried() {
+fn memory_refusal_precedes_polls_and_cancellation_stops_every_phase() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
         .unwrap();
     let edges = input(THRESHOLD + 17);
-    let mut trace = Vec::new();
-    hosted(&pool, 4, &edges, usize::MAX, u64::MAX, &mut |b| {
-        trace.push(b);
-        BuildDecision::Continue
-    })
-    .unwrap();
-    let total = charge(&trace);
-    let required = match hosted(&pool, 4, &edges, 0, u64::MAX, &mut |_| {
-        BuildDecision::Continue
-    }) {
+    let count = StopAt::new(usize::MAX);
+    let query = || count.query();
+    hosted(&pool, 4, &edges, usize::MAX, &query).unwrap();
+    let total = count.polls();
+    let unreachable = || -> bool { panic!("memory refusal must precede every poll") };
+    let required = match hosted(&pool, 4, &edges, 0, &unreachable) {
         Err(CmgError::MemoryBudgetExceeded { required_bytes, .. }) => required_bytes,
         other => panic!("expected scratch refusal: {other:?}"),
     };
     // The existing serial bound is exactly the hosted bound.
-    let serial_required =
-        match Laplacian::from_edges_controlled(514, &edges, 0, u64::MAX, &mut |_| {
-            BuildDecision::Continue
-        }) {
-            Err(CmgError::MemoryBudgetExceeded { required_bytes, .. }) => required_bytes,
-            _ => panic!("expected serial bound"),
-        };
+    let serial_required = match Laplacian::from_edges_controlled(514, &edges, 0, &unreachable) {
+        Err(CmgError::MemoryBudgetExceeded { required_bytes, .. }) => required_bytes,
+        _ => panic!("expected serial bound"),
+    };
     assert_eq!(required, serial_required);
+    let mapping = first_mapping_poll(&pool, &edges);
+    let never = || false;
     for ceiling in [1, 2, 4] {
-        hosted(&pool, ceiling, &edges, required, total, &mut |_| {
-            BuildDecision::Continue
-        })
-        .unwrap();
+        hosted(&pool, ceiling, &edges, required, &never).unwrap();
         assert!(matches!(
-            hosted(&pool, ceiling, &edges, required - 1, total, &mut |_| {
-                BuildDecision::Continue
-            }),
+            hosted(&pool, ceiling, &edges, required - 1, &unreachable),
             Err(CmgError::MemoryBudgetExceeded { .. })
         ));
-        for budget in [0, 63, 191, total - 1] {
-            assert!(matches!(
-                hosted(&pool, ceiling, &edges, required, budget, &mut |_| {
-                    BuildDecision::Continue
-                }),
-                Err(CmgError::BuildStopped {
-                    reason: BuildStopReason::WorkBudgetExhausted,
-                    ..
-                })
-            ));
-        }
-        // Stop at each phase's first boundary plus the final mapping admission.
-        let mut stops = Vec::new();
+        // Serial admission, mapping, sorting and the final serial reduction.
         let mut phases = Vec::new();
-        for (index, b) in trace.iter().enumerate() {
-            if !phases.contains(&b.phase) {
-                phases.push(b.phase);
-                stops.push(index);
+        for stop in [0, mapping - 1, mapping, mapping + 1, total / 2, total - 1] {
+            let phase = cancelled_phase(&pool, ceiling, &edges, stop);
+            if !phases.contains(&phase) {
+                phases.push(phase);
             }
         }
-        stops.push(
-            trace
-                .iter()
-                .rposition(|b| b.phase == "hosted input edge mapping")
-                .unwrap(),
-        );
-        for stop in stops {
-            let mut seen = Vec::new();
-            let failure = hosted(
-                &pool,
-                ceiling,
-                &edges,
-                required,
-                total,
-                &mut |b: BuildBoundary| {
-                    seen.push(b);
-                    if b.chunk_id == stop as u64 {
-                        BuildDecision::StopUnused
-                    } else {
-                        BuildDecision::Continue
-                    }
-                },
-            )
-            .unwrap_err();
-            assert!(
-                matches!(failure, CmgError::BuildStopped { reason: BuildStopReason::StopUnused,
-                chunk_id, charged_work, .. } if chunk_id == stop as u64 && charged_work == trace[stop].charged_work)
-            );
-            assert_eq!(seen, trace[..=stop]);
-        }
+        assert!(phases.contains(&"hosted input edge mapping"));
+        assert!(phases.len() >= 3, "{phases:?}");
     }
     eprintln!(
-        "hosted graph fixed witness: input={}, vertices=514, bound={}, work={}, boundaries={}",
+        "hosted graph fixed witness: input={}, vertices=514, bound={}, polls={}, first mapping poll={}",
         edges.len(),
         required,
         total,
-        trace.len()
+        mapping
     );
 }
 
@@ -239,6 +194,7 @@ fn invalid_edge_errors_match_serial_order_across_workers() {
         .num_threads(4)
         .build()
         .unwrap();
+    let never = || false;
     for bad in [
         (514, 0, 1.0),
         (1, 1, 1.0),
@@ -248,17 +204,10 @@ fn invalid_edge_errors_match_serial_order_across_workers() {
         let mut edges = input(THRESHOLD + 17);
         edges[97] = bad;
         edges[60_000] = (2, 2, 0.0);
-        let serial =
-            Laplacian::from_edges_controlled(514, &edges, usize::MAX, u64::MAX, &mut |_| {
-                BuildDecision::Continue
-            })
-            .unwrap_err();
+        let serial = Laplacian::from_edges_controlled(514, &edges, usize::MAX, &never).unwrap_err();
         for ceiling in [1, 2, 4] {
             assert_eq!(
-                hosted(&pool, ceiling, &edges, usize::MAX, u64::MAX, &mut |_| {
-                    BuildDecision::Continue
-                })
-                .unwrap_err(),
+                hosted(&pool, ceiling, &edges, usize::MAX, &never).unwrap_err(),
                 serial
             );
         }
@@ -272,66 +221,38 @@ fn mapping_reaches_admitted_lanes_and_cancellation_or_panic_joins_them() {
         .build()
         .unwrap();
     let edges = input(THRESHOLD);
-    // The last mapping gate arms the test-only query, after serial admission.
+    // Arm the test-only query at the first mapping poll, after serial admission.
     // Rendezvous verifies actual independent graph mapping lanes, not only an
     // empty framework stage. It deliberately strengthens the normal cheap query.
+    let mapping = first_mapping_poll(&pool, &edges);
     for ceiling in [1, 2, 4] {
         for panic_first in [false, true] {
-            let armed = AtomicBool::new(false);
             let calls = AtomicUsize::new(0);
             let arrived = AtomicUsize::new(0);
             let barrier = Barrier::new(ceiling);
+            let query = || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                if call < mapping {
+                    return false;
+                }
+                let armed = call - mapping;
+                if armed < ceiling {
+                    arrived.fetch_add(1, Ordering::SeqCst);
+                    barrier.wait();
+                    if panic_first && armed == 0 {
+                        panic!("hosted mapping query panic");
+                    }
+                }
+                !panic_first && armed >= ceiling
+            };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool.install(|| {
-                    HostExecutor::new(&pool, ceiling)
-                        .unwrap()
-                        .with_installed(|team| {
-                            let mut mapping_gates = 0;
-                            Laplacian::from_edges_hosted_controlled(
-                                514,
-                                &edges,
-                                usize::MAX,
-                                u64::MAX,
-                                &team,
-                                || {
-                                    if !armed.load(Ordering::Acquire) {
-                                        return false;
-                                    }
-                                    let call = calls.fetch_add(1, Ordering::SeqCst);
-                                    if call < ceiling {
-                                        arrived.fetch_add(1, Ordering::SeqCst);
-                                        barrier.wait();
-                                        if panic_first && call == 0 {
-                                            panic!("hosted mapping query panic");
-                                        }
-                                    }
-                                    !panic_first && call >= ceiling
-                                },
-                                &mut |b: BuildBoundary| {
-                                    if b.phase == "hosted input edge mapping" {
-                                        mapping_gates += 1;
-                                        if mapping_gates == 1 + 2 * THRESHOLD.div_ceil(8) {
-                                            armed.store(true, Ordering::Release);
-                                        }
-                                    }
-                                    BuildDecision::Continue
-                                },
-                            )
-                        })
-                        .unwrap()
-                })
+                hosted(&pool, ceiling, &edges, usize::MAX, &query)
             }));
             assert_eq!(arrived.load(Ordering::SeqCst), ceiling);
             if panic_first {
                 assert!(result.is_err());
             } else {
-                assert!(matches!(
-                    result.unwrap(),
-                    Err(CmgError::BuildStopped {
-                        reason: BuildStopReason::Interrupted,
-                        ..
-                    })
-                ));
+                assert!(matches!(result.unwrap(), Err(CmgError::Cancelled { .. })));
             }
             // Joined pool and all borrowed input remain usable after either exit.
             assert_eq!(pool.install(|| 7 + 9), 16);

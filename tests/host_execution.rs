@@ -1,59 +1,25 @@
 #![cfg(feature = "parallel")]
 
-use cmg::{
-    BuildDecision, BuildOperation, BuildStopReason, CmgError, ControlledStage, HostExecutor,
-    ParallelExecutor, ParallelOptions,
-};
+use cmg::{CmgError, ControlledStage, HostExecutor, ParallelExecutor, ParallelOptions};
 use std::sync::{
     Barrier,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 fn stage(len: usize, chunk_len: usize) -> cmg::AdmittedStage {
-    ControlledStage::admit(len, chunk_len, 32, u64::MAX, &mut |_| {
-        BuildDecision::Continue
-    })
-    .unwrap()
+    ControlledStage::admit(len, chunk_len).unwrap()
 }
 
 fn interrupted(error: CmgError) {
-    assert!(matches!(
-        error,
-        CmgError::BuildStopped {
-            reason: BuildStopReason::Interrupted,
-            ..
-        }
-    ));
+    assert!(matches!(error, CmgError::Cancelled { .. }));
 }
 
 #[test]
-fn planning_rejects_overflow_and_invalid_policies_without_scanning() {
-    for (chunk_len, chunk_work) in [(0, 1), (1, 0), (1, 1025)] {
-        assert!(
-            ControlledStage::admit(8, chunk_len, chunk_work, u64::MAX, &mut |_| {
-                panic!("invalid policy must reject before admission")
-            })
-            .is_err()
-        );
-    }
-    // A 32-bit maximum slice count does not overflow the u64 work ledger.
-    if usize::BITS < 64 {
-        return;
-    }
-    let mut seen = 0;
-    let result = ControlledStage::admit(usize::MAX, 1, 1024, u64::MAX, &mut |_| {
-        seen += 1;
-        BuildDecision::Continue
-    });
-    assert!(matches!(
-        result,
-        Err(CmgError::BuildStopped {
-            reason: BuildStopReason::CounterOverflow,
-            charged_work: 128,
-            ..
-        })
-    ));
-    assert_eq!(seen, 1);
+fn planning_rejects_invalid_chunks_and_never_overflows() {
+    assert!(ControlledStage::admit(8, 0).is_err());
+    // Chunk counts are derived by division; even the largest slice length
+    // with one-element chunks is a valid geometry and scans nothing.
+    assert!(ControlledStage::admit(usize::MAX, 1).is_ok());
 }
 
 #[test]
@@ -65,7 +31,6 @@ fn empty_stage_and_precancelled_stage_never_call_kernel() {
     .unwrap();
     pool.with_installed(|team| {
         let empty = stage(0, 1);
-        assert_eq!(empty.charged_work(), 128);
         empty
             .run(
                 &team,
@@ -163,50 +128,8 @@ fn stage_uses_host_workers_and_caps_terminal_lanes() {
 }
 
 #[test]
-fn canonical_admission_charges_overhead_once_and_stops_before_writes() {
-    let mut trace = Vec::new();
-    let admitted = ControlledStage::admit(10, 3, 24, u64::MAX, &mut |boundary| {
-        trace.push(boundary);
-        BuildDecision::Continue
-    })
-    .unwrap();
-    assert_eq!(admitted.charged_work(), 128 + 4 * (64 + 24));
-    assert_eq!(trace.len(), 9);
-    let mut charged = 0;
-    for (ordinal, boundary) in trace.iter().enumerate() {
-        assert_eq!(boundary.chunk_id, ordinal as u64);
-        assert_eq!(boundary.charged_work, charged);
-        if let BuildOperation::Work { units } = boundary.operation {
-            charged += u64::from(units);
-        } else {
-            panic!("planning must not allocate");
-        }
-    }
-    for stop in 0..trace.len() {
-        let mut seen = Vec::new();
-        let rejected =
-            ControlledStage::admit(10, 3, 24, u64::MAX, &mut |boundary: cmg::BuildBoundary| {
-                seen.push(boundary);
-                if boundary.chunk_id as usize == stop {
-                    BuildDecision::StopUnused
-                } else {
-                    BuildDecision::Continue
-                }
-            });
-        assert!(matches!(rejected, Err(CmgError::BuildStopped {
-            reason: BuildStopReason::StopUnused, charged_work, ..
-        }) if charged_work == trace[stop].charged_work));
-        assert_eq!(seen, trace[..=stop]);
-    }
-    let exact = admitted.charged_work();
-    assert!(ControlledStage::admit(10, 3, 24, exact, &mut |_| BuildDecision::Continue).is_ok());
-    assert!(matches!(
-        ControlledStage::admit(10, 3, 24, exact - 1, &mut |_| BuildDecision::Continue),
-        Err(CmgError::BuildStopped {
-            reason: BuildStopReason::WorkBudgetExhausted,
-            ..
-        })
-    ));
+fn admitted_stage_rejects_mismatched_storage_before_writes() {
+    let admitted = ControlledStage::admit(10, 3).unwrap();
     let pool = ParallelExecutor::new(ParallelOptions {
         threads: 4,
         ..Default::default()

@@ -45,6 +45,26 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 - Reused CMG/PCG workspaces skip redundant vector clears and repeated internal
   validation after the public solve boundary has validated the complete
   workspace once.
+- Controlled serial and hosted construction is cancellation-only. The
+  experimental controlled builders (`Laplacian::from_edges_controlled`,
+  `Laplacian::from_edges_hosted_controlled` and
+  `CmgPreconditioner::build_component_experiment_serial_controlled`) take a
+  sticky `Cancellation` query instead of a work budget and control callback.
+  They poll it at a fixed cadence of counted primitive operations and before
+  every allocation, and report `CmgError::Cancelled { phase }`.
+  `ControlledStage::admit` validates chunk geometry only. Hierarchies, factors
+  and cycle bits of successful builds are unchanged.
+
+### Removed
+
+- The construction-work accounting interface: `BuildControl`, `BuildBoundary`,
+  `BuildOperation`, `BuildDecision`, `BuildStopReason`, `CmgError::BuildStopped`,
+  the `BuildPrefix` grant ledger and its prefix types,
+  `build_component_experiment_serial_controlled_with_factor_preflight`,
+  `workspace_allocation_bytes_controlled`, `try_workspace_controlled`,
+  `scalar_cycle_work_bound_controlled` and `AdmittedStage::charged_work`.
+  Use `workspace_allocation_bytes` with `try_workspace` for admitted scalar
+  workspaces.
 
 There has not yet been a final tagged release. The `0.1.0` value in
 `Cargo.toml` is the version currently being prepared, not evidence of a

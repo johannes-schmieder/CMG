@@ -1,6 +1,6 @@
 //! Borrowed execution and canonical admission for bounded independent chunks.
 
-use crate::{BuildControl, BuildStopReason, CmgError, build_control::BuildMeter};
+use crate::CmgError;
 
 /// A borrowed, already admitted host pool and a positive stage worker ceiling.
 ///
@@ -24,7 +24,7 @@ impl<'pool> HostExecutor<'pool> {
 
     /// Lend an execution view only while already running on this exact pool.
     ///
-    /// The coordinator callback need not be `Send`: serial admission controllers
+    /// The coordinator callback need not be `Send`: serial coordinator state may
     /// stay on the calling thread. Calling from outside this pool fails before
     /// the callback runs. The view cannot escape the callback or own the pool.
     /// All callback work must finish synchronously or within joined scopes;
@@ -72,82 +72,46 @@ fn check_installed(pool: &rayon::ThreadPool) -> Result<(), CmgError> {
     Ok(())
 }
 
-/// Admission policy for independent, fixed-work chunks of a mutable slice.
+/// Fixed logical chunking of a mutable slice for independent bounded kernels.
 ///
 /// The caller admits and allocates the slice and any kernel scratch separately,
 /// before dispatch. The dispatcher allocates no task/result/scratch banks.
-/// Each kernel invocation must do at most its declared `chunk_work` primitive
-/// operations, use only disjoint admitted storage and perform no allocation,
-/// nested parallel work or adaptive unbounded iteration. This is a caller
-/// contract, not instruction counting or an allocator sandbox.
+/// Each kernel invocation must do bounded work on its chunk, use only disjoint
+/// admitted storage and perform no allocation, nested parallel work or adaptive
+/// unbounded iteration. This is a caller contract, not an allocator sandbox.
+/// Chunk boundaries depend only on the slice length and `chunk_len`, never on
+/// the number of workers.
 pub struct ControlledStage;
 
 impl ControlledStage {
-    /// Precharge a complete stage on the coordinator, in canonical chunk order.
-    ///
-    /// Planning costs 128 units. Every logical chunk additionally costs 64 units
-    /// for admission, dispatch, cancellation checks and ordered reconciliation,
-    /// followed by the declared kernel allowance in `1..=1024`. These are new
-    /// stage boundaries; existing serial builder callback traces are unchanged.
-    /// Refusal retains every earlier charge and dispatches no kernel work.
-    pub fn admit(
-        len: usize,
-        chunk_len: usize,
-        chunk_work: u16,
-        work_budget: u64,
-        control: &mut dyn BuildControl,
-    ) -> Result<AdmittedStage, CmgError> {
-        if chunk_len == 0 || chunk_work == 0 || chunk_work > 1024 {
+    /// Validate a stage's logical chunk geometry. No work is charged; the
+    /// returned single-use stage cannot be dispatched twice.
+    pub fn admit(len: usize, chunk_len: usize) -> Result<AdmittedStage, CmgError> {
+        if chunk_len == 0 {
             return Err(CmgError::InvalidHierarchy {
                 context: "invalid controlled stage chunk policy",
             });
         }
-        let mut meter = BuildMeter::new(work_budget, control);
-        meter.work("parallel stage planning", 128)?;
-        let chunks = len.div_ceil(chunk_len);
-        let chunks_u64 = u64::try_from(chunks).map_err(|_| {
-            meter.stopped("parallel stage planning", BuildStopReason::CounterOverflow)
-        })?;
-        let boundaries = chunks_u64.checked_mul(2).and_then(|n| n.checked_add(1));
-        let total = chunks_u64
-            .checked_mul(64 + u64::from(chunk_work))
-            .and_then(|n| n.checked_add(128));
-        let (Some(boundaries), Some(total)) = (boundaries, total) else {
-            return Err(meter.stopped("parallel stage planning", BuildStopReason::CounterOverflow));
-        };
-        for _ in 0..chunks {
-            meter.work("parallel stage dispatch", 64)?;
-            meter.work("parallel stage kernel", chunk_work)?;
-        }
         Ok(AdmittedStage {
             len,
             chunk_len,
-            chunks,
-            charged_work: total,
-            boundaries,
+            chunks: len.div_ceil(chunk_len),
         })
     }
 }
 
-/// A single-use reservation for a completely admitted controlled stage.
+/// A single-use, validated chunk plan for one stage.
 ///
-/// No controller, executor, slice or scratch owner is retained. Consuming the
-/// reservation prevents accidental redispatch without another work admission.
+/// No executor, slice or scratch owner is retained. Consuming the plan prevents
+/// accidental redispatch.
 #[derive(Debug)]
 pub struct AdmittedStage {
     len: usize,
     chunk_len: usize,
     chunks: usize,
-    charged_work: u64,
-    boundaries: u64,
 }
 
 impl AdmittedStage {
-    /// Full charge, including stage planning and dispatch overhead.
-    pub const fn charged_work(&self) -> u64 {
-        self.charged_work
-    }
-
     /// Execute disjoint bounded chunks and join before returning or unwinding.
     ///
     /// `cancelled` must be a cheap, allocation-free, cancellation-only query
@@ -187,11 +151,8 @@ impl AdmittedStage {
     }
 
     fn interrupted(&self) -> CmgError {
-        CmgError::BuildStopped {
-            reason: BuildStopReason::Interrupted,
+        CmgError::Cancelled {
             phase: "parallel stage execution",
-            chunk_id: self.boundaries,
-            charged_work: self.charged_work,
         }
     }
 

@@ -155,21 +155,22 @@ impl Laplacian {
         Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
-    /// Build a graph with cooperative cancellation and checked setup budgets.
+    /// Build a graph with cooperative cancellation and a checked memory budget.
     ///
     /// The borrowed input slice is excluded from `budget_bytes`. The admitted
     /// bound covers two compact edge buffers, the diagonal and three Arc owners,
     /// including modeled control blocks. Allocator overhead and latency are not
-    /// bounded. Work is precharged through `control`; a stopped build publishes
-    /// no graph. Canonical ordering and arithmetic match [`Self::from_edges`].
+    /// bounded. `cancel` is polled between bounded operations and before every
+    /// allocation; a cancelled build returns [`CmgError::Cancelled`] and
+    /// publishes no graph. Canonical ordering and arithmetic match
+    /// [`Self::from_edges`].
     pub fn from_edges_controlled(
         vertex_count: usize,
         edges: &[(usize, usize, f64)],
         budget_bytes: usize,
-        work_budget: u64,
-        control: &mut dyn crate::BuildControl,
+        cancel: crate::Cancellation<'_>,
     ) -> Result<Self, CmgError> {
-        let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
+        let mut meter = crate::cancel::CancelMeter::new(cancel);
         Self::from_edges_metered(vertex_count, edges, budget_bytes, &mut meter)
     }
 
@@ -177,7 +178,7 @@ impl Laplacian {
         vertex_count: usize,
         edges: &[(usize, usize, f64)],
         budget_bytes: usize,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
         meter.work("input graph memory bound", 128)?;
         let edge_bytes = crate::storage::bytes::<Edge>(edges.len())?;
@@ -265,11 +266,11 @@ impl Laplacian {
         Self::from_endpoint_sorted_raw_edges(vertex_count, raw)
     }
 
-    /// Build a canonical coarse graph with bounded, precharged setup work.
+    /// Build a canonical coarse graph with bounded, cancellable setup work.
     pub(crate) fn from_compact_edges_controlled(
         vertex_count: usize,
         mut raw: Vec<Edge>,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
         // Sorting by the full comparator gives precisely the order used by the
         // original endpoint sort followed by each duplicate group's weight sort.
@@ -280,7 +281,7 @@ impl Laplacian {
     fn from_sorted_edges_controlled(
         vertex_count: usize,
         mut raw: Vec<Edge>,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
         meter.allocation(
             "coarse graph diagonal",
@@ -541,7 +542,7 @@ impl Laplacian {
     #[cfg(feature = "experimental-components")]
     pub(crate) fn without_isolated_vertices_controlled(
         &self,
-        meter: &mut crate::build_control::BuildMeter<'_>,
+        meter: &mut crate::cancel::CancelMeter<'_>,
     ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
         let mut has_isolate = false;
         for &degree in self.diagonal.iter() {
@@ -1220,7 +1221,7 @@ mod cached_endpoint_key_tests {
 #[cfg(test)]
 mod controlled_graph_tests {
     use super::*;
-    use crate::build_control::{BuildBoundary, BuildDecision, BuildMeter, BuildStopReason};
+    use crate::cancel::{CancelMeter, StopAt};
 
     fn raw_edges() -> Vec<Edge> {
         [
@@ -1239,50 +1240,56 @@ mod controlled_graph_tests {
     }
 
     #[test]
-    fn public_controlled_graph_matches_and_stops_at_every_boundary() {
+    fn public_controlled_graph_matches_and_cancels_at_every_poll() {
         let input: Vec<_> = raw_edges()
             .into_iter()
             .map(|edge| (edge.v(), edge.u(), edge.weight()))
             .collect();
         let expected = Laplacian::from_edges(6, input.iter().copied()).unwrap();
-        let mut boundaries = Vec::new();
-        let actual = {
-            let mut control = |boundary: BuildBoundary| {
-                boundaries.push(boundary);
-                BuildDecision::Continue
-            };
-            Laplacian::from_edges_controlled(6, &input, usize::MAX, u64::MAX, &mut control).unwrap()
-        };
+        let count = StopAt::never();
+        let query = || count.query();
+        let actual = Laplacian::from_edges_controlled(6, &input, usize::MAX, &query).unwrap();
         assert_eq!(actual, expected);
-        for (stop, &boundary) in boundaries.iter().enumerate() {
-            let mut seen = 0;
-            let mut control = |candidate: BuildBoundary| {
-                assert_eq!(candidate, boundaries[seen]);
-                seen += 1;
-                if candidate.chunk_id == stop as u64 {
-                    BuildDecision::Interrupted
-                } else {
-                    BuildDecision::Continue
-                }
-            };
-            let error =
-                Laplacian::from_edges_controlled(6, &input, usize::MAX, u64::MAX, &mut control)
-                    .unwrap_err();
-            assert_eq!(seen, stop + 1);
-            assert_eq!(
-                error,
-                CmgError::BuildStopped {
-                    reason: BuildStopReason::Interrupted,
-                    phase: boundary.phase,
-                    chunk_id: boundary.chunk_id,
-                    charged_work: boundary.charged_work
-                }
-            );
+        // Small inputs stay below the counted cadence: only allocations poll.
+        assert!(count.polls() > 0);
+        for stop in 0..count.polls() {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            assert!(matches!(
+                Laplacian::from_edges_controlled(6, &input, usize::MAX, &query),
+                Err(CmgError::Cancelled { .. })
+            ));
+            assert_eq!(cancel.polls(), stop + 1);
+        }
+        let count = StopAt::never();
+        let query = || count.query();
+        let metered = Laplacian::from_edges_metered(
+            6,
+            &input,
+            usize::MAX,
+            &mut CancelMeter::every_operation(&query),
+        )
+        .unwrap();
+        assert_eq!(metered, expected);
+        for stop in 0..count.polls() {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            assert!(matches!(
+                Laplacian::from_edges_metered(
+                    6,
+                    &input,
+                    usize::MAX,
+                    &mut CancelMeter::every_operation(&query)
+                ),
+                Err(CmgError::Cancelled { .. })
+            ));
+            assert_eq!(cancel.polls(), stop + 1);
         }
     }
 
     #[test]
     fn public_controlled_graph_validates_edges_and_admits_before_allocation() {
+        let never = || false;
         for (count, input) in [
             (2, vec![(2, 1, 1.0)]),
             (2, vec![(0, 2, 1.0)]),
@@ -1293,33 +1300,16 @@ mod controlled_graph_tests {
             (2, vec![(0, 1, f64::NAN)]),
         ] {
             let expected = Laplacian::from_edges(count, input.iter().copied()).unwrap_err();
-            let mut control = |_: BuildBoundary| BuildDecision::Continue;
             let actual =
-                Laplacian::from_edges_controlled(count, &input, usize::MAX, u64::MAX, &mut control)
-                    .unwrap_err();
+                Laplacian::from_edges_controlled(count, &input, usize::MAX, &never).unwrap_err();
             // Debug comparison handles the NaN carried in the weight error.
             assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
         }
-        let mut control = |boundary: BuildBoundary| {
-            assert!(matches!(
-                boundary.operation,
-                crate::BuildOperation::Work { .. }
-            ));
-            BuildDecision::Continue
-        };
+        // Memory refusal precedes the first allocation and therefore every poll.
+        let unreachable = || -> bool { panic!("memory refusal must precede any poll") };
         assert!(matches!(
-            Laplacian::from_edges_controlled(2, &[(0, 1, 1.0)], 0, u64::MAX, &mut control),
+            Laplacian::from_edges_controlled(2, &[(0, 1, 1.0)], 0, &unreachable),
             Err(CmgError::MemoryBudgetExceeded { .. })
-        ));
-        let mut unreachable = |_: BuildBoundary| -> BuildDecision {
-            panic!("zero work budget must stop before callback")
-        };
-        assert!(matches!(
-            Laplacian::from_edges_controlled(2, &[(0, 1, 1.0)], usize::MAX, 0, &mut unreachable),
-            Err(CmgError::BuildStopped {
-                reason: BuildStopReason::WorkBudgetExhausted,
-                ..
-            })
         ));
     }
 
@@ -1327,17 +1317,10 @@ mod controlled_graph_tests {
     #[test]
     fn public_controlled_graph_rejects_wide_endpoints() {
         let wide = u32::MAX as usize + 1;
+        let never = || false;
         for input in [[(wide, 0, 1.0)], [(0, wide, 1.0)]] {
-            let mut control = |_: BuildBoundary| BuildDecision::Continue;
             assert_eq!(
-                Laplacian::from_edges_controlled(
-                    wide + 1,
-                    &input,
-                    usize::MAX,
-                    u64::MAX,
-                    &mut control
-                )
-                .unwrap_err(),
+                Laplacian::from_edges_controlled(wide + 1, &input, usize::MAX, &never).unwrap_err(),
                 CmgError::VertexIndexTooWide {
                     vertex: wide,
                     maximum: u32::MAX as usize
@@ -1347,21 +1330,16 @@ mod controlled_graph_tests {
     }
 
     #[test]
-    fn controlled_graph_preserves_bits_and_stops_at_every_boundary() {
+    fn controlled_graph_preserves_bits_and_cancels_at_every_poll() {
         let expected = Laplacian::from_compact_edges_admitted(6, raw_edges()).unwrap();
-        let mut boundaries = Vec::new();
-        let actual = {
-            let mut control = |boundary: BuildBoundary| {
-                boundaries.push(boundary);
-                BuildDecision::Continue
-            };
-            Laplacian::from_compact_edges_controlled(
-                6,
-                raw_edges(),
-                &mut BuildMeter::new(u64::MAX, &mut control),
-            )
-            .unwrap()
-        };
+        let count = StopAt::never();
+        let query = || count.query();
+        let actual = Laplacian::from_compact_edges_controlled(
+            6,
+            raw_edges(),
+            &mut CancelMeter::every_operation(&query),
+        )
+        .unwrap();
         assert_eq!(actual, expected);
         assert_eq!(
             actual
@@ -1375,33 +1353,18 @@ mod controlled_graph_tests {
                 .map(|x| x.to_bits())
                 .collect::<Vec<_>>()
         );
-        for (stop, &boundary) in boundaries.iter().enumerate() {
-            let mut seen = 0;
-            let mut control = |candidate: BuildBoundary| {
-                assert_eq!(candidate, boundaries[seen]);
-                seen += 1;
-                if candidate.chunk_id == stop as u64 {
-                    BuildDecision::StopUnused
-                } else {
-                    BuildDecision::Continue
-                }
-            };
-            let error = Laplacian::from_compact_edges_controlled(
-                6,
-                raw_edges(),
-                &mut BuildMeter::new(u64::MAX, &mut control),
-            )
-            .unwrap_err();
-            assert_eq!(seen, stop + 1);
-            assert_eq!(
-                error,
-                CmgError::BuildStopped {
-                    reason: BuildStopReason::StopUnused,
-                    phase: boundary.phase,
-                    chunk_id: boundary.chunk_id,
-                    charged_work: boundary.charged_work
-                }
-            );
+        for stop in 0..count.polls() {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            assert!(matches!(
+                Laplacian::from_compact_edges_controlled(
+                    6,
+                    raw_edges(),
+                    &mut CancelMeter::every_operation(&query),
+                ),
+                Err(CmgError::Cancelled { .. })
+            ));
+            assert_eq!(cancel.polls(), stop + 1);
         }
     }
 }

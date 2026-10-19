@@ -3,7 +3,7 @@
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
 #[cfg(feature = "experimental-components")]
-use crate::build_control::BuildMeter;
+use crate::cancel::CancelMeter;
 use crate::{CmgError, Laplacian, ValidationOptions};
 
 crate::storage::storage_fields!(
@@ -89,38 +89,6 @@ impl ComponentWorkspace {
         })
     }
 
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_new_controlled(
-        component_count: usize,
-        meter: &mut BuildMeter<'_>,
-    ) -> Result<Self, CmgError> {
-        Ok(Self {
-            sums: meter.try_filled(component_count, 0.0, "component workspace sums")?,
-            corrections: meter.try_filled(
-                component_count,
-                0.0,
-                "component workspace corrections",
-            )?,
-            scales: meter.try_filled(component_count, 0.0, "component workspace scales")?,
-            scale_corrections: meter.try_filled(
-                component_count,
-                0.0,
-                "component workspace scale corrections",
-            )?,
-            means: meter.try_filled(component_count, 0.0, "component workspace means")?,
-            projection_corrections: meter.try_filled(
-                component_count,
-                0.0,
-                "component workspace projection corrections",
-            )?,
-            representatives: meter.try_filled(
-                component_count,
-                usize::MAX,
-                "component workspace representatives",
-            )?,
-        })
-    }
-
     pub(crate) fn validate(&self, component_count: usize) -> Result<(), CmgError> {
         for (context, actual) in [
             ("ComponentWorkspace sums", self.sums.len()),
@@ -184,22 +152,6 @@ impl CenteringWorkspace {
             sums: try_filled(component_count, 0.0, "centering workspace sums")?,
             corrections: try_filled(component_count, 0.0, "centering workspace corrections")?,
             means: try_filled(component_count, 0.0, "centering workspace means")?,
-        })
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_new_controlled(
-        component_count: usize,
-        meter: &mut BuildMeter<'_>,
-    ) -> Result<Self, CmgError> {
-        Ok(Self {
-            sums: meter.try_filled(component_count, 0.0, "centering workspace sums")?,
-            corrections: meter.try_filled(
-                component_count,
-                0.0,
-                "centering workspace corrections",
-            )?,
-            means: meter.try_filled(component_count, 0.0, "centering workspace means")?,
         })
     }
 
@@ -321,7 +273,7 @@ impl CenteringPlan {
     #[cfg(feature = "experimental-components")]
     pub(crate) fn try_from_laplacian_controlled(
         graph: &Laplacian,
-        meter: &mut BuildMeter<'_>,
+        meter: &mut CancelMeter<'_>,
     ) -> Result<Self, CmgError> {
         let Components { labels, sizes, .. } = Components::try_from_endpoints_controlled(
             graph.vertex_count(),
@@ -379,14 +331,6 @@ impl CenteringPlan {
 
     pub(crate) fn try_workspace(&self) -> Result<CenteringWorkspace, CmgError> {
         CenteringWorkspace::try_new(self.sizes.len())
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_workspace_controlled(
-        &self,
-        meter: &mut BuildMeter<'_>,
-    ) -> Result<CenteringWorkspace, CmgError> {
-        CenteringWorkspace::try_new_controlled(self.sizes.len(), meter)
     }
 
     #[cfg(feature = "parallel")]
@@ -650,7 +594,7 @@ impl Components {
     pub(crate) fn try_from_endpoints_controlled<I>(
         vertex_count: usize,
         endpoints: I,
-        meter: &mut BuildMeter<'_>,
+        meter: &mut CancelMeter<'_>,
     ) -> Result<Self, CmgError>
     where
         I: IntoIterator<Item = (usize, usize)>,
@@ -746,14 +690,6 @@ impl Components {
 
     pub(crate) fn try_workspace(&self) -> Result<ComponentWorkspace, CmgError> {
         ComponentWorkspace::try_new(self.count())
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_workspace_controlled(
-        &self,
-        meter: &mut BuildMeter<'_>,
-    ) -> Result<ComponentWorkspace, CmgError> {
-        ComponentWorkspace::try_new_controlled(self.count(), meter)
     }
 
     #[cfg(feature = "parallel")]
@@ -1291,7 +1227,7 @@ fn neumaier_add(sum: &mut f64, correction: &mut f64, value: f64) {
 fn find_root_controlled(
     parent: &mut [usize],
     vertex: usize,
-    meter: &mut BuildMeter<'_>,
+    meter: &mut CancelMeter<'_>,
 ) -> Result<usize, CmgError> {
     let mut root = vertex;
     while parent[root] != root {
@@ -1614,7 +1550,7 @@ mod deterministic_parallel_centering_tests {
 #[cfg(all(test, feature = "experimental-components"))]
 mod controlled_component_tests {
     use super::*;
-    use crate::{BuildBoundary, BuildDecision, BuildStopReason};
+    use crate::cancel::StopAt;
 
     #[test]
     fn controlled_components_and_centering_match_prepared_paths() {
@@ -1624,8 +1560,8 @@ mod controlled_component_tests {
             Laplacian::from_edges(8, (0..7).map(|v| (v, v + 1, 1.0))).unwrap(),
             Laplacian::from_edges(8, [(0, 2, 1.0), (1, 3, 1.0), (2, 4, 2.0)]).unwrap(),
         ] {
-            let mut allow = |_| BuildDecision::Continue;
-            let mut meter = BuildMeter::new(u64::MAX, &mut allow);
+            let never = || false;
+            let mut meter = CancelMeter::every_operation(&never);
             let controlled = Components::try_from_endpoints_controlled(
                 graph.vertex_count(),
                 graph.edges().iter().rev().map(|edge| (edge.u(), edge.v())),
@@ -1642,71 +1578,38 @@ mod controlled_component_tests {
                 CenteringPlan::try_from_laplacian_controlled(&graph, &mut meter).unwrap();
             let expected_plan = CenteringPlan::try_from_laplacian(&graph).unwrap();
             assert_eq!(actual_plan, expected_plan);
-            let actual_workspace = controlled.try_workspace_controlled(&mut meter).unwrap();
-            let expected_workspace = expected.try_workspace().unwrap();
-            assert_eq!(actual_workspace.sums, expected_workspace.sums);
-            assert_eq!(actual_workspace.corrections, expected_workspace.corrections);
-            assert_eq!(actual_workspace.scales, expected_workspace.scales);
-            assert_eq!(
-                actual_workspace.scale_corrections,
-                expected_workspace.scale_corrections
-            );
-            assert_eq!(actual_workspace.means, expected_workspace.means);
-            assert_eq!(
-                actual_workspace.projection_corrections,
-                expected_workspace.projection_corrections
-            );
-            assert_eq!(
-                actual_workspace.representatives,
-                expected_workspace.representatives
-            );
-            let actual_workspace = actual_plan.try_workspace_controlled(&mut meter).unwrap();
-            let expected_workspace = expected_plan.try_workspace().unwrap();
-            assert_eq!(actual_workspace.sums, expected_workspace.sums);
-            assert_eq!(actual_workspace.corrections, expected_workspace.corrections);
-            assert_eq!(actual_workspace.means, expected_workspace.means);
         }
     }
 
     #[test]
-    fn controlled_component_root_walk_can_stop_inside_a_chain() {
+    fn controlled_component_root_walk_can_be_cancelled_inside_a_chain() {
         let endpoints = (0..8)
             .rev()
             .map(|v| (v, v + 1))
             .chain([(8, 0)])
             .collect::<Vec<_>>();
-        let mut boundaries = Vec::new();
-        let mut record = |boundary| {
-            boundaries.push(boundary);
-            BuildDecision::Continue
-        };
+        let count = StopAt::never();
+        let query = || count.query();
         Components::try_from_endpoints_controlled(
             9,
             endpoints.iter().copied(),
-            &mut BuildMeter::new(u64::MAX, &mut record),
+            &mut CancelMeter::every_operation(&query),
         )
         .unwrap();
-        let root_walk = boundaries
-            .iter()
-            .filter(|boundary| boundary.phase == "component root walk")
-            .collect::<Vec<_>>();
-        assert!(root_walk.len() >= 8);
-        for boundary in root_walk {
-            let mut seen = 0;
-            let mut stop = |current: BuildBoundary| {
-                assert_eq!(current, boundaries[seen]);
-                seen += 1;
-                if current.chunk_id == boundary.chunk_id {
-                    BuildDecision::Interrupted
-                } else {
-                    BuildDecision::Continue
-                }
+        let mut root_walk = 0;
+        for stop in 0..count.polls() {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            let Err(CmgError::Cancelled { phase }) = Components::try_from_endpoints_controlled(
+                9,
+                endpoints.iter().copied(),
+                &mut CancelMeter::every_operation(&query),
+            ) else {
+                panic!("cancellation at poll {stop} must stop component discovery");
             };
-            assert!(
-                matches!(Components::try_from_endpoints_controlled(9, endpoints.iter().copied(), &mut BuildMeter::new(u64::MAX, &mut stop)),
-                Err(CmgError::BuildStopped { reason: BuildStopReason::Interrupted, chunk_id, .. }) if chunk_id == boundary.chunk_id)
-            );
-            assert_eq!(seen as u64, boundary.chunk_id + 1);
+            assert_eq!(cancel.polls(), stop + 1);
+            root_walk += usize::from(phase == "component root walk");
         }
+        assert!(root_walk >= 8);
     }
 }
