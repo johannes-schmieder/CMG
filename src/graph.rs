@@ -7,6 +7,9 @@ use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 use rayon::prelude::*;
 use std::sync::Arc;
 
+#[cfg(feature = "parallel")]
+mod hosted;
+
 crate::storage::storage_fields!(
     Laplacian,
     edges,
@@ -167,6 +170,15 @@ impl Laplacian {
         control: &mut dyn crate::BuildControl,
     ) -> Result<Self, CmgError> {
         let mut meter = crate::build_control::BuildMeter::new(work_budget, control);
+        Self::from_edges_metered(vertex_count, edges, budget_bytes, &mut meter)
+    }
+
+    fn from_edges_metered(
+        vertex_count: usize,
+        edges: &[(usize, usize, f64)],
+        budget_bytes: usize,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
         meter.work("input graph memory bound", 128)?;
         let edge_bytes = crate::storage::bytes::<Edge>(edges.len())?;
         let mut required = crate::storage::add(edge_bytes, edge_bytes)?;
@@ -219,7 +231,7 @@ impl Laplacian {
             };
             raw.push(Edge::from_compact_parts(u as u32, v as u32, weight));
         }
-        Self::from_compact_edges_controlled(vertex_count, raw, &mut meter)
+        Self::from_compact_edges_controlled(vertex_count, raw, meter)
     }
 
     /// Build a Laplacian while parallelizing deterministic edge sorting.
@@ -262,6 +274,14 @@ impl Laplacian {
         // Sorting by the full comparator gives precisely the order used by the
         // original endpoint sort followed by each duplicate group's weight sort.
         meter.sort_by(&mut raw, compare_raw_edges, "coarse edge sorting")?;
+        Self::from_sorted_edges_controlled(vertex_count, raw, meter)
+    }
+
+    fn from_sorted_edges_controlled(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+        meter: &mut crate::build_control::BuildMeter<'_>,
+    ) -> Result<Self, CmgError> {
         meter.allocation(
             "coarse graph diagonal",
             crate::storage::bytes::<f64>(vertex_count)?,
