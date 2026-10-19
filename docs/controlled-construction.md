@@ -1,5 +1,59 @@
 # Controlled serial construction
 
+## Shared host execution foundation
+
+With `parallel`, `HostExecutor::new(&pool, worker_ceiling)` borrows an already
+admitted Rayon pool without creating workers or retaining an owner. Its
+`with_installed` callback runs directly on the coordinator only when that exact
+pool is installed. The callback may retain a non-Send serial `BuildControl`
+borrow; no controller is sent to workers. The callback-scoped `InstalledTeam`
+cannot escape or enter a hierarchy/workspace. The existing owned
+`ParallelExecutor` remains available and has the same scoped stage interface;
+its coordinator crosses into its pool and must be Send.
+
+Coordinator callbacks must finish synchronously or join all scoped work;
+detached Rayon tasks are outside the supported interface contract. External
+owned-executor destruction still joins every worker and its TLS destructors.
+If a misbehaving detached callback retains the final executor owner on its own
+worker, defensive destruction signals termination and detaches the handles to
+avoid self/peer-join deadlock. Only that unsupported path retires workers
+asynchronously after its remaining work finishes; it has no immediate join
+guarantee and is not an additional asynchronous execution API.
+
+`ControlledStage::admit` checks fixed chunk dimensions, charges 128 planning
+units and then, in logical chunk order, 64 admission/dispatch/reconciliation
+units followed by the declared kernel allowance (1 through 1024). Admission is
+allocation-free and uses the existing serial callback and checked work meter.
+The resulting `AdmittedStage` is consumed once. A stopped admission retains its
+previous charges and launches no kernel. These new explicit boundaries do not
+replace or coalesce any existing serial builder boundaries.
+
+The caller must admit and prepare all output and kernel scratch storage before
+dispatch, including its coexistence with all live parent objects. `run` splits
+an exact-length mutable slice into disjoint logical chunks and recursively caps
+terminal lanes at the worker ceiling. It allocates no task, result or scratch
+banks. Kernels must honor their declared bound, use only admitted disjoint
+storage, and cannot allocate, launch nested work or run unbounded adaptive
+loops. Caller closures and the Rayon runtime are not allocator-sandboxed.
+Runtime and stack allowances remain the host's responsibility, charged once by
+its existing team policy.
+
+Every admitted chunk runs unless cancellation or panic intervenes; numerical
+errors do not race to stop sibling tasks. All tasks join before return/unwind,
+and the first logical chunk error wins. Workers only query a cheap, monotone
+cancellation signal between bounded chunks. Cancellation dominates numerical
+errors after joining. Interrupted execution reports the completed admission
+boundary and full admitted charge. Partial output remains private and must be
+discarded after failure. Serial fallback is chosen before numerical execution;
+spent planning remains charged. This API adds no graph, hierarchy, sampler,
+batch or overlap optimization and makes no performance claim.
+
+The package declares an empty root Cargo workspace so a standalone CMG
+development checkout nested inside an embedding workspace remains independent.
+This does not alter dependency features or the runtime.
+
+## Serial numerical construction
+
 The optional component builder provides
 `CmgPreconditioner::build_component_experiment_serial_controlled` under
 `experimental-components`. It has the same graph, hierarchy stopping rules,

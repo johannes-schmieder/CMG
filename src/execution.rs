@@ -179,9 +179,11 @@ impl ParallelRuntimeAllowance {
 ///
 /// This type is available only with the `parallel` Cargo feature. It never
 /// configures or relies on Rayon's process-wide global pool.
-/// Destruction waits for every worker, including thread-local destructors.
-/// Only internal scoped kernels can run on this pool; callers cannot transfer
-/// ownership of the executor into a worker task.
+/// With supported synchronous/scoped use, external destruction waits for every
+/// worker, including thread-local destructors. Detached coordinator work is not
+/// supported. If such work retains the final executor owner on its own worker,
+/// destruction signals termination and detaches handles to avoid self/peer
+/// joins; workers then retire asynchronously after outstanding work finishes.
 #[cfg(feature = "parallel")]
 pub struct ParallelExecutor {
     pool: Option<rayon::ThreadPool>,
@@ -203,6 +205,22 @@ impl core::fmt::Debug for ParallelExecutor {
 
 #[cfg(feature = "parallel")]
 impl ParallelExecutor {
+    /// Install a scoped stage coordinator on this owned pool.
+    ///
+    /// The same admitted-stage dispatcher is available on borrowed host pools.
+    /// Unlike a borrowed host coordinator, this closure crosses into the pool
+    /// and therefore must be `Send`. No execution view can escape its callback.
+    /// The callback must complete all work synchronously or within joined
+    /// scopes; launching detached Rayon tasks is outside this API's contract.
+    pub fn with_installed<R: Send>(
+        &self,
+        operation: impl for<'scope> FnOnce(crate::InstalledTeam<'scope>) -> R + Send,
+    ) -> Result<R, CmgError> {
+        let pool = self.pool.as_ref().expect("live CMG executor");
+        let host = crate::HostExecutor::new(pool, self.threads)?;
+        self.install(|| host.with_installed(operation))
+    }
+
     /// Rayon/crossbeam runtime heap currently has no source-proven finite
     /// admission bound. Worker handles are counted by `CmgStorageReport`, but
     /// queues, deferred reclamation, native thread resources and TLS are not.
@@ -405,10 +423,8 @@ impl JoinedWorkers {
 
     fn join(&mut self) {
         for handle in self.handles.drain(..) {
-            // Do not panic again while cleaning up a caller panic. The private
-            // scoped-only install API prevents self/peer joins: no public task
-            // can own the executor. Do not expose asynchronous spawn/install
-            // without redesigning this invariant.
+            // Do not panic again while cleaning up a caller panic. Final drop
+            // on this pool's own worker detaches before reaching this path.
             let _ = handle.join();
         }
     }
@@ -424,8 +440,20 @@ impl Drop for JoinedWorkers {
 #[cfg(feature = "parallel")]
 impl Drop for ParallelExecutor {
     fn drop(&mut self) {
+        let own_worker = self
+            .pool
+            .as_ref()
+            .is_some_and(|pool| pool.current_thread_index().is_some());
         drop(self.pool.take());
-        self.workers.join();
+        if own_worker {
+            // A caller can misuse its coordinator callback to spawn detached
+            // work holding the final Arc<ParallelExecutor>. Joining this worker
+            // or peers that await its exit can deadlock. Signal termination
+            // above, then detach; supported external retirement still joins.
+            self.workers.handles.clear();
+        } else {
+            self.workers.join();
+        }
     }
 }
 
@@ -518,6 +546,82 @@ mod lifetime_tests {
             );
             drop(executor);
             assert_eq!(completed.load(Ordering::SeqCst), threads);
+        }
+    }
+
+    #[test]
+    fn detached_last_owner_on_worker_retires_without_self_join() {
+        const CHILD: &str = "CMG_DETACHED_LAST_OWNER_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // A regression must fail this bounded child, never hang the suite.
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .env(CHILD, "1")
+                .args([
+                    "execution::lifetime_tests::detached_last_owner_on_worker_retires_without_self_join",
+                    "--exact",
+                    "--test-threads=1",
+                ])
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(
+                        status.success(),
+                        "detached retirement child failed: {status}"
+                    );
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let _ = child.wait();
+                    panic!("detached retirement child exceeded 20 seconds");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        for threads in [1, 4] {
+            let completed = Arc::new(AtomicUsize::new(0));
+            let executor = Arc::new(observed(threads, None, Arc::clone(&completed)).unwrap());
+            let worker_owner = Arc::clone(&executor);
+            let (release, released) = std::sync::mpsc::channel();
+            let (finished, finish) = std::sync::mpsc::channel();
+            executor
+                .with_installed(move |_| {
+                    // Intentionally violate the synchronous callback contract
+                    // to verify defensive final-owner retirement containment.
+                    rayon::spawn(move || {
+                        released
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                        assert!(
+                            worker_owner
+                                .pool
+                                .as_ref()
+                                .unwrap()
+                                .current_thread_index()
+                                .is_some()
+                        );
+                        drop(worker_owner);
+                        finished.send(()).unwrap();
+                    });
+                })
+                .unwrap();
+            drop(executor);
+            release.send(()).unwrap();
+            finish
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            // Retirement is asynchronous only on this unsupported path. Prove
+            // all actual workers eventually finish their TLS destructors.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while completed.load(Ordering::SeqCst) != threads {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "workers did not retire"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
         }
     }
 

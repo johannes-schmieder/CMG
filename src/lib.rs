@@ -21,6 +21,8 @@ mod components;
 mod csr;
 mod error;
 mod execution;
+#[cfg(feature = "parallel")]
+mod execution_stage;
 mod forest;
 mod graph;
 mod hierarchy;
@@ -60,6 +62,8 @@ pub use error::CmgError;
 pub use execution::ParallelOptions;
 #[cfg(feature = "parallel")]
 pub use execution::{ParallelExecutor, ParallelRuntimeAllowance, ParallelRuntimeEstimate};
+#[cfg(feature = "parallel")]
+pub use execution_stage::{AdmittedStage, ControlledStage, HostExecutor, InstalledTeam};
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };

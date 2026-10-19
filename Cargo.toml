@@ -32,3 +32,6 @@ experimental-components = []
 
 [dependencies]
 rayon = { version = "1.12", optional = true }
+
+# Keep this standalone package independent of an embedding checkout workspace.
+[workspace]
