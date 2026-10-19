@@ -85,6 +85,11 @@ impl<'a> CancelMeter<'a> {
         self.poll(phase)
     }
 
+    /// Poll unconditionally, for example before returning a completed object.
+    pub(crate) fn checkpoint(&mut self, phase: &'static str) -> Result<(), CmgError> {
+        self.poll(phase)
+    }
+
     pub(crate) fn try_capacity<T>(
         &mut self,
         count: usize,
@@ -169,6 +174,71 @@ impl<'a> CancelMeter<'a> {
         }
         Ok(())
     }
+}
+
+// Preparation code shared by ordinary and cancellable callers takes an
+// optional meter. `None` performs exactly the ordinary operations; a meter
+// polls before every allocation and counts initialization in bounded chunks.
+
+/// Elements initialized per counted operation (8 units each).
+const FILL_CHUNK: usize = 128;
+
+#[inline]
+pub(crate) fn count(
+    meter: &mut Option<&mut CancelMeter<'_>>,
+    phase: &'static str,
+    units: u16,
+) -> Result<(), CmgError> {
+    meter
+        .as_deref_mut()
+        .map_or(Ok(()), |meter| meter.work(phase, units))
+}
+
+pub(crate) fn checkpoint(
+    meter: &mut Option<&mut CancelMeter<'_>>,
+    phase: &'static str,
+) -> Result<(), CmgError> {
+    meter
+        .as_deref_mut()
+        .map_or(Ok(()), |meter| meter.checkpoint(phase))
+}
+
+/// Exact-capacity storage; allocator failure reports `context`.
+pub(crate) fn try_reserved<T>(
+    meter: &mut Option<&mut CancelMeter<'_>>,
+    len: usize,
+    context: &'static str,
+) -> Result<Vec<T>, CmgError> {
+    if let Some(meter) = meter.as_deref_mut() {
+        meter.allocation(context, len.saturating_mul(core::mem::size_of::<T>()))?;
+    }
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| CmgError::AllocationFailed { context })?;
+    Ok(values)
+}
+
+/// `len` copies of `value` in exact-capacity storage.
+pub(crate) fn try_filled<T: Clone>(
+    meter: &mut Option<&mut CancelMeter<'_>>,
+    len: usize,
+    value: T,
+    context: &'static str,
+) -> Result<Vec<T>, CmgError> {
+    let mut values = try_reserved(meter, len, context)?;
+    match meter.as_deref_mut() {
+        None => values.resize(len, value),
+        Some(meter) => {
+            while values.len() < len {
+                let next = (len - values.len()).min(FILL_CHUNK);
+                // next <= 128, so the operation is at most 1024 units.
+                meter.work(context, 8 * next as u16)?;
+                values.resize(values.len() + next, value.clone());
+            }
+        }
+    }
+    Ok(values)
 }
 
 /// Test support: count polls and cancel exactly at one zero-based poll.

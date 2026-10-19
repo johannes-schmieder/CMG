@@ -595,7 +595,7 @@ impl PcgWorkspace {
             preconditioned: try_zeroed(dimension, "PCG preconditioned vector")?,
             direction: try_zeroed(dimension, "PCG direction")?,
             matrix_direction: try_zeroed(dimension, "PCG matrix direction")?,
-            component: preconditioner.finest_components().try_workspace()?,
+            component: preconditioner.finest_components().try_workspace(None)?,
             cmg: preconditioner.try_workspace()?,
         })
     }

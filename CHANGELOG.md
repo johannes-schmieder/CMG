@@ -54,17 +54,22 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   every allocation, and report `CmgError::Cancelled { phase }`.
   `ControlledStage::admit` validates chunk geometry only. Hierarchies, factors
   and cycle bits of successful builds are unchanged.
+- `CmgPreconditioner::workspace_allocation_bytes_controlled` and
+  `try_workspace_controlled` are now cancellation-only. They share one
+  implementation with `workspace_allocation_bytes` and `try_workspace`, return
+  the same bytes, layout, contents and errors, poll the `Cancellation` before
+  every allocation, at the construction cadence while initializing storage and
+  before returning, and report `CmgError::Cancelled { phase }`.
 
 ### Removed
 
 - The construction-work accounting interface: `BuildControl`, `BuildBoundary`,
   `BuildOperation`, `BuildDecision`, `BuildStopReason`, `CmgError::BuildStopped`,
   the `BuildPrefix` grant ledger and its prefix types,
-  `build_component_experiment_serial_controlled_with_factor_preflight`,
-  `workspace_allocation_bytes_controlled`, `try_workspace_controlled`,
-  `scalar_cycle_work_bound_controlled` and `AdmittedStage::charged_work`.
-  Use `workspace_allocation_bytes` with `try_workspace` for admitted scalar
-  workspaces.
+  `build_component_experiment_serial_controlled_with_factor_preflight`, the
+  work-metered forms of `workspace_allocation_bytes_controlled` and
+  `try_workspace_controlled`, `scalar_cycle_work_bound_controlled` and
+  `AdmittedStage::charged_work`.
 
 There has not yet been a final tagged release. The `0.1.0` value in
 `Cargo.toml` is the version currently being prepared, not evidence of a

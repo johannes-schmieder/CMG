@@ -553,6 +553,23 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
+            None,
+        )
+    }
+
+    /// Cancellable `workspace_allocation_bytes`: the same value and errors,
+    /// computed with bounded work between polls of `cancel` and one final poll.
+    /// A true query returns `CmgError::Cancelled`.
+    pub fn workspace_allocation_bytes_controlled(
+        &self,
+        cancel: crate::Cancellation<'_>,
+    ) -> Result<usize, CmgError> {
+        CmgWorkspace::allocation_bytes(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+            Some(&mut crate::cancel::CancelMeter::new(cancel)),
         )
     }
 
@@ -1213,6 +1230,24 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
+            None,
+        )
+    }
+
+    /// Cancellable `try_workspace` with the same layout, contents and errors.
+    /// It polls `cancel` before every allocation, at the fixed construction
+    /// cadence while initializing storage and before returning. A true query
+    /// drops the partial workspace and returns `CmgError::Cancelled`.
+    pub fn try_workspace_controlled(
+        &self,
+        cancel: crate::Cancellation<'_>,
+    ) -> Result<CmgWorkspace, CmgError> {
+        CmgWorkspace::try_new(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+            Some(&mut crate::cancel::CancelMeter::new(cancel)),
         )
     }
 

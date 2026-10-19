@@ -298,3 +298,87 @@ fn controlled_weighted_cycles_are_fixed_linear_symmetric_and_positive_on_the_ran
         }
     }
 }
+
+#[test]
+fn scalar_workspace_preparation_polls_inside_initialization_and_recovers() {
+    // 200,000 isolated vertices give a single level whose residual, projected
+    // RHS and seven component banks initialize 1.8 million values.
+    let isolated = Laplacian::from_edges(200_000, []).unwrap();
+    let preconditioner = CmgPreconditioner::build(&isolated, CmgOptions::default()).unwrap();
+    let never = || false;
+    assert_eq!(
+        preconditioner
+            .workspace_allocation_bytes_controlled(&never)
+            .unwrap(),
+        preconditioner.workspace_allocation_bytes().unwrap()
+    );
+    let cancelled = || true;
+    assert!(matches!(
+        preconditioner.workspace_allocation_bytes_controlled(&cancelled),
+        Err(CmgError::Cancelled { .. })
+    ));
+
+    let count = StopAt::new(usize::MAX);
+    let query = || count.query();
+    let reference = preconditioner.try_workspace_controlled(&query).unwrap();
+    // Eight units per initialized value at the fixed 65,536-unit cadence,
+    // far more polls than the handful of allocations.
+    assert!(count.polls() >= 9 * 200_000 * 8 / 65_536);
+    for stop in [0, 1, count.polls() / 2, count.polls() - 1] {
+        let cancel = StopAt::new(stop);
+        let query = || cancel.query();
+        assert!(matches!(
+            preconditioner.try_workspace_controlled(&query),
+            Err(CmgError::Cancelled { .. })
+        ));
+        assert_eq!(cancel.polls(), stop + 1);
+    }
+
+    let mut ordinary = preconditioner.try_workspace().unwrap();
+    let mut controlled = preconditioner.try_workspace_controlled(&never).unwrap();
+    assert_eq!(controlled.dimensions(), ordinary.dimensions());
+    assert_eq!(controlled.byte_len(), ordinary.byte_len());
+    assert_eq!(reference.byte_len(), ordinary.byte_len());
+    let rhs = vec![0.0; 200_000];
+    let mut expected = vec![1.0; 200_000];
+    let mut actual = vec![1.0; 200_000];
+    preconditioner
+        .apply_compatible_into(&rhs, &mut expected, &mut ordinary)
+        .unwrap();
+    preconditioner
+        .apply_compatible_into(&rhs, &mut actual, &mut controlled)
+        .unwrap();
+    assert_eq!(bits(&actual), bits(&expected));
+
+    // A connected multilevel fixture applies identical bits as well.
+    let connected = graph(257);
+    let preconditioner = CmgPreconditioner::build(
+        &connected,
+        CmgOptions {
+            direct_threshold: 3,
+            ..CmgOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(preconditioner.hierarchy().levels().len() > 1);
+    let rhs = connected
+        .matvec(&(0..257).map(|v| (v as f64 / 5.0).cos()).collect::<Vec<_>>())
+        .unwrap();
+    let mut expected = vec![0.0; 257];
+    let mut actual = vec![0.0; 257];
+    preconditioner
+        .apply_compatible_into(
+            &rhs,
+            &mut expected,
+            &mut preconditioner.try_workspace().unwrap(),
+        )
+        .unwrap();
+    preconditioner
+        .apply_compatible_into(
+            &rhs,
+            &mut actual,
+            &mut preconditioner.try_workspace_controlled(&never).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(bits(&actual), bits(&expected));
+}

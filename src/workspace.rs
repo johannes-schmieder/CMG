@@ -1,5 +1,6 @@
 //! Reusable caller-owned storage for CMG applications.
 
+use crate::cancel::{CancelMeter, checkpoint, count, try_filled, try_reserved};
 use crate::components::{CenteringPlan, CenteringWorkspace, ComponentWorkspace};
 use crate::{CmgError, CmgHierarchy, Components, GroundedLdl};
 
@@ -75,8 +76,10 @@ impl CmgWorkspace {
         direct_terminal: Option<&GroundedLdl>,
         finest_components: &Components,
         coarse_centering: &[CenteringPlan],
+        mut meter: Option<&mut CancelMeter<'_>>,
     ) -> Result<usize, CmgError> {
         use crate::storage::{add, bytes};
+        let meter = &mut meter;
         let levels = hierarchy.levels();
         let mut total = add(
             bytes::<LevelWorkspace>(levels.len())?,
@@ -89,19 +92,23 @@ impl CmgWorkspace {
             ComponentWorkspace::allocation_bytes(finest_components.count())?,
         )?;
         for plan in coarse_centering {
+            count(meter, "CMG workspace centering layouts", 32)?;
             total = add(total, plan.workspace_allocation_bytes()?)?;
         }
         for (index, level) in levels.iter().enumerate() {
+            count(meter, "CMG workspace level layouts", 64)?;
             total = add(total, bytes::<f64>(level.graph().vertex_count())?)?;
             let coarse = levels
                 .get(index + 1)
                 .map_or(0, |l| l.graph().vertex_count());
             total = add(total, bytes::<[f64; 2]>(coarse)?)?;
         }
-        add(
+        let total = add(
             total,
             bytes::<[f64; 2]>(direct_terminal.map_or(0, GroundedLdl::active_dimension))?,
-        )
+        )?;
+        checkpoint(meter, "CMG workspace layouts")?;
+        Ok(total)
     }
 
     #[cfg(feature = "parallel")]
@@ -205,32 +212,25 @@ impl CmgWorkspace {
         direct_terminal: Option<&GroundedLdl>,
         finest_components: &Components,
         coarse_centering: &[CenteringPlan],
+        mut meter: Option<&mut CancelMeter<'_>>,
     ) -> Result<Self, CmgError> {
-        let level_count = hierarchy.levels().len();
-        let mut dimensions = Vec::new();
-        dimensions
-            .try_reserve_exact(level_count)
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "CMG workspace dimensions",
-            })?;
-        dimensions.extend(
-            hierarchy
-                .levels()
-                .iter()
-                .map(|level| level.graph().vertex_count()),
-        );
-        let projected_rhs = try_zeroed(
+        let meter = &mut meter;
+        let mut dimensions =
+            try_reserved(meter, hierarchy.levels().len(), "CMG workspace dimensions")?;
+        for level in hierarchy.levels() {
+            count(meter, "CMG workspace dimensions", 16)?;
+            dimensions.push(level.graph().vertex_count());
+        }
+        let projected_rhs = try_filled(
+            meter,
             dimensions.first().copied().unwrap_or(0),
+            0.0,
             "CMG workspace projected RHS",
         )?;
         let last = dimensions.len().saturating_sub(1);
-        let mut levels = Vec::new();
-        levels
-            .try_reserve_exact(dimensions.len())
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "CMG workspace levels",
-            })?;
+        let mut levels = try_reserved(meter, dimensions.len(), "CMG workspace levels")?;
         for (index, &dimension) in dimensions.iter().enumerate() {
+            count(meter, "CMG workspace level dimensions", 32)?;
             let coarse_dimension = dimensions.get(index + 1).copied().unwrap_or(0);
             let factor_dimension = if index == last {
                 direct_terminal
@@ -240,24 +240,37 @@ impl CmgWorkspace {
                 0
             };
             levels.push(LevelWorkspace {
-                residual: try_zeroed(dimension, "CMG workspace residual")?,
-                coarse_rhs: try_zeroed(coarse_dimension, "CMG workspace coarse RHS")?,
-                coarse_correction: try_zeroed(coarse_dimension, "CMG workspace coarse correction")?,
-                factor_forward: try_zeroed(factor_dimension, "CMG workspace factor forward")?,
-                factor_solution: try_zeroed(factor_dimension, "CMG workspace factor solution")?,
+                residual: try_filled(meter, dimension, 0.0, "CMG workspace residual")?,
+                coarse_rhs: try_filled(meter, coarse_dimension, 0.0, "CMG workspace coarse RHS")?,
+                coarse_correction: try_filled(
+                    meter,
+                    coarse_dimension,
+                    0.0,
+                    "CMG workspace coarse correction",
+                )?,
+                factor_forward: try_filled(
+                    meter,
+                    factor_dimension,
+                    0.0,
+                    "CMG workspace factor forward",
+                )?,
+                factor_solution: try_filled(
+                    meter,
+                    factor_dimension,
+                    0.0,
+                    "CMG workspace factor solution",
+                )?,
             });
         }
         debug_assert_eq!(coarse_centering.len(), dimensions.len().saturating_sub(1));
-        let component_workspace = finest_components.try_workspace()?;
-        let mut centering_workspaces = Vec::new();
-        centering_workspaces
-            .try_reserve_exact(coarse_centering.len())
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "CMG centering workspaces",
-            })?;
+        let component_workspace = finest_components.try_workspace(meter.as_deref_mut())?;
+        let mut centering_workspaces =
+            try_reserved(meter, coarse_centering.len(), "CMG centering workspaces")?;
         for plan in coarse_centering {
-            centering_workspaces.push(plan.try_workspace()?);
+            count(meter, "CMG centering workspace plan", 16)?;
+            centering_workspaces.push(plan.try_workspace(meter.as_deref_mut())?);
         }
+        checkpoint(meter, "CMG workspace finish")?;
         Ok(Self {
             levels,
             component_workspace,
@@ -417,15 +430,6 @@ impl CmgWorkspace {
     }
 }
 
-fn try_zeroed(len: usize, context: &'static str) -> Result<Vec<f64>, CmgError> {
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(len)
-        .map_err(|_| CmgError::AllocationFailed { context })?;
-    values.resize(len, 0.0);
-    Ok(values)
-}
-
 fn validate_length(context: &'static str, expected: usize, actual: usize) -> Result<(), CmgError> {
     if expected == actual {
         Ok(())
@@ -476,5 +480,171 @@ mod tests {
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod cancellable_preparation_tests {
+    use super::CmgWorkspace;
+    use crate::cancel::{CancelMeter, StopAt};
+    use crate::components::CenteringPlan;
+    use crate::{CmgError, CmgOptions, CmgPreconditioner, Components, Laplacian};
+
+    // Run `prepare` with a meter that polls after every bounded operation,
+    // once uncancelled and then cancelled at each poll. Return the phases of
+    // the cancelled polls; every attempt must stop at its first true poll.
+    fn cancel_at_every_poll<T: core::fmt::Debug>(
+        mut prepare: impl FnMut(&mut CancelMeter<'_>) -> Result<T, CmgError>,
+    ) -> (T, Vec<&'static str>) {
+        let count = StopAt::never();
+        let query = || count.query();
+        let complete = prepare(&mut CancelMeter::every_operation(&query)).unwrap();
+        let mut phases = Vec::new();
+        for stop in 0..count.polls() {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            match prepare(&mut CancelMeter::every_operation(&query)) {
+                Err(CmgError::Cancelled { phase }) => phases.push(phase),
+                other => panic!("poll {stop} did not cancel: {other:?}"),
+            }
+            assert_eq!(cancel.polls(), stop + 1);
+        }
+        (complete, phases)
+    }
+
+    fn occurrences(phases: &[&str], phase: &str) -> usize {
+        phases.iter().filter(|&&observed| observed == phase).count()
+    }
+
+    #[test]
+    fn component_and_centering_workspaces_cancel_inside_initialization() {
+        // 300 disjoint edges: 300 components, so each bank needs three fill
+        // chunks after its allocation poll.
+        let graph =
+            Laplacian::from_edges(600, (0..300).map(|pair| (2 * pair, 2 * pair + 1, 1.0))).unwrap();
+        let components = Components::from_laplacian(&graph);
+        let plan = CenteringPlan::from_laplacian(&graph);
+        assert_eq!(components.count(), 300);
+
+        let (workspace, phases) =
+            cancel_at_every_poll(|meter| components.try_workspace(Some(meter)));
+        assert_eq!(
+            format!("{workspace:?}"),
+            format!("{:?}", components.try_workspace(None).unwrap())
+        );
+        for phase in [
+            "component workspace sums",
+            "component workspace corrections",
+            "component workspace scales",
+            "component workspace scale corrections",
+            "component workspace means",
+            "component workspace projection corrections",
+            "component workspace representatives",
+        ] {
+            // One poll before the allocation and one per initialized chunk.
+            assert_eq!(occurrences(&phases, phase), 4, "{phase}");
+        }
+        assert_eq!(phases.len(), 7 * 4);
+
+        let (workspace, phases) = cancel_at_every_poll(|meter| plan.try_workspace(Some(meter)));
+        assert_eq!(
+            format!("{workspace:?}"),
+            format!("{:?}", plan.try_workspace(None).unwrap())
+        );
+        for phase in [
+            "centering workspace sums",
+            "centering workspace corrections",
+            "centering workspace means",
+        ] {
+            assert_eq!(occurrences(&phases, phase), 4, "{phase}");
+        }
+        assert_eq!(phases.len(), 3 * 4);
+    }
+
+    #[test]
+    fn scalar_workspace_and_layouts_cancel_at_every_poll_then_rebuild_and_apply() {
+        for direct_threshold in [2, 128] {
+            let n = 300;
+            let graph =
+                Laplacian::from_edges(n, (1..n).map(|v| (v - 1, v, 1.0 + (v % 3) as f64))).unwrap();
+            let options = CmgOptions {
+                direct_threshold,
+                ..CmgOptions::default()
+            };
+            let preconditioner = CmgPreconditioner::build(&graph, options).unwrap();
+            let hierarchy = preconditioner.hierarchy();
+            let terminal = preconditioner.terminal_factor();
+            let components = Components::from_laplacian(&graph);
+            let plans: Vec<_> = hierarchy.levels()[1..]
+                .iter()
+                .map(|level| CenteringPlan::from_laplacian(level.graph()))
+                .collect();
+            assert!(hierarchy.levels().len() > 1 || direct_threshold == 128);
+
+            let ordinary_bytes =
+                CmgWorkspace::allocation_bytes(hierarchy, terminal, &components, &plans, None)
+                    .unwrap();
+            let (bytes, phases) = cancel_at_every_poll(|meter| {
+                CmgWorkspace::allocation_bytes(
+                    hierarchy,
+                    terminal,
+                    &components,
+                    &plans,
+                    Some(meter),
+                )
+            });
+            assert_eq!(bytes, ordinary_bytes);
+            assert!(occurrences(&phases, "CMG workspace level layouts") >= 1);
+            assert_eq!(phases.last(), Some(&"CMG workspace layouts"));
+
+            let prepare = |meter: Option<&mut CancelMeter<'_>>| {
+                CmgWorkspace::try_new(hierarchy, terminal, &components, &plans, meter)
+            };
+            let (mut controlled, phases) = cancel_at_every_poll(|meter| prepare(Some(meter)));
+            // Each residual polls before its allocation and once per counted
+            // 128-value chunk; the finest one (300 values) has three chunks.
+            let residual_polls: usize = hierarchy
+                .levels()
+                .iter()
+                .map(|level| 1 + level.graph().vertex_count().div_ceil(128))
+                .sum();
+            assert!(residual_polls >= 4);
+            assert_eq!(
+                occurrences(&phases, "CMG workspace residual"),
+                residual_polls
+            );
+            assert!(occurrences(&phases, "component workspace sums") >= 2);
+            if direct_threshold == 2 {
+                assert!(occurrences(&phases, "centering workspace sums") >= 2);
+            } else {
+                assert!(occurrences(&phases, "CMG workspace factor forward") >= 2);
+            }
+            assert_eq!(phases.last(), Some(&"CMG workspace finish"));
+
+            // A cancelled attempt leaves nothing behind: a fresh preparation
+            // equals the ordinary workspace and applies identical bits.
+            let mut ordinary = prepare(None).unwrap();
+            assert_eq!(format!("{controlled:?}"), format!("{ordinary:?}"));
+            assert_eq!(controlled.byte_len(), ordinary.byte_len());
+            controlled
+                .validate(hierarchy, terminal, &components, &plans)
+                .unwrap();
+            let known: Vec<_> = (0..n).map(|vertex| (vertex as f64 / 7.0).sin()).collect();
+            let rhs = graph.matvec(&known).unwrap();
+            let mut expected = vec![0.0; n];
+            let mut actual = vec![0.0; n];
+            preconditioner
+                .apply_compatible_into(&rhs, &mut expected, &mut ordinary)
+                .unwrap();
+            preconditioner
+                .apply_compatible_into(&rhs, &mut actual, &mut controlled)
+                .unwrap();
+            assert!(
+                actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+            );
+        }
     }
 }

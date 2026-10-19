@@ -2,8 +2,7 @@
 
 #[cfg(feature = "parallel")]
 use crate::ParallelExecutor;
-#[cfg(feature = "experimental-components")]
-use crate::cancel::CancelMeter;
+use crate::cancel::{CancelMeter, try_filled as filled};
 use crate::{CmgError, Laplacian, ValidationOptions};
 
 crate::storage::storage_fields!(
@@ -65,24 +64,26 @@ impl ComponentWorkspace {
         }
     }
 
-    pub(crate) fn try_new(component_count: usize) -> Result<Self, CmgError> {
+    pub(crate) fn try_new(
+        count: usize,
+        mut meter: Option<&mut CancelMeter<'_>>,
+    ) -> Result<Self, CmgError> {
+        let meter = &mut meter;
         Ok(Self {
-            sums: try_filled(component_count, 0.0, "component workspace sums")?,
-            corrections: try_filled(component_count, 0.0, "component workspace corrections")?,
-            scales: try_filled(component_count, 0.0, "component workspace scales")?,
-            scale_corrections: try_filled(
-                component_count,
-                0.0,
-                "component workspace scale corrections",
-            )?,
-            means: try_filled(component_count, 0.0, "component workspace means")?,
-            projection_corrections: try_filled(
-                component_count,
+            sums: filled(meter, count, 0.0, "component workspace sums")?,
+            corrections: filled(meter, count, 0.0, "component workspace corrections")?,
+            scales: filled(meter, count, 0.0, "component workspace scales")?,
+            scale_corrections: filled(meter, count, 0.0, "component workspace scale corrections")?,
+            means: filled(meter, count, 0.0, "component workspace means")?,
+            projection_corrections: filled(
+                meter,
+                count,
                 0.0,
                 "component workspace projection corrections",
             )?,
-            representatives: try_filled(
-                component_count,
+            representatives: filled(
+                meter,
+                count,
                 usize::MAX,
                 "component workspace representatives",
             )?,
@@ -147,11 +148,20 @@ impl CenteringWorkspace {
         }
     }
 
-    fn try_new(component_count: usize) -> Result<Self, CmgError> {
+    fn try_new(
+        component_count: usize,
+        mut meter: Option<&mut CancelMeter<'_>>,
+    ) -> Result<Self, CmgError> {
+        let meter = &mut meter;
         Ok(Self {
-            sums: try_filled(component_count, 0.0, "centering workspace sums")?,
-            corrections: try_filled(component_count, 0.0, "centering workspace corrections")?,
-            means: try_filled(component_count, 0.0, "centering workspace means")?,
+            sums: filled(meter, component_count, 0.0, "centering workspace sums")?,
+            corrections: filled(
+                meter,
+                component_count,
+                0.0,
+                "centering workspace corrections",
+            )?,
+            means: filled(meter, component_count, 0.0, "centering workspace means")?,
         })
     }
 
@@ -329,8 +339,11 @@ impl CenteringPlan {
         CenteringWorkspace::new(self.sizes.len())
     }
 
-    pub(crate) fn try_workspace(&self) -> Result<CenteringWorkspace, CmgError> {
-        CenteringWorkspace::try_new(self.sizes.len())
+    pub(crate) fn try_workspace(
+        &self,
+        meter: Option<&mut CancelMeter<'_>>,
+    ) -> Result<CenteringWorkspace, CmgError> {
+        CenteringWorkspace::try_new(self.sizes.len(), meter)
     }
 
     #[cfg(feature = "parallel")]
@@ -688,8 +701,11 @@ impl Components {
         ComponentWorkspace::new(self.count())
     }
 
-    pub(crate) fn try_workspace(&self) -> Result<ComponentWorkspace, CmgError> {
-        ComponentWorkspace::try_new(self.count())
+    pub(crate) fn try_workspace(
+        &self,
+        meter: Option<&mut CancelMeter<'_>>,
+    ) -> Result<ComponentWorkspace, CmgError> {
+        ComponentWorkspace::try_new(self.count(), meter)
     }
 
     #[cfg(feature = "parallel")]

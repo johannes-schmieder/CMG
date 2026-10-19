@@ -583,3 +583,41 @@ fn controlled_multilevel_build_reports_a_late_allocation_failure_without_leaking
     assert!(matches!(result, Err(CmgError::AllocationFailed { .. })));
     assert_eq!(live(), before);
 }
+
+#[test]
+fn controlled_scalar_workspace_allocations_are_gated_bounded_and_released() {
+    let fixtures = [
+        Laplacian::from_edges(11, []).unwrap(),
+        Laplacian::from_edges(23, (1..19).map(|v| (v - 1, v, 1.0))).unwrap(),
+        Laplacian::from_edges(
+            29,
+            (1..17)
+                .map(|v| (v - 1, v, 1.0))
+                .chain([(20, 22, 2.0), (22, 24, 3.0)]),
+        )
+        .unwrap(),
+    ];
+    for graph in &fixtures {
+        for direct_threshold in [2, 32] {
+            let preconditioner = CmgPreconditioner::build(
+                graph,
+                CmgOptions {
+                    direct_threshold,
+                    ..CmgOptions::default()
+                },
+            )
+            .unwrap();
+            let bound = preconditioner.workspace_allocation_bytes().unwrap();
+            let never = || false;
+            assert_eq!(
+                preconditioner
+                    .workspace_allocation_bytes_controlled(&never)
+                    .unwrap(),
+                bound
+            );
+            check_controlled_allocations(bound, |cancel| {
+                preconditioner.try_workspace_controlled(cancel)
+            });
+        }
+    }
+}

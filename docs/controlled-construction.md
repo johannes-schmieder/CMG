@@ -69,8 +69,14 @@ Its input is a borrowed slice, avoiding arbitrary user iterator work inside a
 bounded construction operation. The public preconditioner builder borrows an
 already constructed graph; callers must include their own input preparation in
 their resource protocol or use this graph constructor. Scalar application
-storage is prepared with the ordinary fallible `try_workspace` after admitting
-`workspace_allocation_bytes`.
+storage is prepared with `try_workspace_controlled` after admitting
+`workspace_allocation_bytes_controlled`. They share their implementation with
+`try_workspace` and `workspace_allocation_bytes`, producing the same layout,
+zeroed contents, byte count and error classification; only the cancellation
+polls are added. Every level, centering-plan and component-bank loop and every
+initialization of a bank (in counted chunks of 128 values) contribute to the
+cadence below, every allocation is preceded by a poll, and both queries poll
+once more before returning.
 
 ## Cancellation contract
 
@@ -109,7 +115,7 @@ Graph and preconditioner memory bounds retain the existing requested-layout
 model and its allocator/runtime exclusions. The graph input tuple bank is
 borrowed and excluded from the graph constructor's allocation bound. The caller
 must account for its coexistence with candidate storage. Scalar workspace bytes
-are reported by `workspace_allocation_bytes`.
+are reported by `workspace_allocation_bytes` (or its controlled form).
 
 ## Fixed-cycle symmetry and positivity
 
@@ -166,7 +172,10 @@ option combinations. Unit tests poll after every bounded operation and cancel
 at each poll of small graph, forest, contraction, pruning, component, factor
 and complete-candidate examples; integration tests cancel at every poll of the
 public builders, verify deterministic poll schedules and exercise a blocking
-query that parks and then continues or cancels. An independent allocator
+query that parks and then continues or cancels. Workspace tests cancel at every
+poll of component, centering and complete scalar workspaces and of the layout
+query, observe polls inside each bank's initialization, and then rebuild a
+workspace that equals the ordinary one and applies identical cycle bits. An independent allocator
 tracer verifies that every actual allocation follows a fresh poll, that the
 observed requested-layout peak is within the declared bound, and that
 cancellation at each poll releases all candidate storage. These tests support

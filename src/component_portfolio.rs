@@ -239,7 +239,7 @@ impl ComponentPcgExperiment {
                     projected_rhs: zeros(n)?,
                     solution: zeros(n)?,
                     residual: zeros(n)?,
-                    component: split.components.try_workspace()?,
+                    component: split.components.try_workspace(None)?,
                     active_rhs: zeros(a)?,
                     active_guess: zeros(a)?,
                     active_solution: zeros(a)?,
