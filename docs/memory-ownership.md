@@ -303,11 +303,28 @@ Plans and solve banks remain separately admitted operations.
 `tests/parallel_construction_admission.rs` checks one/four workers, both sides
 of the map/sort crossover, exact/short budgets, overflow, ordinary/component
 policies, prepared weight changes, ownership overlap and failure of each fixed
-mapping bank before dispatch. An independent process-wide allocator records
+mapping bank before contraction dispatch (forest dispatch may precede it).
+Failure cleanup tracks caller-origin allocation pointers in a fixed,
+allocation-free test ledger; frees and reallocations on any thread update
+the originating cohort. Exactly zero outstanding allocations and no ledger
+overflow are required after failure. Cross-thread transfer/reallocation and
+deliberately retained-allocation controls check that accounting. Thread-local
+net allocation/free bytes cannot establish cleanup after ownership transfers.
+An independent process-wide allocator records
 live peaks including runtime activity. Those observations are **not compared
 to a purported whole-runtime bound** or relabelled as CMG-only peaks. Retained
 CMG layouts are checked separately. Serial peak/failure fixtures still cover
-the shared admitted kernels. Execution on the final source remains required.
+the shared admitted kernels. The Mac review on 2026-10-20 retained a failed release attempt: the old
+thread-local assertion read 3,229,314 bytes against 3,229,378 before the failure
+(a negative 64-byte delta, not evidence of a leak). Allocation and deallocation
+were attributed to their executing threads, so cross-thread ownership invalidated
+that comparison; the individual 64-byte owner was not identified. After the
+origin-tracker repair, the release/all-features suite passes 254 executions in
+38 groups, the focused debug cleanup test passes, and all-target/all-feature
+Clippy with warnings denied passes on Rust 1.85.1. Production source is unchanged.
+The reallocation control permits an in-place resize; a moved pointer is covered
+by source review, not guaranteed by that control. Compact log hashes and the
+retained failed attempt are recorded in fereg's M3c validation evidence.
 
 ## Fill guard proof and remaining construction scopes
 
