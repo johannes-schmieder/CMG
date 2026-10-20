@@ -488,11 +488,14 @@ fn restrict_lanes<L: StoredIndex, M: Meter>(
         labels.len(),
         columns,
         1,
-        |fine, lanes| {
-            let target = labels[fine].index() * columns;
-            for lane in lanes {
-                coarse[target + lane] +=
-                    rhs[fine * columns + lane] - product[fine * columns + lane];
+        #[inline(always)]
+        |fines, lanes| {
+            for (fine, label) in fines.clone().zip(&labels[fines]) {
+                let target = label.index() * columns;
+                for lane in lanes.clone() {
+                    coarse[target + lane] +=
+                        rhs[fine * columns + lane] - product[fine * columns + lane];
+                }
             }
             Ok(())
         },
@@ -508,7 +511,9 @@ fn prolong_lanes<L: StoredIndex, M: Meter>(
     #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
     meter: &mut M,
 ) -> Result<(), CmgError> {
-    let operation = |row: usize, first: usize, values: &mut [f64]| {
+    // By value, as in the cycle's row operations: the parallel path must not
+    // make the serial loop reload the width after each polled segment.
+    let operation = move |row: usize, first: usize, values: &mut [f64]| {
         let source = labels[row].index() * columns + first;
         for (lane, value) in values.iter_mut().enumerate() {
             *value += coarse[source + lane];
@@ -521,22 +526,7 @@ fn prolong_lanes<L: StoredIndex, M: Meter>(
         meter.joined("CMG prolongation")?;
         return rows;
     }
-    crate::cancel::row_lanes(
-        meter,
-        "CMG prolongation",
-        labels.len(),
-        columns,
-        1,
-        |row, lanes| {
-            let first = lanes.start;
-            operation(
-                row,
-                first,
-                &mut fine[row * columns + first..row * columns + lanes.end],
-            );
-            Ok(())
-        },
-    )
+    crate::preconditioner::rows_serial(meter, "CMG prolongation", fine, columns, operation)
 }
 
 fn validate_prolong_dimensions(

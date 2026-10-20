@@ -100,11 +100,13 @@ impl PrunedTransfer {
             self.entries.len(),
             columns,
             1,
-            |entry, lanes| {
-                let (fine, target) = self.entries[entry];
-                let (fine, target) = (fine as usize * columns, target as usize * columns);
-                for lane in lanes {
-                    coarse[target + lane] += rhs[fine + lane] - product[fine + lane];
+            #[inline(always)]
+            |entries, lanes| {
+                for &(fine, target) in &self.entries[entries] {
+                    let (fine, target) = (fine as usize * columns, target as usize * columns);
+                    for lane in lanes.clone() {
+                        coarse[target + lane] += rhs[fine + lane] - product[fine + lane];
+                    }
                 }
                 Ok(())
             },
@@ -127,11 +129,13 @@ impl PrunedTransfer {
             self.entries.len(),
             columns,
             1,
-            |entry, lanes| {
-                let (target, source) = self.entries[entry];
-                let (target, source) = (target as usize * columns, source as usize * columns);
-                for lane in lanes {
-                    fine[target + lane] += coarse[source + lane];
+            #[inline(always)]
+            |entries, lanes| {
+                for &(target, source) in &self.entries[entries] {
+                    let (target, source) = (target as usize * columns, source as usize * columns);
+                    for lane in lanes.clone() {
+                        fine[target + lane] += coarse[source + lane];
+                    }
                 }
                 Ok(())
             },

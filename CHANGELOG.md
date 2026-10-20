@@ -169,6 +169,14 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 - `solve_pcg_with` copies its owned solution through a fallible, counted copy
   followed by the final checkpoint, so a cancellation during or after the copy
   returns no result.
+- Lane kernels regain their specialized scalar loops (M3b performance repair).
+  Lane-tiled kernels receive whole counted segments of rows with every lane
+  (one lane tile per row only for batches wider than one segment), and the
+  segment bodies are inlined so a constant width reaches the loop under a
+  polling meter; the edge-list product reslices its input to the output's
+  length so one bounds check covers both; row operations capture the width by
+  value so a polled serial loop does not reload it after each segment. Counts,
+  polls, tiles, operation order and every bit are unchanged.
 
 ### Removed
 

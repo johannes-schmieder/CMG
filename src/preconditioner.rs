@@ -25,7 +25,7 @@ pub(crate) use with_meter;
 mod batch;
 mod cycle;
 pub use batch::CmgBatchWorkspace;
-pub(crate) use cycle::{LevelParts, One, Parts, Store, Width};
+pub(crate) use cycle::{LevelParts, One, Parts, Store, Width, rows_serial};
 #[cfg(feature = "parallel")]
 pub(crate) use cycle::{rows_parallel, rows_parallel_with};
 

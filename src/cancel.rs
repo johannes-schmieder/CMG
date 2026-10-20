@@ -359,12 +359,14 @@ pub(crate) fn lane_tiles<P: Progress>(
         .map(move |start| start..columns.min(start + tile))
 }
 
-/// Run `body(row, lanes)` over `rows` rows of `columns` lanes at `weight`
-/// units per lane, in row order and ascending lanes. Rows narrow enough to
-/// share a segment are grouped as in [`chunked`]; a row wider than one
-/// segment is split into [`lane_tiles`], each counted after it runs, so the
-/// work between counts stays bounded at any batch width. Without polling every
-/// row runs whole, so an ordinary loop is unchanged.
+/// Run `body(rows, lanes)` over `rows` rows of `columns` lanes at `weight`
+/// units per lane, covering rows in order and each row's lanes in ascending
+/// order. Rows narrow enough to share a segment arrive as whole segments of
+/// rows with every lane (`0..columns`), exactly as in [`chunked`], so a kernel
+/// keeps one tight loop per segment; a row wider than one segment arrives as
+/// one row per [`lane_tiles`] tile, each counted after it runs, so the work
+/// between counts stays bounded at any batch width. Without polling every row
+/// arrives in one call.
 #[inline(always)]
 pub(crate) fn row_lanes<P: Progress>(
     progress: &mut P,
@@ -372,22 +374,26 @@ pub(crate) fn row_lanes<P: Progress>(
     rows: usize,
     columns: usize,
     weight: usize,
-    mut body: impl FnMut(usize, core::ops::Range<usize>) -> Result<(), CmgError>,
+    mut body: impl FnMut(core::ops::Range<usize>, core::ops::Range<usize>) -> Result<(), CmgError>,
 ) -> Result<(), CmgError> {
     let weight = weight.max(1);
     let per_row = columns.saturating_mul(weight);
     if !P::POLLS || per_row <= 1024 {
-        return chunked(progress, phase, rows, per_row, |range| {
-            for row in range {
-                body(row, 0..columns)?;
-            }
-            Ok(())
-        });
+        // Inlining the segment body keeps a constant width visible to the
+        // kernel, so narrow rows keep their specialized loops when polling.
+        return chunked(
+            progress,
+            phase,
+            rows,
+            per_row,
+            #[inline(always)]
+            |range| body(range, 0..columns),
+        );
     }
     for row in 0..rows {
         for lanes in lane_tiles::<P>(columns, weight) {
             let units = lanes.len() * weight;
-            body(row, lanes)?;
+            body(row..row + 1, lanes)?;
             progress.advance(phase, units)?;
         }
     }

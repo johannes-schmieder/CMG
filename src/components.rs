@@ -401,19 +401,22 @@ fn center_labeled<M: Meter>(
         vertices,
         columns,
         1,
-        |vertex, lanes| {
-            let component = label(vertex);
-            for lane in lanes {
-                let value = values[vertex * columns + lane];
-                if !value.is_finite() {
-                    return Err(CmgError::NonFiniteMatrixValue {
-                        row: vertex,
-                        column: lane,
-                        value,
-                    });
+        #[inline(always)]
+        |vertices, lanes| {
+            for vertex in vertices {
+                let component = label(vertex);
+                for lane in lanes.clone() {
+                    let value = values[vertex * columns + lane];
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: vertex,
+                            column: lane,
+                            value,
+                        });
+                    }
+                    let slot = component * columns + lane;
+                    neumaier_add(&mut sums[slot], &mut corrections[slot], value);
                 }
-                let slot = component * columns + lane;
-                neumaier_add(&mut sums[slot], &mut corrections[slot], value);
             }
             Ok(())
         },
@@ -424,10 +427,13 @@ fn center_labeled<M: Meter>(
         sizes.len(),
         columns,
         1,
-        |component, lanes| {
-            for lane in lanes {
-                let slot = component * columns + lane;
-                means[slot] = (sums[slot] + corrections[slot]) / sizes[component] as f64;
+        #[inline(always)]
+        |components, lanes| {
+            for component in components {
+                for lane in lanes.clone() {
+                    let slot = component * columns + lane;
+                    means[slot] = (sums[slot] + corrections[slot]) / sizes[component] as f64;
+                }
             }
             Ok(())
         },
@@ -438,10 +444,13 @@ fn center_labeled<M: Meter>(
         vertices,
         columns,
         1,
-        |vertex, lanes| {
-            let component = label(vertex);
-            for lane in lanes {
-                values[vertex * columns + lane] -= means[component * columns + lane];
+        #[inline(always)]
+        |vertices, lanes| {
+            for vertex in vertices {
+                let component = label(vertex);
+                for lane in lanes.clone() {
+                    values[vertex * columns + lane] -= means[component * columns + lane];
+                }
             }
             Ok(())
         },

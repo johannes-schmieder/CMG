@@ -481,9 +481,12 @@ impl GroundedLdl {
             dimension,
             columns,
             1,
-            |row, lanes| {
-                for lane in lanes {
-                    forward[row * columns + lane] /= self.diagonal[row];
+            #[inline(always)]
+            |rows, lanes| {
+                for row in rows {
+                    for lane in lanes.clone() {
+                        forward[row * columns + lane] /= self.diagonal[row];
+                    }
                 }
                 Ok(())
             },
@@ -521,12 +524,16 @@ impl GroundedLdl {
             self.permutation.len(),
             columns,
             1,
-            |row, lanes| {
-                let vertex = self.permutation[row];
-                solution[vertex * columns + lanes.start..vertex * columns + lanes.end]
-                    .copy_from_slice(
-                        &factor_solution[row * columns + lanes.start..row * columns + lanes.end],
-                    );
+            #[inline(always)]
+            |rows, lanes| {
+                for row in rows {
+                    let vertex = self.permutation[row];
+                    solution[vertex * columns + lanes.start..vertex * columns + lanes.end]
+                        .copy_from_slice(
+                            &factor_solution
+                                [row * columns + lanes.start..row * columns + lanes.end],
+                        );
+                }
                 Ok(())
             },
         )

@@ -348,7 +348,10 @@ impl<S: Store> Cycle<'_, S> {
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = self.store.width().get();
-        let operation = |row: usize, first: usize, values: &mut [f64]| {
+        // Captured by value: the closure also reaches the out-of-line parallel
+        // path, and a captured local's escaped address would make the serial
+        // loop reload the width after every polled segment.
+        let operation = move |row: usize, first: usize, values: &mut [f64]| {
             let diagonal = inverse_diagonal[row];
             for (lane, value) in (first..).zip(values.iter_mut()) {
                 *value = diagonal * rhs[row * columns + lane];
@@ -377,7 +380,10 @@ impl<S: Store> Cycle<'_, S> {
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = self.store.width().get();
-        let operation = |row: usize, first: usize, values: &mut [f64]| {
+        // Captured by value: the closure also reaches the out-of-line parallel
+        // path, and a captured local's escaped address would make the serial
+        // loop reload the width after every polled segment.
+        let operation = move |row: usize, first: usize, values: &mut [f64]| {
             let diagonal = inverse_diagonal[row];
             for (lane, value) in (first..).zip(values.iter_mut()) {
                 let offset = row * columns + lane;
@@ -439,10 +445,10 @@ impl<S: Store> Cycle<'_, S> {
 }
 
 /// Serial elementwise rows in bounded counted chunks; `operation(row, first,
-/// values)` updates lanes `first..` of `row`, a whole row unless the batch is
-/// wider than one counted segment.
-#[inline]
-fn rows_serial<M: Meter>(
+/// values)` updates lanes `first..` of `row`: every lane of each row of a
+/// counted segment, or one lane tile of a row wider than one segment.
+#[inline(always)]
+pub(crate) fn rows_serial<M: Meter>(
     meter: &mut M,
     phase: &'static str,
     output: &mut [f64],
@@ -455,13 +461,12 @@ fn rows_serial<M: Meter>(
         output.len() / columns,
         columns,
         1,
-        |row, lanes| {
-            let base = row * columns;
-            operation(
-                row,
-                lanes.start,
-                &mut output[base + lanes.start..base + lanes.end],
-            );
+        #[inline(always)]
+        |rows, lanes| {
+            let block = &mut output[rows.start * columns..rows.end * columns];
+            for (row, values) in rows.zip(block.chunks_exact_mut(columns)) {
+                operation(row, lanes.start, &mut values[lanes.clone()]);
+            }
             Ok(())
         },
     )

@@ -665,6 +665,16 @@ impl Laplacian {
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = width.get();
+        if input.len() != output.len() {
+            return Err(CmgError::dimension(
+                "Laplacian matvec lanes",
+                output.len(),
+                input.len(),
+            ));
+        }
+        // One length for both slices lets each slot's bounds check cover the
+        // input and the output, as in the earlier scalar kernel.
+        let input = &input[..output.len()];
         crate::cancel::zero(meter, "Laplacian matvec", output)?;
         // Each output slot still receives its edges in canonical order; wide
         // batches only split an edge's lanes into counted tiles.
@@ -674,14 +684,16 @@ impl Laplacian {
             self.edges.len(),
             columns,
             1,
-            |index, lanes| {
-                let edge = &self.edges[index];
-                let u = edge.u() * columns;
-                let v = edge.v() * columns;
-                for lane in lanes {
-                    let difference = edge.weight * (input[u + lane] - input[v + lane]);
-                    output[u + lane] += difference;
-                    output[v + lane] -= difference;
+            #[inline(always)]
+            |edges, lanes| {
+                for edge in &self.edges[edges] {
+                    let u = edge.u() * columns;
+                    let v = edge.v() * columns;
+                    for lane in lanes.clone() {
+                        let difference = edge.weight * (input[u + lane] - input[v + lane]);
+                        output[u + lane] += difference;
+                        output[v + lane] -= difference;
+                    }
                 }
                 Ok(())
             },
