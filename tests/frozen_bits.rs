@@ -214,7 +214,7 @@ fn preconditioner_digest(graph: &Laplacian, preconditioner: &CmgPreconditioner) 
             digest.usize(pruned.coarse_dimension());
             digest.usize(pruned.represented_coarse_dimension());
             for &(left, right) in pruned.entries() {
-                digest.word(u64::from(left) << 32 | u64::from(right));
+                digest.word((u64::from(left) << 32) | u64::from(right));
             }
         }
     }

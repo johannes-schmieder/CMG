@@ -610,7 +610,7 @@ pub(crate) struct Lanes<'a> {
 }
 
 #[cfg(feature = "parallel")]
-impl<'a> Lanes<'a> {
+impl Lanes<'_> {
     /// Remaining concurrent lanes, including this one.
     pub(crate) const fn count(self) -> usize {
         self.count

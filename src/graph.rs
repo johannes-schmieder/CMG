@@ -437,18 +437,26 @@ impl Laplacian {
         let operator_norm_bound = 2.0 * maximum_degree;
         meter.allocation(
             "prepared numeric publication",
-            crate::storage::add(
-                crate::storage::arc_bytes::<Vec<Edge>>()?,
-                crate::storage::arc_bytes::<Vec<f64>>()?,
-            )?,
+            crate::storage::arc_bytes::<Vec<Edge>>()?,
         )?;
+        let edges = Arc::new(edges);
+        meter.allocation(
+            "prepared diagonal publication",
+            crate::storage::arc_bytes::<Vec<f64>>()?,
+        )?;
+        let diagonal = Arc::new(diagonal);
+        meter.allocation(
+            "prepared numeric lineage",
+            crate::storage::arc_bytes::<()>()?,
+        )?;
+        let lineage = Arc::new(());
         Ok(Self {
             vertex_count,
-            edges: Arc::new(edges),
-            diagonal: Arc::new(diagonal),
+            edges,
+            diagonal,
             matrix_nnz,
             operator_norm_bound,
-            lineage: Arc::new(()),
+            lineage,
             prepared_topology_lineage: Some(prepared_topology_lineage),
             prepared_components: Some(prepared_components),
         })
@@ -1134,7 +1142,7 @@ mod controlled_graph_tests {
     use super::*;
     use crate::cancel::{CancelMeter, StopAt};
 
-    fn ctx<'a>(budget: usize, cancel: crate::Cancellation<'a>) -> crate::BuildContext<'a> {
+    fn ctx(budget: usize, cancel: crate::Cancellation<'_>) -> crate::BuildContext<'_> {
         crate::BuildContext {
             cancel: Some(cancel),
             budget_bytes: Some(budget),

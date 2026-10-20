@@ -290,10 +290,13 @@ impl PreparedLaplacianTopology {
             "prepared topology owners",
             crate::storage::arc_bytes::<Components>()?,
         )?;
-        meter.checkpoint("prepared topology publication")?;
         let components = Arc::new(components);
-
-        Ok(Self {
+        meter.allocation(
+            "prepared topology lineage",
+            crate::storage::arc_bytes::<()>()?,
+        )?;
+        let lineage = Arc::new(());
+        let topology = Self {
             vertex_count,
             input_edge_count,
             canonical_keys,
@@ -301,9 +304,11 @@ impl PreparedLaplacianTopology {
             group_input_indices,
             input_to_canonical,
             components,
-            lineage: Arc::new(()),
+            lineage,
             maximum_duplicate_count,
-        })
+        };
+        meter.checkpoint("prepared topology publication")?;
+        Ok(topology)
     }
 
     /// Return the number of vertices, including isolates.
@@ -768,6 +773,8 @@ mod cancellable_assembly_tests {
             "prepared canonical endpoints",
             "prepared duplicate offsets",
             "prepared duplicate order",
+            "prepared topology owners",
+            "prepared topology lineage",
             "prepared topology publication",
         ] {
             assert_eq!(phases.get(phase), Some(&1), "{phase} in {phases:?}");
@@ -812,7 +819,13 @@ mod cancellable_assembly_tests {
         });
         // 200,000 diagonal entries at two units each: six poll intervals.
         assert!(phases["prepared numeric metadata"] >= 5, "{phases:?}");
-        assert_eq!(phases.get("prepared numeric publication"), Some(&1));
+        for phase in [
+            "prepared numeric publication",
+            "prepared diagonal publication",
+            "prepared numeric lineage",
+        ] {
+            assert_eq!(phases.get(phase), Some(&1), "{phase} in {phases:?}");
+        }
         assert_eq!(phases.get("prepared numeric frame"), Some(&1));
         let again = topology
             .assemble_with_workspace(&weights, &mut scratch.borrow_mut())

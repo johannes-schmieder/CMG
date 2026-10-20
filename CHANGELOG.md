@@ -34,6 +34,10 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Changed
 
+- Prepared topology and numeric-frame publication polls before each shared-owner
+  allocation, and topology preparation polls after constructing its private
+  result. Cancellation drops partial owners before returning; allocation order,
+  layout admission and successful arithmetic are unchanged.
 - Planned within-solve PCG uses fixed-order parallel component centering for
   large connected systems, preserving deterministic results across eligible
   multithreaded worker-pool sizes while one worker retains the serial path;
