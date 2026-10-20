@@ -858,20 +858,15 @@ mod team_forest_tests {
         // Four units per scanned entry: one poll interval covers 16,384 entries.
         let interval = crate::cancel::POLL_UNITS as usize / 4;
         let entries = 2 * graph.edge_count();
-        for stop in [0, 1, 3] {
+        // The query turns true once the lanes have scanned `threshold` entries;
+        // lane 0 starts in the hub row, so the first true answers arrive inside
+        // it. Every lane must stop within one poll interval plus one bounded
+        // segment and its 4,096-row block slack of the threshold.
+        for threshold in [1, 20_000, 100_000] {
             let calls = AtomicUsize::new(0);
-            let at = AtomicUsize::new(usize::MAX);
             let query = || {
-                if calls.fetch_add(1, Ordering::SeqCst) < stop {
-                    return false;
-                }
-                let _ = at.compare_exchange(
-                    usize::MAX,
-                    visits::count(),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
-                true
+                calls.fetch_add(1, Ordering::SeqCst);
+                visits::count() >= threshold
             };
             visits::watch(graph.diagonal());
             let result = heavy_forest_team::<u32, _>(
@@ -883,19 +878,16 @@ mod team_forest_tests {
             visits::unwatch();
             assert!(
                 matches!(result, Err(CmgError::Cancelled { .. })),
-                "stop {stop}"
+                "threshold {threshold}"
             );
             let settled = calls.load(Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(5));
             assert_eq!(calls.load(Ordering::SeqCst), settled, "every lane joined");
-            let at = at.load(Ordering::SeqCst);
-            if at != usize::MAX {
-                assert!(
-                    total - at <= team.worker_ceiling() * (interval + 256 + 4096),
-                    "{} entries scanned after the observation",
-                    total - at
-                );
-            }
+            assert!(
+                total - threshold <= team.worker_ceiling() * (interval + 256 + 4096),
+                "{} entries scanned past the threshold",
+                total - threshold
+            );
             assert!(total < entries / 2, "{total} of {entries} entries scanned");
         }
         visits::watch(graph.diagonal());
