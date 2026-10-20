@@ -507,27 +507,45 @@ impl<'a> Team<'a> {
     /// the halves. The tree depends only on `leaves`. Subtrees fork while the
     /// lane budget exceeds one, so at most `worker_ceiling` lanes run; each
     /// lane passes one [`crate::cancel::LanePoll`] to all of its leaves.
+    ///
+    /// A failing leaf stops its lane: the rest of that lane's leaves are not
+    /// visited and every started lane joins. A lane that observes
+    /// cancellation also stops every lane at its next leaf, so untouched
+    /// leaves are not scheduled. Without cancellation, the leftmost failing
+    /// leaf's error is returned (left subtrees precede right ones in every
+    /// merge); callers poll their meter after the join so cancellation
+    /// dominates.
     pub(crate) fn reduce<R: Send>(
         &self,
         leaves: usize,
         query: Option<crate::Cancellation<'_>>,
-        leaf: impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> R + Sync,
+        leaf: impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> Result<R, CmgError> + Sync,
         merge: impl Fn(R, R) -> R + Sync,
-    ) -> R {
+    ) -> Result<R, CmgError> {
+        type Stop = std::sync::atomic::AtomicBool;
+        const PHASE: &str = "CMG fixed-tree reduction";
         fn serial<R>(
             first: usize,
             last: usize,
             poll: &mut crate::cancel::LanePoll<'_>,
-            leaf: &(impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> R + Sync),
+            stop: &Stop,
+            leaf: &(impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> Result<R, CmgError> + Sync),
             merge: &(impl Fn(R, R) -> R + Sync),
-        ) -> R {
+        ) -> Result<R, CmgError> {
             if last - first == 1 {
-                return leaf(first, poll);
+                if poll.stopped() || stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(crate::cancel::CancelMeter::cancelled(PHASE));
+                }
+                let value = leaf(first, poll);
+                if poll.stopped() {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                return value;
             }
             let middle = first + (last - first) / 2;
-            let left = serial(first, middle, poll, leaf, merge);
-            let right = serial(middle, last, poll, leaf, merge);
-            merge(left, right)
+            let left = serial(first, middle, poll, stop, leaf, merge)?;
+            let right = serial(middle, last, poll, stop, leaf, merge)?;
+            Ok(merge(left, right))
         }
         #[allow(clippy::too_many_arguments)]
         fn forked<R: Send>(
@@ -536,26 +554,39 @@ impl<'a> Team<'a> {
             last: usize,
             lanes: usize,
             query: Option<crate::Cancellation<'_>>,
-            leaf: &(impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> R + Sync),
+            stop: &Stop,
+            leaf: &(impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> Result<R, CmgError> + Sync),
             merge: &(impl Fn(R, R) -> R + Sync),
-        ) -> R {
+        ) -> Result<R, CmgError> {
             if lanes <= 1 || last - first == 1 {
                 #[cfg(test)]
                 let _lane = gauge::enter(pool);
                 let _ = pool;
                 let mut poll = crate::cancel::LanePoll::new(query);
-                return serial(first, last, &mut poll, leaf, merge);
+                return serial(first, last, &mut poll, stop, leaf, merge);
             }
             let middle = first + (last - first) / 2;
             let (left, right) = rayon::join(
-                || forked(pool, first, middle, lanes / 2, query, leaf, merge),
-                || forked(pool, middle, last, lanes - lanes / 2, query, leaf, merge),
+                || forked(pool, first, middle, lanes / 2, query, stop, leaf, merge),
+                || {
+                    forked(
+                        pool,
+                        middle,
+                        last,
+                        lanes - lanes / 2,
+                        query,
+                        stop,
+                        leaf,
+                        merge,
+                    )
+                },
             );
-            merge(left, right)
+            Ok(merge(left?, right?))
         }
         debug_assert!(leaves > 0);
         let lanes = self.worker_ceiling().min(leaves);
-        self.install(|| forked(self.pool, 0, leaves, lanes, query, &leaf, &merge))
+        let stop = Stop::new(false);
+        self.install(|| forked(self.pool, 0, leaves, lanes, query, &stop, &leaf, &merge))
     }
 
     pub(crate) fn should_parallel(&self, length: usize) -> bool {
@@ -686,6 +717,38 @@ pub(crate) mod gauge {
     /// The maximum concurrent lanes since `watch`.
     pub(crate) fn max() -> usize {
         state().max
+    }
+}
+
+/// Test-only traversal counter: entries visited in one watched slice, so a
+/// witness measures the work done after cancellation, not the polls.
+#[cfg(all(test, feature = "parallel"))]
+pub(crate) mod visits {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static WATCHED: AtomicUsize = AtomicUsize::new(0);
+    static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    /// Start counting visits of `data`'s entries (hold `gauge::WITNESS`).
+    pub(crate) fn watch(data: &[f64]) {
+        COUNT.store(0, Ordering::SeqCst);
+        WATCHED.store(data.as_ptr() as usize, Ordering::SeqCst);
+    }
+
+    pub(crate) fn unwatch() {
+        WATCHED.store(0, Ordering::SeqCst);
+    }
+
+    /// Count one visited entry of the slice starting at `data`.
+    #[inline]
+    pub(crate) fn visit(data: *const f64) {
+        if WATCHED.load(Ordering::Relaxed) == data as usize {
+            COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn count() -> usize {
+        COUNT.load(Ordering::SeqCst)
     }
 }
 

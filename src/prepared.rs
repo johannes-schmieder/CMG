@@ -211,29 +211,41 @@ impl PreparedLaplacianTopology {
         meter.sort_by(&mut indexed, Ord::cmp, "prepared endpoint sort")?;
 
         let input_edge_count = indexed.len();
-        meter.allocation(
-            "prepared canonical maps",
-            input_edge_count.saturating_mul(40),
-        )?;
         let mut canonical_keys = Vec::new();
         let mut group_offsets = Vec::new();
         let mut group_input_indices = Vec::new();
         let mut input_to_canonical = Vec::new();
+        meter.allocation(
+            "prepared canonical endpoints",
+            crate::storage::bytes::<u64>(input_edge_count)?,
+        )?;
         canonical_keys
             .try_reserve_exact(input_edge_count)
             .map_err(|_| CmgError::AllocationFailed {
                 context: "prepared canonical endpoints",
             })?;
+        meter.allocation(
+            "prepared duplicate offsets",
+            crate::storage::bytes::<usize>(input_edge_count.saturating_add(1))?,
+        )?;
         group_offsets
             .try_reserve_exact(input_edge_count.saturating_add(1))
             .map_err(|_| CmgError::AllocationFailed {
                 context: "prepared duplicate offsets",
             })?;
+        meter.allocation(
+            "prepared duplicate order",
+            crate::storage::bytes::<usize>(input_edge_count)?,
+        )?;
         group_input_indices
             .try_reserve_exact(input_edge_count)
             .map_err(|_| CmgError::AllocationFailed {
                 context: "prepared duplicate order",
             })?;
+        meter.allocation(
+            "prepared input edge map",
+            crate::storage::bytes::<usize>(input_edge_count)?,
+        )?;
         input_to_canonical
             .try_reserve_exact(input_edge_count)
             .map_err(|_| CmgError::AllocationFailed {
@@ -468,14 +480,16 @@ impl PreparedLaplacianTopology {
             diagonal[u] += weight;
             diagonal[v] += weight;
         }
-        meter.checkpoint("prepared numeric frame")?;
-        Ok(Laplacian::from_prepared_parts(
+        let graph = Laplacian::from_prepared_parts(
             self.vertex_count,
             edges,
             diagonal,
             Arc::clone(&self.lineage),
             Arc::clone(&self.components),
-        ))
+            meter,
+        )?;
+        meter.checkpoint("prepared numeric frame")?;
+        Ok(graph)
     }
 
     pub(crate) fn matches_graph(&self, graph: &Laplacian) -> bool {
@@ -500,17 +514,43 @@ impl PreparedLaplacianWorkspace {
         topology: &PreparedLaplacianTopology,
         budget_bytes: usize,
     ) -> Result<Self, CmgError> {
-        crate::storage::admit(Self::allocation_bytes(topology)?, budget_bytes)?;
-        Self::new(topology)
+        Self::new_with(
+            topology,
+            crate::BuildContext {
+                budget_bytes: Some(budget_bytes),
+                ..crate::BuildContext::default()
+            },
+        )
     }
+
     /// Allocate scratch compatible with a prepared topology.
     pub fn new(topology: &PreparedLaplacianTopology) -> Result<Self, CmgError> {
+        Self::new_with(topology, crate::BuildContext::default())
+    }
+
+    /// Allocate scratch under a construction context; its team is unused. A
+    /// budget admits [`Self::allocation_bytes`] first. With a cancellation
+    /// query, the context is polled before the fallible allocation and once
+    /// more before the scratch is returned; a cancelled call keeps nothing.
+    pub fn new_with(
+        topology: &PreparedLaplacianTopology,
+        context: crate::BuildContext<'_>,
+    ) -> Result<Self, CmgError> {
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(Self::allocation_bytes(topology)?, budget)?;
+        }
+        let poll = |phase| match context.cancel {
+            Some(cancel) if cancel() => Err(crate::cancel::CancelMeter::cancelled(phase)),
+            _ => Ok(()),
+        };
+        poll("prepared duplicate weights")?;
         let mut duplicate_weights = Vec::new();
         duplicate_weights
             .try_reserve_exact(topology.maximum_duplicate_count)
             .map_err(|_| CmgError::AllocationFailed {
                 context: "prepared duplicate weights",
             })?;
+        poll("prepared workspace publication")?;
         Ok(Self { duplicate_weights })
     }
 
@@ -680,5 +720,120 @@ mod cancellable_assembly_tests {
         ] {
             assert!(phases.contains(phase), "{phase} not in {phases:?}");
         }
+    }
+
+    /// Every poll of topology preparation and numeric assembly: the four map
+    /// reserves each poll first, the diagonal metadata scan is counted, the
+    /// shared handles poll before allocation, and the frame polls once more
+    /// after publication. Each cancellation keeps nothing; the same topology
+    /// and workspace then rebuild the reference exactly.
+    #[test]
+    fn allocations_and_numeric_publication_tail_cancel_and_rebuild_exactly() {
+        type Run<'r> = &'r dyn Fn(crate::Cancellation<'_>) -> Result<(), CmgError>;
+        fn total(run: Run<'_>) -> usize {
+            let never = StopAt::never();
+            run(&|| never.query()).unwrap();
+            never.polls()
+        }
+        fn collect(run: Run<'_>) -> std::collections::BTreeMap<&'static str, usize> {
+            let total = total(run);
+            let mut phases = std::collections::BTreeMap::new();
+            for stop in 0..total {
+                let cancel = StopAt::at(Some(stop));
+                match run(&|| cancel.query()) {
+                    Err(CmgError::Cancelled { phase }) => *phases.entry(phase).or_default() += 1,
+                    other => panic!("poll {stop} of {total}: {other:?}"),
+                }
+                assert_eq!(cancel.polls(), stop + 1);
+            }
+            phases
+        }
+        fn context(cancel: crate::Cancellation<'_>) -> crate::BuildContext<'_> {
+            crate::BuildContext {
+                cancel: Some(cancel),
+                ..crate::BuildContext::default()
+            }
+        }
+
+        let endpoints: Vec<(usize, usize)> = (0..20_000)
+            .map(|i| ((i * 7919) % 3001, (i * 104_729 + 1) % 3001))
+            .map(|(u, v)| if u == v { (u, (v + 1) % 3001) } else { (u, v) })
+            .collect();
+        let reference =
+            PreparedLaplacianTopology::prepare(3001, endpoints.iter().copied()).unwrap();
+        let phases = collect(&|cancel| {
+            PreparedLaplacianTopology::prepare_with(3001, &endpoints, context(cancel)).map(drop)
+        });
+        for phase in [
+            "prepared canonical endpoints",
+            "prepared duplicate offsets",
+            "prepared duplicate order",
+            "prepared topology publication",
+        ] {
+            assert_eq!(phases.get(phase), Some(&1), "{phase} in {phases:?}");
+        }
+        assert!(phases["prepared input edge map"] >= 1, "{phases:?}");
+        let again = PreparedLaplacianTopology::prepare_with(
+            3001,
+            &endpoints,
+            crate::BuildContext::default(),
+        )
+        .unwrap();
+        assert_eq!(again.canonical_keys, reference.canonical_keys);
+        assert_eq!(again.group_offsets, reference.group_offsets);
+        assert_eq!(again.input_to_canonical, reference.input_to_canonical);
+
+        // A long path: the diagonal metadata scan spans several poll intervals.
+        let n = 200_000;
+        let path: Vec<(usize, usize)> = (1..n).map(|v| (v - 1, v)).collect();
+        let topology = PreparedLaplacianTopology::prepare(n, path.iter().copied()).unwrap();
+        let weights: Vec<f64> = (1..n).map(|v| 1.0 + (v % 13) as f64 / 8.0).collect();
+        let phases = collect(&|cancel| {
+            PreparedLaplacianWorkspace::new_with(&topology, context(cancel)).map(drop)
+        });
+        assert_eq!(
+            phases.into_iter().collect::<Vec<_>>(),
+            [
+                ("prepared duplicate weights", 1),
+                ("prepared workspace publication", 1)
+            ]
+        );
+        let scratch = core::cell::RefCell::new(
+            PreparedLaplacianWorkspace::new_with(&topology, crate::BuildContext::default())
+                .unwrap(),
+        );
+        let reference = topology
+            .assemble_with_workspace(&weights, &mut scratch.borrow_mut())
+            .unwrap();
+        let phases = collect(&|cancel| {
+            topology
+                .assemble_with(&weights, &mut scratch.borrow_mut(), context(cancel))
+                .map(drop)
+        });
+        // 200,000 diagonal entries at two units each: six poll intervals.
+        assert!(phases["prepared numeric metadata"] >= 5, "{phases:?}");
+        assert_eq!(phases.get("prepared numeric publication"), Some(&1));
+        assert_eq!(phases.get("prepared numeric frame"), Some(&1));
+        let again = topology
+            .assemble_with_workspace(&weights, &mut scratch.borrow_mut())
+            .unwrap();
+        assert_eq!(again.edges(), reference.edges());
+        assert_eq!(
+            again
+                .diagonal()
+                .iter()
+                .map(|d| d.to_bits())
+                .collect::<Vec<_>>(),
+            reference
+                .diagonal()
+                .iter()
+                .map(|d| d.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(again.matrix_nnz(), reference.matrix_nnz());
+        assert_eq!(
+            again.operator_norm_bound().to_bits(),
+            reference.operator_norm_bound().to_bits()
+        );
     }
 }

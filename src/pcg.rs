@@ -891,19 +891,17 @@ pub fn solve_pcg_with(
     workspace: &mut PcgWorkspace,
     context: SolveContext<'_>,
 ) -> Result<PcgResult, CmgError> {
-    let diagnostics = solve_pcg_in_workspace(
-        graph,
-        preconditioner,
-        rhs,
-        None,
-        options,
-        workspace,
-        context,
-    )?;
-    Ok(result_from_diagnostics(
-        workspace.solution.clone(),
-        diagnostics,
-    ))
+    let solve = Pcg::new(graph, preconditioner, context);
+    // The owned solution is a fallible, counted copy; the final checkpoint
+    // follows it, so a cancellation during or after the copy returns nothing.
+    with_meter!(context.cancel, meter => {
+        solve
+            .run(rhs, None, options, workspace, meter, &mut ())
+            .and_then(|diagnostics| {
+                let solution = meter.copy_slice(&workspace.solution, "PCG owned solution")?;
+                Ok(result_from_diagnostics(solution, diagnostics))
+            })
+    })
 }
 
 /// Solve right-hand sides one after another with one reusable workspace.
@@ -2008,7 +2006,7 @@ impl<'a> Pcg<'a> {
             let chunk_size = team.options().reduction_chunk_size;
             let value = fixed_chunk_dot(left, right, chunk_size, team, query);
             meter.joined("PCG dot product")?;
-            return Ok(value);
+            return value;
         }
         let mut sum = Compensated::default();
         chunked(meter, "PCG dot product", left.len(), 1, |range| {
@@ -2033,25 +2031,9 @@ impl<'a> Pcg<'a> {
             let scale = if team.should_parallel(values.len()) && values.len() >= parallel_floor {
                 let chunk_size = options.reduction_chunk_size;
                 // A maximum is exact in any order: lanes reduce fixed chunks.
-                let scale = team.reduce(
-                    values.len().div_ceil(chunk_size),
-                    meter.query(),
-                    |chunk, poll| {
-                        let start = chunk * chunk_size;
-                        let end = values.len().min(start + chunk_size);
-                        let mut scale = 0.0_f64;
-                        let counted = chunked(poll, "PCG norm scale", end - start, 1, |range| {
-                            for value in &values[start + range.start..start + range.end] {
-                                scale = scale.max(value.abs());
-                            }
-                            Ok(())
-                        });
-                        if counted.is_err() { 0.0 } else { scale }
-                    },
-                    f64::max,
-                );
+                let scale = fixed_chunk_scale(values, chunk_size, team, meter.query());
                 meter.joined("PCG norm scale")?;
-                scale
+                scale?
             } else {
                 serial_scale(values, meter)?
             };
@@ -2067,7 +2049,7 @@ impl<'a> Pcg<'a> {
                     meter.query(),
                 );
                 meter.joined("PCG norm sum")?;
-                sum
+                sum?
             } else {
                 serial_scaled_square_sum(values, scale, meter)?
             };
@@ -2245,28 +2227,54 @@ fn original_residual_norm<M: Meter>(
 /// One leaf of a fixed-chunk compensated reduction: the leaf's terms in index
 /// order, counted in segments through the lane's poll. The running sum and
 /// correction cross segments unchanged, so the leaf equals `compensated_sum`
-/// over the whole chunk. A cancelled lane returns zero; its caller polls.
+/// over the whole chunk. Cancellation propagates and stops the lane.
 #[cfg(feature = "parallel")]
 fn compensated_leaf(
     poll: &mut crate::cancel::LanePoll<'_>,
     phase: &'static str,
     range: core::ops::Range<usize>,
     term: impl Fn(usize) -> f64,
-) -> f64 {
+) -> Result<f64, CmgError> {
     let mut sum = 0.0;
     let mut correction = 0.0;
     let start = range.start;
-    let counted = chunked(poll, phase, range.len(), 1, |segment| {
+    chunked(poll, phase, range.len(), 1, |segment| {
         for index in start + segment.start..start + segment.end {
             compensated_add(&mut sum, &mut correction, term(index));
         }
         Ok(())
-    });
-    if counted.is_err() {
-        0.0
-    } else {
-        sum + correction
-    }
+    })?;
+    Ok(sum + correction)
+}
+
+/// The largest absolute value, reduced by lanes over fixed chunks; a maximum
+/// is exact in any order.
+#[cfg(feature = "parallel")]
+fn fixed_chunk_scale(
+    values: &[f64],
+    chunk_size: usize,
+    team: Team<'_>,
+    query: Option<Cancellation<'_>>,
+) -> Result<f64, CmgError> {
+    team.reduce(
+        values.len().div_ceil(chunk_size),
+        query,
+        |chunk, poll| {
+            let start = chunk * chunk_size;
+            let end = values.len().min(start + chunk_size);
+            let mut scale = 0.0_f64;
+            chunked(poll, "PCG norm scale", end - start, 1, |range| {
+                for value in &values[start + range.start..start + range.end] {
+                    #[cfg(test)]
+                    crate::execution::visits::visit(values.as_ptr());
+                    scale = scale.max(value.abs());
+                }
+                Ok(())
+            })?;
+            Ok(scale)
+        },
+        f64::max,
+    )
 }
 
 #[cfg(feature = "parallel")]
@@ -2276,11 +2284,11 @@ fn fixed_chunk_dot(
     chunk_size: usize,
     team: Team<'_>,
     query: Option<Cancellation<'_>>,
-) -> f64 {
+) -> Result<f64, CmgError> {
     debug_assert_eq!(left.len(), right.len());
     let chunk_count = left.len().div_ceil(chunk_size);
     if chunk_count == 0 {
-        return 0.0;
+        return Ok(0.0);
     }
     team.reduce(
         chunk_count,
@@ -2289,6 +2297,8 @@ fn fixed_chunk_dot(
             let start = chunk * chunk_size;
             let end = left.len().min(start + chunk_size);
             compensated_leaf(poll, "PCG dot product", start..end, |index| {
+                #[cfg(test)]
+                crate::execution::visits::visit(left.as_ptr());
                 left[index] * right[index]
             })
         },
@@ -2303,10 +2313,10 @@ fn fixed_chunk_scaled_square_sum(
     chunk_size: usize,
     team: Team<'_>,
     query: Option<Cancellation<'_>>,
-) -> f64 {
+) -> Result<f64, CmgError> {
     let chunk_count = values.len().div_ceil(chunk_size);
     if chunk_count == 0 {
-        return 0.0;
+        return Ok(0.0);
     }
     team.reduce(
         chunk_count,
@@ -2315,6 +2325,8 @@ fn fixed_chunk_scaled_square_sum(
             let start = chunk * chunk_size;
             let end = values.len().min(start + chunk_size);
             compensated_leaf(poll, "PCG norm sum", start..end, |index| {
+                #[cfg(test)]
+                crate::execution::visits::visit(values.as_ptr());
                 let scaled = values[index] / scale;
                 scaled * scaled
             })
@@ -2833,6 +2845,52 @@ mod cancellation_tests {
         assert!(phases.len() > 4, "{phases:?}");
     }
 
+    /// The owned result of `solve_pcg_with` is a counted, fallible copy
+    /// followed by the final checkpoint: cancelling at any poll inside the
+    /// copy, or at the checkpoint after it, returns no result, and the same
+    /// workspace then reproduces the reference exactly.
+    #[test]
+    fn owned_pcg_result_cancels_inside_and_after_its_copy() {
+        let (graph, preconditioner, rhs) = fixture(40_000);
+        let mut workspace = PcgWorkspace::try_new(&preconditioner).unwrap();
+        let run = |workspace: &mut PcgWorkspace, cancel: Option<crate::Cancellation<'_>>| {
+            solve_pcg_with(
+                &graph,
+                &preconditioner,
+                &rhs,
+                options(),
+                workspace,
+                SolveContext {
+                    cancel,
+                    ..SolveContext::default()
+                },
+            )
+        };
+        let reference = run(&mut workspace, None).unwrap();
+        let count = StopAt::never();
+        let query = || count.query();
+        assert_eq!(run(&mut workspace, Some(&query)).unwrap(), reference);
+        let polls = count.polls();
+        // 40,000 copied values at eight units each span four poll intervals.
+        let mut copy = 0;
+        let mut last = None;
+        for stop in polls - 8..polls {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            match run(&mut workspace, Some(&query)) {
+                Err(CmgError::Cancelled { phase }) => {
+                    copy += usize::from(phase == "PCG owned solution");
+                    last = Some(phase);
+                }
+                other => panic!("poll {stop} did not cancel: {other:?}"),
+            }
+            assert_eq!(cancel.polls(), stop + 1);
+            assert_eq!(run(&mut workspace, None).unwrap(), reference);
+        }
+        assert!(copy >= 5, "{copy} polls inside the owned copy");
+        assert_eq!(last, Some("CMG application"));
+    }
+
     #[cfg(feature = "parallel")]
     #[test]
     fn planned_and_concurrent_pcg_join_every_lane_before_cancelling() {
@@ -2962,20 +3020,28 @@ mod cancellation_tests {
 
 /// One huge reduction leaf is counted while it runs: its lane polls the query
 /// at the fixed cadence inside the leaf, and the fixed tree is independent of
-/// the worker ceiling.
+/// the worker ceiling. On many leaves, a lane that observes cancellation stops
+/// every lane at its next leaf: visited entries after the observation are
+/// bounded by the ceiling's lanes, each finishing at most one poll interval.
 #[cfg(all(test, feature = "parallel"))]
 mod reduction_leaf_tests {
     use super::*;
+    use crate::execution::{gauge, visits};
     use crate::{ParallelExecutor, ParallelOptions};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn vectors(len: usize) -> (Vec<f64>, Vec<f64>) {
+        let left = (0..len)
+            .map(|i| ((i * 7 % 101) as f64 - 50.0) * 1e-3)
+            .collect();
+        let right = (0..len).map(|i| ((i * 13 % 89) as f64).sin()).collect();
+        (left, right)
+    }
 
     #[test]
     fn single_huge_leaf_polls_inside_and_tree_bits_are_ceiling_independent() {
         let len = 1 << 20;
-        let left: Vec<f64> = (0..len)
-            .map(|i| ((i * 7 % 101) as f64 - 50.0) * 1e-3)
-            .collect();
-        let right: Vec<f64> = (0..len).map(|i| ((i * 13 % 89) as f64).sin()).collect();
+        let (left, right) = vectors(len);
         let executor = ParallelExecutor::new(ParallelOptions {
             threads: 4,
             ..ParallelOptions::default()
@@ -2988,7 +3054,7 @@ mod reduction_leaf_tests {
             false
         };
         // One leaf spanning the whole vector.
-        let whole = fixed_chunk_dot(&left, &right, len, team, Some(&count));
+        let whole = fixed_chunk_dot(&left, &right, len, team, Some(&count)).unwrap();
         assert_eq!(
             whole.to_bits(),
             compensated_sum(left.iter().zip(&right).map(|(a, b)| a * b)).to_bits()
@@ -2997,7 +3063,7 @@ mod reduction_leaf_tests {
             polls.load(Ordering::SeqCst),
             len / crate::cancel::POLL_UNITS as usize
         );
-        let squares = fixed_chunk_scaled_square_sum(&right, 3.0, len, team, Some(&count));
+        let squares = fixed_chunk_scaled_square_sum(&right, 3.0, len, team, Some(&count)).unwrap();
         assert_eq!(
             squares.to_bits(),
             compensated_sum(right.iter().map(|v| (v / 3.0) * (v / 3.0))).to_bits()
@@ -3009,10 +3075,15 @@ mod reduction_leaf_tests {
         // The cancelled lane stops inside the leaf at its third poll.
         let stopped = AtomicUsize::new(0);
         let stop = || stopped.fetch_add(1, Ordering::SeqCst) >= 2;
-        assert_eq!(fixed_chunk_dot(&left, &right, len, team, Some(&stop)), 0.0);
+        assert!(matches!(
+            fixed_chunk_dot(&left, &right, len, team, Some(&stop)),
+            Err(CmgError::Cancelled { .. })
+        ));
         assert_eq!(stopped.load(Ordering::SeqCst), 3);
         // Small leaves: the same balanced tree at every worker ceiling.
-        let reference = fixed_chunk_dot(&left, &right, 4096, team, None).to_bits();
+        let reference = fixed_chunk_dot(&left, &right, 4096, team, None)
+            .unwrap()
+            .to_bits();
         for threads in [1, 2, 3] {
             let executor = ParallelExecutor::new(ParallelOptions {
                 threads,
@@ -3020,9 +3091,108 @@ mod reduction_leaf_tests {
             })
             .unwrap();
             assert_eq!(
-                fixed_chunk_dot(&left, &right, 4096, executor.team(), None).to_bits(),
+                fixed_chunk_dot(&left, &right, 4096, executor.team(), None)
+                    .unwrap()
+                    .to_bits(),
                 reference
             );
         }
+    }
+
+    type Reduction<'r> = dyn Fn(Cancellation<'_>) -> Result<f64, CmgError> + 'r;
+
+    /// Run `reduce` with a query that turns true at its `stop`-th call and
+    /// return the result, the entries visited when the query first returned
+    /// true, and the entries visited in total.
+    fn observed(
+        watched: &[f64],
+        stop: usize,
+        reduce: impl FnOnce(Cancellation<'_>) -> Result<f64, CmgError>,
+    ) -> (Result<f64, CmgError>, usize, usize) {
+        let calls = AtomicUsize::new(0);
+        let at_observation = AtomicUsize::new(usize::MAX);
+        let query = || {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            if call >= stop {
+                let _ = at_observation.compare_exchange(
+                    usize::MAX,
+                    visits::count(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+                true
+            } else {
+                false
+            }
+        };
+        visits::watch(watched);
+        let result = reduce(&query);
+        let total = visits::count();
+        visits::unwatch();
+        (result, at_observation.load(Ordering::SeqCst), total)
+    }
+
+    #[test]
+    fn many_leaf_reductions_stop_after_cancellation_and_rerun_exactly() {
+        let _witness = gauge::WITNESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let len = 1 << 21;
+        let chunk = 256;
+        let (left, right) = vectors(len);
+        // A ceiling of two lanes on a four-worker pool.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let team = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
+        let interval = crate::cancel::POLL_UNITS as usize;
+        let after_bound = team.worker_ceiling() * (interval + 1024);
+        let dot = fixed_chunk_dot(&left, &right, chunk, team, None).unwrap();
+        let squares = fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, None).unwrap();
+        let scale = fixed_chunk_scale(&right, chunk, team, None).unwrap();
+        for stop in [0, 2] {
+            let runs: [(&[f64], &Reduction<'_>); 3] = [
+                (&left, &|query| {
+                    fixed_chunk_dot(&left, &right, chunk, team, Some(query))
+                }),
+                (&right, &|query| {
+                    fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, Some(query))
+                }),
+                (&right, &|query| {
+                    fixed_chunk_scale(&right, chunk, team, Some(query))
+                }),
+            ];
+            for (watched, run) in runs {
+                let (result, at, total) = observed(watched, stop, run);
+                assert!(matches!(result, Err(CmgError::Cancelled { .. })));
+                assert!(at <= total, "{at} > {total}");
+                assert!(
+                    total - at <= after_bound,
+                    "{} entries visited after cancellation was observed",
+                    total - at
+                );
+                assert!(total <= (stop + 2 * team.worker_ceiling()) * (interval + 1024));
+                assert!(total < len / 4, "{total} of {len} entries visited");
+            }
+        }
+        // The uncancelled reductions see every entry once and reproduce bits.
+        visits::watch(&left);
+        let again = fixed_chunk_dot(&left, &right, chunk, team, None).unwrap();
+        assert_eq!(visits::count(), len);
+        visits::unwatch();
+        assert_eq!(again.to_bits(), dot.to_bits());
+        assert_eq!(
+            fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, None)
+                .unwrap()
+                .to_bits(),
+            squares.to_bits()
+        );
+        assert_eq!(
+            fixed_chunk_scale(&right, chunk, team, None)
+                .unwrap()
+                .to_bits(),
+            scale.to_bits()
+        );
     }
 }

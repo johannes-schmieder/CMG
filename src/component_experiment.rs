@@ -1,6 +1,6 @@
 //! Opt-in component experiments. Ordinary builders retain the upstream cycle.
 
-use crate::cancel::{Meter, chunked};
+use crate::cancel::{Meter, row_lanes};
 use crate::preconditioner::Width;
 use crate::{Aggregation, CmgError, Laplacian};
 
@@ -94,17 +94,17 @@ impl PrunedTransfer {
         self.validate_lanes(rhs.len(), coarse.len(), columns)?;
         self.validate_lanes(product.len(), coarse.len(), columns)?;
         crate::cancel::zero(meter, "CMG pruned restriction", coarse)?;
-        chunked(
+        row_lanes(
             meter,
             "CMG pruned restriction",
             self.entries.len(),
             columns,
-            |range| {
-                for &(fine, target) in &self.entries[range] {
-                    let (fine, target) = (fine as usize * columns, target as usize * columns);
-                    for lane in 0..columns {
-                        coarse[target + lane] += rhs[fine + lane] - product[fine + lane];
-                    }
+            1,
+            |entry, lanes| {
+                let (fine, target) = self.entries[entry];
+                let (fine, target) = (fine as usize * columns, target as usize * columns);
+                for lane in lanes {
+                    coarse[target + lane] += rhs[fine + lane] - product[fine + lane];
                 }
                 Ok(())
             },
@@ -121,17 +121,17 @@ impl PrunedTransfer {
     ) -> Result<(), CmgError> {
         let columns = width.get();
         self.validate_lanes(fine.len(), coarse.len(), columns)?;
-        chunked(
+        row_lanes(
             meter,
             "CMG pruned prolongation",
             self.entries.len(),
             columns,
-            |range| {
-                for &(target, source) in &self.entries[range] {
-                    let (target, source) = (target as usize * columns, source as usize * columns);
-                    for lane in 0..columns {
-                        fine[target + lane] += coarse[source + lane];
-                    }
+            1,
+            |entry, lanes| {
+                let (target, source) = self.entries[entry];
+                let (target, source) = (target as usize * columns, source as usize * columns);
+                for lane in lanes {
+                    fine[target + lane] += coarse[source + lane];
                 }
                 Ok(())
             },

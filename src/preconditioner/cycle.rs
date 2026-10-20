@@ -22,7 +22,7 @@
 use super::CmgPreconditioner;
 #[cfg(feature = "parallel")]
 use super::ParallelCmgPlan;
-use crate::cancel::{Meter, chunked};
+use crate::cancel::Meter;
 use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
 #[cfg(feature = "parallel")]
 use crate::execution::Team;
@@ -348,9 +348,9 @@ impl<S: Store> Cycle<'_, S> {
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = self.store.width().get();
-        let operation = |row: usize, values: &mut [f64]| {
+        let operation = |row: usize, first: usize, values: &mut [f64]| {
             let diagonal = inverse_diagonal[row];
-            for (lane, value) in values.iter_mut().enumerate() {
+            for (lane, value) in (first..).zip(values.iter_mut()) {
                 *value = diagonal * rhs[row * columns + lane];
             }
         };
@@ -377,9 +377,9 @@ impl<S: Store> Cycle<'_, S> {
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = self.store.width().get();
-        let operation = |row: usize, values: &mut [f64]| {
+        let operation = |row: usize, first: usize, values: &mut [f64]| {
             let diagonal = inverse_diagonal[row];
-            for (lane, value) in values.iter_mut().enumerate() {
+            for (lane, value) in (first..).zip(values.iter_mut()) {
                 let offset = row * columns + lane;
                 *value += diagonal * (rhs[offset] - product[offset]);
             }
@@ -438,21 +438,33 @@ impl<S: Store> Cycle<'_, S> {
     }
 }
 
-/// Serial rows in bounded counted chunks.
+/// Serial elementwise rows in bounded counted chunks; `operation(row, first,
+/// values)` updates lanes `first..` of `row`, a whole row unless the batch is
+/// wider than one counted segment.
 #[inline]
 fn rows_serial<M: Meter>(
     meter: &mut M,
     phase: &'static str,
     output: &mut [f64],
     columns: usize,
-    operation: impl Fn(usize, &mut [f64]),
+    operation: impl Fn(usize, usize, &mut [f64]),
 ) -> Result<(), CmgError> {
-    chunked(meter, phase, output.len() / columns, columns, |range| {
-        for row in range {
-            operation(row, &mut output[row * columns..(row + 1) * columns]);
-        }
-        Ok(())
-    })
+    crate::cancel::row_lanes(
+        meter,
+        phase,
+        output.len() / columns,
+        columns,
+        1,
+        |row, lanes| {
+            let base = row * columns;
+            operation(
+                row,
+                lanes.start,
+                &mut output[base + lanes.start..base + lanes.end],
+            );
+            Ok(())
+        },
+    )
 }
 
 /// Rows on the team in fixed blocks of the team's work-chunk length, claimed by
@@ -477,18 +489,24 @@ pub(crate) fn rows_parallel_with(
     })
 }
 
-/// Elementwise rows of `columns` units each on the team.
+/// Elementwise rows of `columns` units each on the team; as in
+/// [`rows_serial`], a row wider than one counted segment is updated and
+/// counted in lane tiles.
 #[cfg(feature = "parallel")]
 pub(crate) fn rows_parallel(
     team: Team<'_>,
     query: Option<crate::Cancellation<'_>>,
     output: &mut [f64],
     columns: usize,
-    operation: impl Fn(usize, &mut [f64]) + Sync,
+    operation: impl Fn(usize, usize, &mut [f64]) + Sync,
 ) -> Result<(), CmgError> {
+    type Lane<'p> = crate::cancel::LanePoll<'p>;
     rows_parallel_with(team, query, output, columns, |row, values, poll| {
-        operation(row, values);
-        crate::cancel::Progress::advance(poll, "parallel rows", columns)
+        for lanes in crate::cancel::lane_tiles::<Lane<'_>>(columns, 1) {
+            operation(row, lanes.start, &mut values[lanes.clone()]);
+            crate::cancel::Progress::advance(poll, "parallel rows", lanes.len())?;
+        }
+        Ok(())
     })
 }
 

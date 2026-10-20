@@ -96,12 +96,23 @@ a terminal-factor row, a reduction leaf) are counted in segments of at most
 1024 units while they run, never once before an unpolled loop. Each parallel
 lane keeps its own count and polls the sticky query every 65,536 units, also
 inside a row or leaf, and stops early; all lanes join, the coordinator polls,
-and only then is `CmgError::Cancelled` returned. Concurrent solves poll after
+and only then is `CmgError::Cancelled` returned. A stopped lane stays stopped:
+the fixed reduction tree visits none of its remaining leaves and every other
+lane stops at its next leaf, so the entries traversed after the observation are
+bounded by one poll interval plus one segment per lane. A batch row wider than
+one counted segment (more than 1024 lanes) is processed and counted in lane
+tiles of at most 1024 lanes; each lane keeps its operation order. Concurrent solves poll after
 the join before choosing errors, publish through the bounded meter and poll
 once more before success. Outputs are then unspecified, workspaces stay
 reusable, and no context changes a result bit. Plan construction
 (`ParallelCmgPlan::build_with`, `ParallelPcgSolver::try_plan_with`) and PCG
 workspace banks (`PcgBatchWorkspace::new_bank_with`) take the same context.
+`solve_pcg_with` copies its owned solution through the counted meter before
+its final poll. Prepared topology preparation polls before each map reserve;
+numeric assembly counts the diagonal metadata scan, polls before allocating the
+shared handles and once more after publication, and
+`PreparedLaplacianWorkspace::new_with` polls before and after allocating its
+scratch.
 
 Team construction stages are bounded too: contraction maps edges in fixed
 logical chunks and fills and compacts its slot bank in counted segments, and

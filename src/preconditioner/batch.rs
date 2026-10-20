@@ -354,3 +354,241 @@ impl CmgPreconditioner {
         workspace.validate(self, columns)
     }
 }
+
+/// Batches wider than one counted segment: every kernel of the cycle (edge
+/// list, rows, restriction, prolongation, centering and the terminal factor)
+/// counts its lane tiles, so no single count covers more than 1024 units; the
+/// counts are deterministic, every lane keeps the width-four lane's bits, and
+/// a cancellation at any count publishes nothing.
+#[cfg(test)]
+mod wide_batch_tests {
+    use super::*;
+    use crate::cancel::Recorder;
+    use crate::{CmgOptions, Laplacian};
+
+    const WIDE: usize = 1_100;
+
+    fn fixture() -> (CmgPreconditioner, usize, Vec<f64>) {
+        let n = 600;
+        let edges = (1..n)
+            .map(|v| (v - 1, v, 1.0 + (v % 7) as f64 / 4.0))
+            .chain((9..n).step_by(9).map(|v| (v - 9, v, 0.5)));
+        let graph = Laplacian::from_edges(n, edges).unwrap();
+        let preconditioner = CmgPreconditioner::build(
+            &graph,
+            CmgOptions {
+                direct_threshold: 64,
+                ..CmgOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(preconditioner.hierarchy.levels().len() > 1);
+        // Four compatible right-hand sides, interleaved.
+        let lanes: Vec<Vec<f64>> = (0..4)
+            .map(|lane| {
+                let known: Vec<f64> = (0..n)
+                    .map(|v| (((v + 3) * (lane + 5)) % 37) as f64 - 18.0)
+                    .collect();
+                graph.matvec(&known).unwrap()
+            })
+            .collect();
+        let base = (0..n)
+            .flat_map(|v| lanes.iter().map(move |rhs| rhs[v]))
+            .collect();
+        (preconditioner, n, base)
+    }
+
+    fn bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    #[test]
+    fn wide_batches_count_lane_tiles_and_keep_lane_bits() {
+        let (preconditioner, n, base) = fixture();
+        let mut narrow = CmgBatchWorkspace::try_new(&preconditioner, 4, usize::MAX).unwrap();
+        let mut expected = vec![0.0; n * 4];
+        preconditioner
+            .apply_compatible_batch_into(
+                &base,
+                &mut expected,
+                4,
+                &mut narrow,
+                ApplyContext::default(),
+            )
+            .unwrap();
+        let rhs: Vec<f64> = (0..n)
+            .flat_map(|v| (0..WIDE).map(move |lane| (v, lane)))
+            .map(|(v, lane)| base[v * 4 + lane % 4])
+            .collect();
+        let mut workspace = CmgBatchWorkspace::try_new(&preconditioner, WIDE, usize::MAX).unwrap();
+        let mut output = vec![0.0; n * WIDE];
+        preconditioner
+            .apply_compatible_batch_into(
+                &rhs,
+                &mut output,
+                WIDE,
+                &mut workspace,
+                ApplyContext::default(),
+            )
+            .unwrap();
+        let lane_bits: Vec<u64> = (0..n * WIDE)
+            .map(|index| expected[(index / WIDE) * 4 + (index % WIDE) % 4].to_bits())
+            .collect();
+        assert_eq!(bits(&output), lane_bits);
+
+        let mut run = |recorder: &mut Recorder, output: &mut [f64]| {
+            let BatchStorage::Interleaved(levels) = &mut workspace.storage else {
+                panic!("interleaved wide workspace");
+            };
+            Cycle {
+                cmg: &preconditioner,
+                store: Interleaved {
+                    levels,
+                    columns: WIDE,
+                },
+                #[cfg(feature = "parallel")]
+                plan: None,
+                #[cfg(feature = "parallel")]
+                team: None,
+            }
+            .level(0, &rhs, output, 1, recorder, &mut ())
+        };
+        let mut full = Recorder::default();
+        let mut counted = vec![f64::NAN; n * WIDE];
+        run(&mut full, &mut counted).unwrap();
+        assert_eq!(bits(&counted), lane_bits);
+        assert!(
+            full.max_units <= 1024,
+            "{} units in one count",
+            full.max_units
+        );
+        let mut again = Recorder::default();
+        run(&mut again, &mut counted).unwrap();
+        assert_eq!((again.advances, again.units), (full.advances, full.units));
+        for stop in [
+            1,
+            full.advances / 3,
+            full.advances / 2,
+            full.advances - 1,
+            full.advances,
+        ] {
+            let mut cancelled = Recorder {
+                stop_at: Some(stop),
+                ..Recorder::default()
+            };
+            assert!(matches!(
+                run(&mut cancelled, &mut counted),
+                Err(CmgError::Cancelled { .. })
+            ));
+            assert_eq!(cancelled.advances, stop);
+            assert!(cancelled.max_units <= 1024);
+        }
+        let mut output = vec![0.0; n * WIDE];
+        preconditioner
+            .apply_compatible_batch_into(
+                &rhs,
+                &mut output,
+                WIDE,
+                &mut workspace,
+                ApplyContext::default(),
+            )
+            .unwrap();
+        assert_eq!(bits(&output), lane_bits);
+    }
+
+    /// The planned wide batch on a team: parallel rows and row operators run
+    /// in lane tiles of at most 1024 lanes, lanes keep the planned width-four
+    /// bits, and cancellation at sampled polls joins and rebuilds exactly.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn planned_wide_batches_tile_parallel_rows_and_rebuild_exactly() {
+        use crate::{ParallelCmgPlan, ParallelExecutor, ParallelOptions};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (preconditioner, n, base) = fixture();
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 4,
+            min_parallel_len: 64,
+            ..ParallelOptions::default()
+        })
+        .unwrap();
+        let team = executor.team();
+        let widest = AtomicUsize::new(0);
+        let mut rows = vec![0.0; 8 * WIDE];
+        crate::preconditioner::rows_parallel(team, None, &mut rows, WIDE, |row, first, values| {
+            widest.fetch_max(values.len(), Ordering::SeqCst);
+            for (lane, value) in (first..).zip(values.iter_mut()) {
+                *value = (row * WIDE + lane) as f64;
+            }
+        })
+        .unwrap();
+        assert_eq!(widest.load(Ordering::SeqCst), 1024);
+        assert!(
+            rows.iter()
+                .enumerate()
+                .all(|(index, &value)| value == index as f64)
+        );
+
+        let plan = ParallelCmgPlan::build(&preconditioner, team).unwrap();
+        let planned = ApplyContext {
+            plan: Some(&plan),
+            team: Some(team),
+            cancel: None,
+        };
+        let mut narrow = CmgBatchWorkspace::try_new(&preconditioner, 4, usize::MAX).unwrap();
+        let mut expected = vec![0.0; n * 4];
+        preconditioner
+            .apply_compatible_batch_into(&base, &mut expected, 4, &mut narrow, planned)
+            .unwrap();
+        let rhs: Vec<f64> = (0..n)
+            .flat_map(|v| (0..WIDE).map(move |lane| (v, lane)))
+            .map(|(v, lane)| base[v * 4 + lane % 4])
+            .collect();
+        let lane_bits: Vec<u64> = (0..n * WIDE)
+            .map(|index| expected[(index / WIDE) * 4 + (index % WIDE) % 4].to_bits())
+            .collect();
+        let mut workspace = CmgBatchWorkspace::try_new(&preconditioner, WIDE, usize::MAX).unwrap();
+        let mut output = vec![0.0; n * WIDE];
+        let calls = AtomicUsize::new(0);
+        let count = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            false
+        };
+        preconditioner
+            .apply_compatible_batch_into(
+                &rhs,
+                &mut output,
+                WIDE,
+                &mut workspace,
+                ApplyContext {
+                    cancel: Some(&count),
+                    ..planned
+                },
+            )
+            .unwrap();
+        assert_eq!(bits(&output), lane_bits);
+        let total = calls.load(Ordering::SeqCst);
+        assert!(total > 8, "{total} queries");
+        for threshold in [1, total / 4, total / 2, total - 1] {
+            let calls = AtomicUsize::new(0);
+            let query = || calls.fetch_add(1, Ordering::SeqCst) >= threshold;
+            assert!(matches!(
+                preconditioner.apply_compatible_batch_into(
+                    &rhs,
+                    &mut output,
+                    WIDE,
+                    &mut workspace,
+                    ApplyContext {
+                        cancel: Some(&query),
+                        ..planned
+                    },
+                ),
+                Err(CmgError::Cancelled { .. })
+            ));
+            preconditioner
+                .apply_compatible_batch_into(&rhs, &mut output, WIDE, &mut workspace, planned)
+                .unwrap();
+            assert_eq!(bits(&output), lane_bits);
+        }
+    }
+}

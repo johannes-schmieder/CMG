@@ -659,23 +659,29 @@ impl CsrLaplacian {
         values: &mut [f64],
         progress: &mut P,
     ) -> Result<(), CmgError> {
-        values.fill(0.0);
         let (start, end) = self.row_offsets.bounds(row);
-        crate::cancel::chunked(progress, "CSR matvec", end - start, columns, |range| {
-            let entries = start + range.start..start + range.end;
-            for (neighbor, &weight) in neighbors[entries.clone()]
-                .iter()
-                .zip(&self.weights[entries])
-            {
-                let neighbor = neighbor.index();
-                for (lane, value) in values.iter_mut().enumerate() {
-                    *value +=
-                        weight * (input[row * columns + lane] - input[neighbor * columns + lane]);
+        // A batch wider than one counted segment traverses the row once per
+        // lane tile; every lane still sums its neighbors in canonical order.
+        for lanes in crate::cancel::lane_tiles::<P>(columns, 1) {
+            let tile = &mut values[lanes.clone()];
+            tile.fill(0.0);
+            crate::cancel::chunked(progress, "CSR matvec", end - start, tile.len(), |range| {
+                let entries = start + range.start..start + range.end;
+                for (neighbor, &weight) in neighbors[entries.clone()]
+                    .iter()
+                    .zip(&self.weights[entries])
+                {
+                    let neighbor = neighbor.index();
+                    for (lane, value) in (lanes.start..).zip(tile.iter_mut()) {
+                        *value += weight
+                            * (input[row * columns + lane] - input[neighbor * columns + lane]);
+                    }
                 }
-            }
-            Ok(())
-        })?;
-        progress.advance("CSR matvec", columns)
+                Ok(())
+            })?;
+            progress.advance("CSR matvec", tile.len())?;
+        }
+        Ok(())
     }
 
     fn validate_matvec_dimensions(&self, input: &[f64], output: &[f64]) -> Result<(), CmgError> {
@@ -1122,6 +1128,44 @@ mod hub_row_cancellation_tests {
             // Exactly `stop` segments of at most 1024 terms ran before it.
             assert_eq!(row[0], (stop * 1024).min(LEAVES) as f64);
         }
+    }
+
+    /// A batch wider than one counted segment runs a row per lane tile: every
+    /// count covers at most 1024 lane-entry updates, and a cancellation at
+    /// the first count leaves only the first tile's first entry applied.
+    #[test]
+    fn wide_batch_rows_are_counted_in_lane_tiles() {
+        let graph = Laplacian::from_edges(40, (1..40).map(|leaf| (0, leaf, 1.0))).unwrap();
+        let operator = CsrLaplacian::from_laplacian(&graph).unwrap();
+        let super::ColumnIndices::Compact(neighbors) = &operator.columns else {
+            panic!("compact star columns");
+        };
+        let lanes = 1_100;
+        let mut input = vec![0.0; 40 * lanes];
+        input[..lanes].fill(1.0);
+        let mut row = vec![f64::NAN; lanes];
+        let mut full = Recorder::default();
+        operator
+            .row_product(neighbors, &input, lanes, 0, &mut row, &mut full)
+            .unwrap();
+        assert_eq!(row, vec![39.0; lanes]);
+        assert!(full.max_units <= 1024, "{}", full.max_units);
+        // 39 single-entry segments plus the tile count in the full tile; three
+        // 13-entry segments plus the tile count in the 76-lane tile.
+        assert_eq!(full.advances, (39 + 1) + (3 + 1));
+        assert_eq!(full.units, 39 * lanes + lanes);
+        let mut row = vec![f64::NAN; lanes];
+        let mut cancelled = Recorder {
+            stop_at: Some(1),
+            ..Recorder::default()
+        };
+        assert!(
+            operator
+                .row_product(neighbors, &input, lanes, 0, &mut row, &mut cancelled)
+                .is_err()
+        );
+        assert_eq!(row[..1024], [1.0; 1024]);
+        assert!(row[1024..].iter().all(|value| value.is_nan()));
     }
 
     #[cfg(feature = "parallel")]

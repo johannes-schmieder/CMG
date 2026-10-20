@@ -406,23 +406,43 @@ impl Laplacian {
         })
     }
 
-    pub(crate) fn from_prepared_parts(
+    /// Publish a prepared numeric frame. The diagonal metadata scan is counted
+    /// in segments and the shared handles are allocated after a poll; the
+    /// caller polls once more before returning the graph.
+    pub(crate) fn from_prepared_parts<M: crate::cancel::Meter>(
         vertex_count: usize,
         edges: Vec<Edge>,
         diagonal: Vec<f64>,
         prepared_topology_lineage: Arc<()>,
         prepared_components: Arc<Components>,
-    ) -> Self {
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
         debug_assert_eq!(diagonal.len(), vertex_count);
         let mut diagonal_nnz = 0_usize;
         let mut maximum_degree = 0.0_f64;
-        for &degree in &diagonal {
-            diagonal_nnz += usize::from(degree != 0.0);
-            maximum_degree = maximum_degree.max(degree);
-        }
+        crate::cancel::chunked(
+            meter,
+            "prepared numeric metadata",
+            diagonal.len(),
+            2,
+            |range| {
+                for &degree in &diagonal[range] {
+                    diagonal_nnz += usize::from(degree != 0.0);
+                    maximum_degree = maximum_degree.max(degree);
+                }
+                Ok(())
+            },
+        )?;
         let matrix_nnz = diagonal_nnz + 2 * edges.len();
         let operator_norm_bound = 2.0 * maximum_degree;
-        Self {
+        meter.allocation(
+            "prepared numeric publication",
+            crate::storage::add(
+                crate::storage::arc_bytes::<Vec<Edge>>()?,
+                crate::storage::arc_bytes::<Vec<f64>>()?,
+            )?,
+        )?;
+        Ok(Self {
             vertex_count,
             edges: Arc::new(edges),
             diagonal: Arc::new(diagonal),
@@ -431,7 +451,7 @@ impl Laplacian {
             lineage: Arc::new(()),
             prepared_topology_lineage: Some(prepared_topology_lineage),
             prepared_components: Some(prepared_components),
-        }
+        })
     }
 
     /// Remove only zero-degree rows, preserving canonical edge and addition order.
@@ -638,20 +658,22 @@ impl Laplacian {
     ) -> Result<(), CmgError> {
         let columns = width.get();
         crate::cancel::zero(meter, "Laplacian matvec", output)?;
-        crate::cancel::chunked(
+        // Each output slot still receives its edges in canonical order; wide
+        // batches only split an edge's lanes into counted tiles.
+        crate::cancel::row_lanes(
             meter,
             "Laplacian matvec",
             self.edges.len(),
             columns,
-            |range| {
-                for edge in &self.edges[range] {
-                    let u = edge.u() * columns;
-                    let v = edge.v() * columns;
-                    for lane in 0..columns {
-                        let difference = edge.weight * (input[u + lane] - input[v + lane]);
-                        output[u + lane] += difference;
-                        output[v + lane] -= difference;
-                    }
+            1,
+            |index, lanes| {
+                let edge = &self.edges[index];
+                let u = edge.u() * columns;
+                let v = edge.v() * columns;
+                for lane in lanes {
+                    let difference = edge.weight * (input[u + lane] - input[v + lane]);
+                    output[u + lane] += difference;
+                    output[v + lane] -= difference;
                 }
                 Ok(())
             },

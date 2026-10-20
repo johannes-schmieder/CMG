@@ -482,16 +482,21 @@ fn restrict_lanes<L: StoredIndex, M: Meter>(
     meter: &mut M,
 ) -> Result<(), CmgError> {
     // Keep each subtraction and the ascending fine-vertex addition order.
-    crate::cancel::chunked(meter, "CMG restriction", labels.len(), columns, |range| {
-        for fine in range {
+    crate::cancel::row_lanes(
+        meter,
+        "CMG restriction",
+        labels.len(),
+        columns,
+        1,
+        |fine, lanes| {
             let target = labels[fine].index() * columns;
-            for lane in 0..columns {
+            for lane in lanes {
                 coarse[target + lane] +=
                     rhs[fine * columns + lane] - product[fine * columns + lane];
             }
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 #[inline(always)]
@@ -503,8 +508,8 @@ fn prolong_lanes<L: StoredIndex, M: Meter>(
     #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
     meter: &mut M,
 ) -> Result<(), CmgError> {
-    let operation = |row: usize, values: &mut [f64]| {
-        let source = labels[row].index() * columns;
+    let operation = |row: usize, first: usize, values: &mut [f64]| {
+        let source = labels[row].index() * columns + first;
         for (lane, value) in values.iter_mut().enumerate() {
             *value += coarse[source + lane];
         }
@@ -516,12 +521,22 @@ fn prolong_lanes<L: StoredIndex, M: Meter>(
         meter.joined("CMG prolongation")?;
         return rows;
     }
-    crate::cancel::chunked(meter, "CMG prolongation", labels.len(), columns, |range| {
-        for row in range {
-            operation(row, &mut fine[row * columns..(row + 1) * columns]);
-        }
-        Ok(())
-    })
+    crate::cancel::row_lanes(
+        meter,
+        "CMG prolongation",
+        labels.len(),
+        columns,
+        1,
+        |row, lanes| {
+            let first = lanes.start;
+            operation(
+                row,
+                first,
+                &mut fine[row * columns + first..row * columns + lanes.end],
+            );
+            Ok(())
+        },
+    )
 }
 
 fn validate_prolong_dimensions(

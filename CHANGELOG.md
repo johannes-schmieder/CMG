@@ -142,6 +142,29 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 - Profiled hierarchy and preconditioner builds reserve their phase-record and
   profile banks fallibly under the build's meter and include them in budget
   admission.
+- Reductions stop after cancellation (second M3b review repair). The fixed
+  balanced reduction tree takes fallible leaves: a lane that observes
+  cancellation keeps a stopped state, skips the rest of its leaves and stops
+  every other lane at its next leaf; started lanes join, and without
+  cancellation the leftmost failing leaf's error is reported. PCG dot, norm
+  scale and scaled-square reductions and component-centering sums propagate
+  `Cancelled` instead of treating a cancelled leaf as zero. Leaf arithmetic,
+  compensation, the tree and every bit are unchanged.
+- Batch lanes wider than one counted segment are processed and counted in
+  lane tiles of at most 1024 lanes in every lane kernel (edge-list and CSR
+  matrix products, elementwise and parallel rows, restriction, prolongation,
+  pruned transfers, centering and the terminal batch solves), so the work
+  between counts is bounded at any supported width. Each lane keeps its
+  operation order; widths up to 1024 run exactly as before.
+- Prepared numeric publication is metered: the diagonal metadata scan is
+  counted, the shared handles are allocated after a poll and the frame polls
+  once more after publication; topology preparation polls before each of its
+  four map reserves. `PreparedLaplacianWorkspace::new_with` constructs the
+  assembly scratch under a `BuildContext` (budget, cancellation);
+  `new` and `new_with_budget` share it.
+- `solve_pcg_with` copies its owned solution through a fallible, counted copy
+  followed by the final checkpoint, so a cancellation during or after the copy
+  returns no result.
 
 ### Removed
 

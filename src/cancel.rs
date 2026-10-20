@@ -268,12 +268,23 @@ impl<M: Meter> Progress for M {
 pub(crate) struct LanePoll<'a> {
     query: Option<Cancellation<'a>>,
     pending: usize,
+    stopped: bool,
 }
 
 #[cfg(feature = "parallel")]
 impl<'a> LanePoll<'a> {
     pub(crate) fn new(query: Option<Cancellation<'a>>) -> Self {
-        Self { query, pending: 0 }
+        Self {
+            query,
+            pending: 0,
+            stopped: false,
+        }
+    }
+
+    /// Whether this lane has observed cancellation. A stopped lane's every
+    /// later advance fails without querying again.
+    pub(crate) fn stopped(&self) -> bool {
+        self.stopped
     }
 }
 
@@ -283,6 +294,9 @@ impl Progress for LanePoll<'_> {
 
     #[inline]
     fn advance(&mut self, phase: &'static str, units: usize) -> Result<(), CmgError> {
+        if self.stopped {
+            return Err(CancelMeter::cancelled(phase));
+        }
         let Some(cancel) = self.query else {
             return Ok(());
         };
@@ -290,6 +304,7 @@ impl Progress for LanePoll<'_> {
         if self.pending >= POLL_UNITS as usize {
             self.pending = 0;
             if cancel() {
+                self.stopped = true;
                 return Err(CancelMeter::cancelled(phase));
             }
         }
@@ -321,6 +336,60 @@ pub(crate) fn chunked<P: Progress>(
         body(start..end)?;
         progress.advance(phase, (end - start) * weight)?;
         start = end;
+    }
+    Ok(())
+}
+
+/// The lane tiles of one `columns`-wide row at `weight` units per lane: the
+/// whole row without polling, or while one row fits a segment; otherwise
+/// consecutive tiles of at most `1024 / weight` lanes. Lanes are independent,
+/// so a tile only splits a row's lane loop and no lane's arithmetic changes.
+#[inline(always)]
+pub(crate) fn lane_tiles<P: Progress>(
+    columns: usize,
+    weight: usize,
+) -> impl Iterator<Item = core::ops::Range<usize>> {
+    let tile = if P::POLLS {
+        (1024 / weight.max(1)).max(1)
+    } else {
+        columns.max(1)
+    };
+    (0..columns)
+        .step_by(tile)
+        .map(move |start| start..columns.min(start + tile))
+}
+
+/// Run `body(row, lanes)` over `rows` rows of `columns` lanes at `weight`
+/// units per lane, in row order and ascending lanes. Rows narrow enough to
+/// share a segment are grouped as in [`chunked`]; a row wider than one
+/// segment is split into [`lane_tiles`], each counted after it runs, so the
+/// work between counts stays bounded at any batch width. Without polling every
+/// row runs whole, so an ordinary loop is unchanged.
+#[inline(always)]
+pub(crate) fn row_lanes<P: Progress>(
+    progress: &mut P,
+    phase: &'static str,
+    rows: usize,
+    columns: usize,
+    weight: usize,
+    mut body: impl FnMut(usize, core::ops::Range<usize>) -> Result<(), CmgError>,
+) -> Result<(), CmgError> {
+    let weight = weight.max(1);
+    let per_row = columns.saturating_mul(weight);
+    if !P::POLLS || per_row <= 1024 {
+        return chunked(progress, phase, rows, per_row, |range| {
+            for row in range {
+                body(row, 0..columns)?;
+            }
+            Ok(())
+        });
+    }
+    for row in 0..rows {
+        for lanes in lane_tiles::<P>(columns, weight) {
+            let units = lanes.len() * weight;
+            body(row, lanes)?;
+            progress.advance(phase, units)?;
+        }
     }
     Ok(())
 }
@@ -445,10 +514,11 @@ impl Meter for CancelMeter<'_> {
         phase: &'static str,
     ) -> Result<Vec<T>, CmgError> {
         let mut result = CancelMeter::try_capacity(self, values.len(), phase)?;
-        for &value in values {
-            self.work(phase, 8)?;
-            result.push(value);
-        }
+        // Eight units per value, counted in segments of 128 values.
+        chunked(self, phase, values.len(), 8, |range| {
+            result.extend_from_slice(&values[range]);
+            Ok(())
+        })?;
         Ok(result)
     }
 
@@ -510,8 +580,10 @@ pub(crate) fn try_filled<T: Clone, M: Meter>(
     Ok(values)
 }
 
-/// Test support: a polling progress recording every advance, which cancels
-/// at a chosen one-based advance. Kernels write partial results before the
+/// Test support: a polling meter recording every counted operation, which
+/// cancels at a chosen one-based operation. `max_units` is the largest
+/// single count a kernel reported before splitting, so a segment wider than
+/// one bounded operation is visible. Kernels write partial results before the
 /// cancellation, so tests observe how much of a traversal ran.
 #[cfg(test)]
 #[derive(Default)]
@@ -523,18 +595,72 @@ pub(crate) struct Recorder {
 }
 
 #[cfg(test)]
-impl Progress for Recorder {
+impl Meter for Recorder {
     const POLLS: bool = true;
 
-    fn advance(&mut self, phase: &'static str, units: usize) -> Result<(), CmgError> {
+    fn work(&mut self, phase: &'static str, units: u16) -> Result<(), CmgError> {
         self.advances += 1;
-        self.units += units;
-        self.max_units = self.max_units.max(units);
+        self.units += usize::from(units);
         if self.stop_at == Some(self.advances) {
             Err(CancelMeter::cancelled(phase))
         } else {
             Ok(())
         }
+    }
+
+    fn items(&mut self, phase: &'static str, mut units: usize) -> Result<(), CmgError> {
+        self.max_units = self.max_units.max(units);
+        while units > 0 {
+            let step = units.min(1024);
+            self.work(phase, step as u16)?;
+            units -= step;
+        }
+        Ok(())
+    }
+
+    fn allocation(&mut self, _: &'static str, _: usize) -> Result<(), CmgError> {
+        Ok(())
+    }
+
+    fn checkpoint(&mut self, _: &'static str) -> Result<(), CmgError> {
+        Ok(())
+    }
+
+    fn try_capacity<T>(&mut self, count: usize, phase: &'static str) -> Result<Vec<T>, CmgError> {
+        crate::storage::try_capacity(count, phase)
+    }
+
+    fn try_filled<T: Clone>(
+        &mut self,
+        count: usize,
+        value: T,
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError> {
+        crate::storage::try_filled(count, value, phase)
+    }
+
+    fn copy_slice<T: Copy>(
+        &mut self,
+        values: &[T],
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError> {
+        let mut result = crate::storage::try_capacity(values.len(), phase)?;
+        result.extend_from_slice(values);
+        Ok(result)
+    }
+
+    fn sort_by<T: Copy>(
+        &mut self,
+        values: &mut [T],
+        compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+        phase: &'static str,
+    ) -> Result<(), CmgError> {
+        heapsort(self, values, compare, phase)
+    }
+
+    #[cfg(feature = "parallel")]
+    fn query(&self) -> Option<Cancellation<'_>> {
+        None
     }
 }
 

@@ -103,21 +103,24 @@ impl LowerFactor {
         row: usize,
         input: &[f64],
         columns: usize,
+        lanes: core::ops::Range<usize>,
         forward: bool,
         sums: &mut [f64],
         progress: &mut P,
     ) -> Result<(), CmgError> {
         const PHASE: &str = "terminal row correction";
+        let sums = &mut sums[lanes.clone()];
         sums.fill(0.0);
+        let width = sums.len();
         let mut add_entry = |source: usize, coefficient: f64| {
-            for (lane, value) in sums.iter_mut().enumerate() {
+            for (lane, value) in (lanes.start..).zip(sums.iter_mut()) {
                 *value += coefficient * input[source * columns + lane];
             }
         };
         match self {
             Self::Packed { values } if forward => {
                 let start = row * row.saturating_sub(1) / 2;
-                chunked(progress, PHASE, row, columns, |range| {
+                chunked(progress, PHASE, row, width, |range| {
                     for column in range {
                         add_entry(column, values[start + column]);
                     }
@@ -128,7 +131,7 @@ impl LowerFactor {
                 let mut index = row * (row + 1) / 2 + row;
                 let first = row + 1;
                 let count = (input.len() / columns).saturating_sub(first);
-                chunked(progress, PHASE, count, columns, |range| {
+                chunked(progress, PHASE, count, width, |range| {
                     for later in first + range.start..first + range.end {
                         add_entry(later, values[index]);
                         index += later;
@@ -147,7 +150,7 @@ impl LowerFactor {
                     progress,
                     PHASE,
                     row_offsets[row + 1] - start,
-                    columns,
+                    width,
                     |range| {
                         for index in start + range.start..start + range.end {
                             add_entry(entries[index] as usize, row_values[index]);
@@ -167,7 +170,7 @@ impl LowerFactor {
                     progress,
                     PHASE,
                     column_offsets[row + 1] - start,
-                    columns,
+                    width,
                     |range| {
                         for index in start + range.start..start + range.end {
                             add_entry(rows[index] as usize, column_values[index]);
@@ -446,64 +449,84 @@ impl GroundedLdl {
         // avoids another allocation and loads each factor entry once per tile.
         let scratch_len = columns.min(solution.len());
         let dimension = self.active_dimension();
+        // Wide batches run each row in lane tiles: every lane keeps its own
+        // correction order, and the counted work per tile stays bounded.
         for row in 0..dimension {
-            let scratch = &mut solution[..scratch_len];
-            self.lower
-                .batch_correction(row, forward, columns, true, scratch, meter)?;
-            meter.items("terminal forward solve", columns)?;
-            for lane in 0..columns {
-                let value = rhs[self.permutation[row] * columns + lane] - scratch[lane];
-                forward[row * columns + lane] = value;
-                #[cfg(feature = "experimental-components")]
-                {
-                    factor_solution[row * columns + lane] = value / self.diagonal[row];
+            for lanes in crate::cancel::lane_tiles::<M>(columns, 1) {
+                let scratch = &mut solution[..scratch_len];
+                self.lower.batch_correction(
+                    row,
+                    forward,
+                    columns,
+                    lanes.clone(),
+                    true,
+                    scratch,
+                    meter,
+                )?;
+                meter.items("terminal forward solve", lanes.len())?;
+                for lane in lanes {
+                    let value = rhs[self.permutation[row] * columns + lane] - scratch[lane];
+                    forward[row * columns + lane] = value;
+                    #[cfg(feature = "experimental-components")]
+                    {
+                        factor_solution[row * columns + lane] = value / self.diagonal[row];
+                    }
                 }
             }
         }
         #[cfg(not(feature = "experimental-components"))]
-        chunked(
+        crate::cancel::row_lanes(
             meter,
             "terminal diagonal solve",
             dimension,
             columns,
-            |range| {
-                for row in range {
-                    for lane in 0..columns {
-                        forward[row * columns + lane] /= self.diagonal[row];
-                    }
+            1,
+            |row, lanes| {
+                for lane in lanes {
+                    forward[row * columns + lane] /= self.diagonal[row];
                 }
                 Ok(())
             },
         )?;
         for row in (0..dimension).rev() {
-            let scratch = &mut solution[..scratch_len];
-            self.lower
-                .batch_correction(row, factor_solution, columns, false, scratch, meter)?;
-            meter.items("terminal backward solve", columns)?;
-            for lane in 0..columns {
-                #[cfg(feature = "experimental-components")]
-                {
-                    factor_solution[row * columns + lane] -= scratch[lane];
-                }
-                #[cfg(not(feature = "experimental-components"))]
-                {
-                    factor_solution[row * columns + lane] =
-                        forward[row * columns + lane] - scratch[lane];
+            for lanes in crate::cancel::lane_tiles::<M>(columns, 1) {
+                let scratch = &mut solution[..scratch_len];
+                self.lower.batch_correction(
+                    row,
+                    factor_solution,
+                    columns,
+                    lanes.clone(),
+                    false,
+                    scratch,
+                    meter,
+                )?;
+                meter.items("terminal backward solve", lanes.len())?;
+                for lane in lanes {
+                    #[cfg(feature = "experimental-components")]
+                    {
+                        factor_solution[row * columns + lane] -= scratch[lane];
+                    }
+                    #[cfg(not(feature = "experimental-components"))]
+                    {
+                        factor_solution[row * columns + lane] =
+                            forward[row * columns + lane] - scratch[lane];
+                    }
                 }
             }
         }
         crate::cancel::zero(meter, "terminal scatter", solution)?;
-        chunked(
+        crate::cancel::row_lanes(
             meter,
             "terminal scatter",
             self.permutation.len(),
             columns,
-            |range| {
-                for row in range {
-                    let vertex = self.permutation[row];
-                    solution[vertex * columns..(vertex + 1) * columns]
-                        .copy_from_slice(&factor_solution[row * columns..(row + 1) * columns]);
-                }
+            1,
+            |row, lanes| {
+                let vertex = self.permutation[row];
+                solution[vertex * columns + lanes.start..vertex * columns + lanes.end]
+                    .copy_from_slice(
+                        &factor_solution[row * columns + lanes.start..row * columns + lanes.end],
+                    );
                 Ok(())
             },
         )
@@ -1562,6 +1585,7 @@ mod long_row_cancellation_tests {
                     ENTRIES,
                     &interleaved,
                     lanes,
+                    0..lanes,
                     true,
                     &mut sums,
                     &mut cancelled
@@ -1571,6 +1595,57 @@ mod long_row_cancellation_tests {
             let per_segment = 1024 / lanes;
             assert_eq!(sums, vec![(stop * per_segment) as f64; lanes]);
         }
+    }
+
+    /// A batch wider than one counted segment traverses the long row once per
+    /// lane tile: every count covers at most 1024 lane-entry updates, the
+    /// counts are deterministic, and a cancellation at the first count leaves
+    /// only the first tile's first entry applied.
+    #[test]
+    fn wide_batch_rows_are_counted_in_lane_tiles() {
+        let unit = long_sparse_row(|_| 1.0);
+        let lanes = 1_100;
+        let tiles: Vec<_> = crate::cancel::lane_tiles::<Recorder>(lanes, 1).collect();
+        assert_eq!(tiles, [0..1024, 1024..1100]);
+        let interleaved = vec![1.0; (ENTRIES + 1) * lanes];
+        let mut sums = vec![f64::NAN; lanes];
+        let mut full = Recorder::default();
+        for tile in &tiles {
+            unit.batch_correction(
+                ENTRIES,
+                &interleaved,
+                lanes,
+                tile.clone(),
+                true,
+                &mut sums,
+                &mut full,
+            )
+            .unwrap();
+        }
+        assert_eq!(sums, vec![ENTRIES as f64; lanes]);
+        assert!(full.max_units <= 1024, "{}", full.max_units);
+        assert_eq!(full.units, ENTRIES * lanes);
+        // One entry per segment in the full tile, thirteen in the 76-lane tile.
+        assert_eq!(full.advances, ENTRIES + ENTRIES.div_ceil(13));
+        let mut sums = vec![f64::NAN; lanes];
+        let mut cancelled = Recorder {
+            stop_at: Some(1),
+            ..Recorder::default()
+        };
+        assert!(
+            unit.batch_correction(
+                ENTRIES,
+                &interleaved,
+                lanes,
+                tiles[0].clone(),
+                true,
+                &mut sums,
+                &mut cancelled,
+            )
+            .is_err()
+        );
+        assert_eq!(sums[..1024], [1.0; 1024]);
+        assert!(sums[1024..].iter().all(|value| value.is_nan()));
     }
 
     #[test]

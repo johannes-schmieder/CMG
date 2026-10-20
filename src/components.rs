@@ -1,6 +1,6 @@
 //! Deterministic connected components and Laplacian null-space operations.
 
-use crate::cancel::{Meter, Unmetered, chunked, try_filled as filled};
+use crate::cancel::{Meter, Unmetered, chunked, row_lanes, try_filled as filled};
 use crate::execution::Team;
 use crate::preconditioner::Width;
 use crate::{CmgError, Laplacian, ValidationOptions};
@@ -395,10 +395,15 @@ fn center_labeled<M: Meter>(
     crate::cancel::zero(meter, "CMG centering", sums)?;
     crate::cancel::zero(meter, "CMG centering", corrections)?;
     let vertices = values.len() / columns;
-    chunked(meter, "CMG centering sums", vertices, columns, |range| {
-        for vertex in range {
+    row_lanes(
+        meter,
+        "CMG centering sums",
+        vertices,
+        columns,
+        1,
+        |vertex, lanes| {
             let component = label(vertex);
-            for lane in 0..columns {
+            for lane in lanes {
                 let value = values[vertex * columns + lane];
                 if !value.is_finite() {
                     return Err(CmgError::NonFiniteMatrixValue {
@@ -410,33 +415,37 @@ fn center_labeled<M: Meter>(
                 let slot = component * columns + lane;
                 neumaier_add(&mut sums[slot], &mut corrections[slot], value);
             }
-        }
-        Ok(())
-    })?;
-    chunked(
+            Ok(())
+        },
+    )?;
+    row_lanes(
         meter,
         "CMG centering means",
         sizes.len(),
         columns,
-        |range| {
-            for component in range {
-                for lane in 0..columns {
-                    let slot = component * columns + lane;
-                    means[slot] = (sums[slot] + corrections[slot]) / sizes[component] as f64;
-                }
+        1,
+        |component, lanes| {
+            for lane in lanes {
+                let slot = component * columns + lane;
+                means[slot] = (sums[slot] + corrections[slot]) / sizes[component] as f64;
             }
             Ok(())
         },
     )?;
-    chunked(meter, "CMG centering", vertices, columns, |range| {
-        for vertex in range {
+    row_lanes(
+        meter,
+        "CMG centering",
+        vertices,
+        columns,
+        1,
+        |vertex, lanes| {
             let component = label(vertex);
-            for lane in 0..columns {
+            for lane in lanes {
                 values[vertex * columns + lane] -= means[component * columns + lane];
             }
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 /// Connected-component metadata for a weighted graph.
@@ -1147,17 +1156,19 @@ fn center_single_component<M: Meter>(
     meter.joined("CMG fixed-chunk centering sums")?;
     let mean = sum? / size as f64;
     means[0] = mean;
-    let rows = crate::preconditioner::rows_parallel(team, meter.query(), values, 1, |_, value| {
-        value[0] -= mean;
-    });
+    let rows =
+        crate::preconditioner::rows_parallel(team, meter.query(), values, 1, |_, _, value| {
+            value[0] -= mean;
+        });
     meter.joined("CMG fixed-chunk centering")?;
     rows
 }
 
 /// Fixed-chunk compensated sum: chunk partials combined by the team's fixed
 /// balanced tree. Each leaf counts its chunk in segments through its lane's
-/// poll; a cancelled lane stops, and the joined caller reports cancellation.
-/// Otherwise the leftmost non-finite value is reported.
+/// poll; a failing leaf stops its lane and no later leaf of that lane runs.
+/// The joined caller reports cancellation; otherwise the leftmost non-finite
+/// value is reported.
 #[cfg(feature = "parallel")]
 fn fixed_chunk_sum(
     values: &[f64],
@@ -1187,6 +1198,8 @@ fn fixed_chunk_sum(
                         .iter()
                         .enumerate()
                     {
+                        #[cfg(test)]
+                        crate::execution::visits::visit(values.as_ptr());
                         if !value.is_finite() {
                             return Err(CmgError::NonFiniteMatrixValue {
                                 row: start + range.start + offset,
@@ -1201,11 +1214,10 @@ fn fixed_chunk_sum(
             )?;
             Ok(sum + correction)
         },
-        |left: Result<f64, CmgError>, right| {
-            let mut sum = left?;
+        |mut sum, right| {
             let mut correction = 0.0;
-            neumaier_add(&mut sum, &mut correction, right?);
-            Ok(sum + correction)
+            neumaier_add(&mut sum, &mut correction, right);
+            sum + correction
         },
     )
 }
@@ -1669,5 +1681,58 @@ mod fixed_chunk_sum_tests {
             fixed_chunk_sum(&bad, 4096, team, None),
             Err(CmgError::NonFiniteMatrixValue { row: 70_000, .. })
         ));
+    }
+
+    /// Many centering leaves on a ceiling of two lanes over a four-worker pool:
+    /// after a lane observes cancellation, no lane starts another leaf, so the
+    /// entries visited after the observation stay within one poll interval
+    /// per lane; the uncancelled sum then visits every entry and is exact.
+    #[test]
+    fn many_centering_leaves_stop_after_cancellation_and_rerun_exactly() {
+        use crate::execution::{gauge, visits};
+        let _witness = gauge::WITNESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let len = 1 << 21;
+        let chunk = 256;
+        let values: Vec<f64> = (0..len).map(|i| ((i * 11 % 103) as f64).cos()).collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let team = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
+        let interval = crate::cancel::POLL_UNITS as usize;
+        let reference = fixed_chunk_sum(&values, chunk, team, None).unwrap();
+        for stop in [0, 2] {
+            let calls = AtomicUsize::new(0);
+            let at = AtomicUsize::new(usize::MAX);
+            let query = || {
+                if calls.fetch_add(1, Ordering::SeqCst) < stop {
+                    return false;
+                }
+                let _ = at.compare_exchange(
+                    usize::MAX,
+                    visits::count(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+                true
+            };
+            visits::watch(&values);
+            let result = fixed_chunk_sum(&values, chunk, team, Some(&query));
+            let total = visits::count();
+            visits::unwatch();
+            assert!(matches!(result, Err(CmgError::Cancelled { .. })));
+            let at = at.load(Ordering::SeqCst);
+            assert!(at <= total);
+            assert!(total - at <= team.worker_ceiling() * (interval + 1024));
+            assert!(total <= (stop + 2 * team.worker_ceiling()) * (interval + 1024));
+            assert!(total < len / 4, "{total} of {len} entries visited");
+        }
+        visits::watch(&values);
+        let again = fixed_chunk_sum(&values, chunk, team, None).unwrap();
+        assert_eq!(visits::count(), len);
+        visits::unwatch();
+        assert_eq!(again.to_bits(), reference.to_bits());
     }
 }
