@@ -572,19 +572,24 @@ mod wide_batch_tests {
         for threshold in [1, total / 4, total / 2, total - 1] {
             let calls = AtomicUsize::new(0);
             let query = || calls.fetch_add(1, Ordering::SeqCst) >= threshold;
-            assert!(matches!(
-                preconditioner.apply_compatible_batch_into(
-                    &rhs,
-                    &mut output,
-                    WIDE,
-                    &mut workspace,
-                    ApplyContext {
-                        cancel: Some(&query),
-                        ..planned
-                    },
+            match preconditioner.apply_compatible_batch_into(
+                &rhs,
+                &mut output,
+                WIDE,
+                &mut workspace,
+                ApplyContext {
+                    cancel: Some(&query),
+                    ..planned
+                },
+            ) {
+                Err(CmgError::Cancelled { .. }) => {}
+                // Lane polls depend on chunk claiming; a run may end first.
+                Ok(()) => assert!(
+                    calls.load(Ordering::SeqCst) <= threshold,
+                    "query {threshold} ignored"
                 ),
-                Err(CmgError::Cancelled { .. })
-            ));
+                Err(error) => panic!("threshold {threshold}: {error}"),
+            }
             preconditioner
                 .apply_compatible_batch_into(&rhs, &mut output, WIDE, &mut workspace, planned)
                 .unwrap();
