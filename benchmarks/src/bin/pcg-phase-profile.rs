@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use cmg::{
-    CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions, PcgPhaseProfile,
-    PcgWorkspace, profile_pcg_with_plan, solve_pcg_with_plan_and_workspace,
+    CmgOptions, Laplacian, ParallelExecutor, ParallelOptions, ParallelPcgSolver, PcgOptions,
+    PcgPhaseProfile, PcgWorkspace,
 };
 
 struct BenchGraph {
@@ -167,26 +167,28 @@ fn main() {
 
     let bench = build_case(&case, scale);
     let rhs = compatible_rhs(&bench.graph);
-    let solver = ParallelPcgSolver::build(
-        &bench.graph,
-        CmgOptions::default(),
-        ParallelOptions {
-            threads,
-            ..ParallelOptions::default()
-        },
-    )
-    .expect("parallel solver should build");
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads,
+        ..ParallelOptions::default()
+    })
+    .expect("parallel executor should build");
+    let team = executor.team();
+    let solver = ParallelPcgSolver::build(&bench.graph, CmgOptions::default(), team)
+        .expect("parallel solver should build");
     let options = PcgOptions::default();
     let mut production_workspace = PcgWorkspace::new(solver.preconditioner());
 
-    let warm = solve_pcg_with_plan_and_workspace(
+    let warm = cmg::solve_pcg_with(
         solver.graph(),
         solver.preconditioner(),
-        solver.plan(),
         &rhs,
         options,
         &mut production_workspace,
-        solver.executor(),
+        cmg::SolveContext {
+            plan: Some(solver.try_plan(team).expect("parallel plan")),
+            team: Some(team),
+            ..cmg::SolveContext::default()
+        },
     )
     .expect("planned solve should converge");
     black_box(&warm);
@@ -201,39 +203,48 @@ fn main() {
     for repetition in 0..repetitions {
         let (production_elapsed, production) = if repetition % 2 == 0 {
             let start = Instant::now();
-            let result = solve_pcg_with_plan_and_workspace(
+            let result = cmg::solve_pcg_with(
                 solver.graph(),
                 solver.preconditioner(),
-                solver.plan(),
                 black_box(&rhs),
                 options,
                 &mut production_workspace,
-                solver.executor(),
+                cmg::SolveContext {
+                    plan: Some(solver.try_plan(team).expect("parallel plan")),
+                    team: Some(team),
+                    ..cmg::SolveContext::default()
+                },
             )
             .expect("planned solve should converge");
             (start.elapsed().as_nanos(), result)
         } else {
-            let profiled = profile_pcg_with_plan(
+            let profiled = cmg::profile_pcg(
                 solver.graph(),
                 solver.preconditioner(),
-                solver.plan(),
                 black_box(&rhs),
                 options,
-                solver.executor(),
+                cmg::SolveContext {
+                    plan: Some(solver.try_plan(team).expect("parallel plan")),
+                    team: Some(team),
+                    ..cmg::SolveContext::default()
+                },
             )
             .expect("profiled solve should converge");
             assert_same_solution(warm.solution(), profiled.solution());
             phases.push(profiled.profile());
 
             let start = Instant::now();
-            let result = solve_pcg_with_plan_and_workspace(
+            let result = cmg::solve_pcg_with(
                 solver.graph(),
                 solver.preconditioner(),
-                solver.plan(),
                 black_box(&rhs),
                 options,
                 &mut production_workspace,
-                solver.executor(),
+                cmg::SolveContext {
+                    plan: Some(solver.try_plan(team).expect("parallel plan")),
+                    team: Some(team),
+                    ..cmg::SolveContext::default()
+                },
             )
             .expect("planned solve should converge");
             (start.elapsed().as_nanos(), result)
@@ -257,13 +268,16 @@ fn main() {
         );
 
         if repetition % 2 == 0 {
-            let profiled = profile_pcg_with_plan(
+            let profiled = cmg::profile_pcg(
                 solver.graph(),
                 solver.preconditioner(),
-                solver.plan(),
                 black_box(&rhs),
                 options,
-                solver.executor(),
+                cmg::SolveContext {
+                    plan: Some(solver.try_plan(team).expect("parallel plan")),
+                    team: Some(team),
+                    ..cmg::SolveContext::default()
+                },
             )
             .expect("profiled solve should converge");
             assert_same_solution(production.solution(), profiled.solution());
@@ -325,7 +339,10 @@ fn main() {
         bench.graph.vertex_count(),
         bench.input_edges,
         bench.graph.edge_count(),
-        solver.plan().operator_count(),
+        solver
+            .try_plan(team)
+            .expect("parallel plan")
+            .operator_count(),
         warm.iterations(),
         warm.restarts(),
         warm.residual_norm(),

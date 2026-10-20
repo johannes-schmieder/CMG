@@ -1,4 +1,4 @@
-//! Cooperative cancellation for bounded serial construction.
+//! Cooperative cancellation for bounded construction, application and PCG.
 //!
 //! Construction kernels count conservative primitive units (arithmetic, record
 //! visits, comparisons and moves) while they work. The meter polls the caller's
@@ -100,35 +100,6 @@ impl<'a> CancelMeter<'a> {
         crate::storage::try_capacity(count, phase)
     }
 
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_filled<T: Copy>(
-        &mut self,
-        count: usize,
-        value: T,
-        phase: &'static str,
-    ) -> Result<Vec<T>, CmgError> {
-        let mut result = self.try_capacity(count, phase)?;
-        for _ in 0..count {
-            self.work(phase, 8)?;
-            result.push(value);
-        }
-        Ok(result)
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn copy_slice<T: Copy>(
-        &mut self,
-        values: &[T],
-        phase: &'static str,
-    ) -> Result<Vec<T>, CmgError> {
-        let mut result = self.try_capacity(values.len(), phase)?;
-        for &value in values {
-            self.work(phase, 8)?;
-            result.push(value);
-        }
-        Ok(result)
-    }
-
     // Allocation-free heapsort. Each comparison and bounded swap is counted.
     // Callers use constant-work comparators and scalar/record Copy payloads.
     pub(crate) fn sort_by<T: Copy>(
@@ -176,42 +147,296 @@ impl<'a> CancelMeter<'a> {
     }
 }
 
-// Preparation code shared by ordinary and cancellable callers takes an
-// optional meter. `None` performs exactly the ordinary operations; a meter
-// polls before every allocation and counts initialization in bounded chunks.
+/// Polling policy of one construction or preparation kernel.
+///
+/// Every kernel has one implementation generic over its meter. [`Unmetered`]
+/// is zero-sized and compiles every hook away, preserving the ordinary
+/// allocation, initialization and sorting code; [`CancelMeter`] counts the
+/// same bounded operations and polls at the fixed cadence and before every
+/// allocation. Arithmetic and storage layouts never depend on the meter.
+pub(crate) trait Meter {
+    /// Whether this meter polls (static specialization switch).
+    const POLLS: bool;
 
-/// Elements initialized per counted operation (8 units each).
+    /// Count one bounded operation of 1 through 1024 primitive units.
+    fn work(&mut self, phase: &'static str, units: u16) -> Result<(), CmgError>;
+
+    /// Poll before an allocation of `bytes` requested bytes.
+    fn allocation(&mut self, phase: &'static str, bytes: usize) -> Result<(), CmgError>;
+
+    /// Poll unconditionally, for example before publishing a completed object.
+    fn checkpoint(&mut self, phase: &'static str) -> Result<(), CmgError>;
+
+    /// Exact-capacity storage after a checked layout.
+    fn try_capacity<T>(&mut self, count: usize, phase: &'static str) -> Result<Vec<T>, CmgError>;
+
+    /// Construction fill: one counted operation per value when polling.
+    fn try_filled<T: Clone>(
+        &mut self,
+        count: usize,
+        value: T,
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError>;
+
+    /// Exact-capacity copy of a slice.
+    fn copy_slice<T: Copy>(
+        &mut self,
+        values: &[T],
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError>;
+
+    /// Sort with a total-order comparator. Polling meters use counted
+    /// allocation-free heapsort; the ordinary path uses the standard unstable
+    /// sort. Comparators are total, so both produce identical sequences.
+    fn sort_by<T: Copy>(
+        &mut self,
+        values: &mut [T],
+        compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+        phase: &'static str,
+    ) -> Result<(), CmgError>;
+
+    /// The sticky query, for parallel lanes that poll independently.
+    #[cfg(feature = "parallel")]
+    fn query(&self) -> Option<Cancellation<'_>>;
+
+    /// Count `units` primitive units in bounded steps of at most 1024.
+    #[inline(always)]
+    fn items(&mut self, phase: &'static str, mut units: usize) -> Result<(), CmgError> {
+        if Self::POLLS {
+            while units > 0 {
+                let step = units.min(1024);
+                // step is in 1..=1024.
+                self.work(phase, step as u16)?;
+                units -= step;
+            }
+        }
+        Ok(())
+    }
+
+    /// After joined parallel lanes: poll once when polling, so a lane that
+    /// stopped early on the sticky query is reported as cancellation.
+    #[cfg(feature = "parallel")]
+    #[inline(always)]
+    fn joined(&mut self, phase: &'static str) -> Result<(), CmgError> {
+        if Self::POLLS {
+            self.checkpoint(phase)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Run `body` over `0..len` in consecutive chunks whose `weight`-unit items
+/// total at most 1024 units, counting every chunk. Without polling, `body` runs
+/// once over the whole range, so an ordinary loop is unchanged. Chunking only
+/// splits a forward loop; it never changes arithmetic or order.
+#[inline(always)]
+pub(crate) fn chunked<M: Meter>(
+    meter: &mut M,
+    phase: &'static str,
+    len: usize,
+    weight: usize,
+    mut body: impl FnMut(core::ops::Range<usize>) -> Result<(), CmgError>,
+) -> Result<(), CmgError> {
+    if !M::POLLS {
+        return body(0..len);
+    }
+    let weight = weight.max(1);
+    let step = (1024 / weight).max(1);
+    let mut start = 0;
+    while start < len {
+        let end = len.min(start + step);
+        body(start..end)?;
+        meter.items(phase, (end - start) * weight)?;
+        start = end;
+    }
+    Ok(())
+}
+
+/// Zero `values` in counted chunks; explicit fill work is polled like any other.
+#[inline(always)]
+pub(crate) fn zero<M: Meter>(
+    meter: &mut M,
+    phase: &'static str,
+    values: &mut [f64],
+) -> Result<(), CmgError> {
+    chunked(meter, phase, values.len(), 1, |range| {
+        values[range].fill(0.0);
+        Ok(())
+    })
+}
+
+/// Items one parallel lane processes between two polls of the sticky query.
+#[cfg(feature = "parallel")]
+pub(crate) const LANE_ITEMS: usize = 1 << 12;
+
+/// Run one parallel lane's `range` in sub-ranges of [`LANE_ITEMS`], stopping
+/// early once the query is true. The joining coordinator then reports the
+/// cancellation; outputs of a stopped lane are discarded.
+#[cfg(feature = "parallel")]
+#[inline(always)]
+pub(crate) fn lane(
+    query: Option<Cancellation<'_>>,
+    range: core::ops::Range<usize>,
+    mut body: impl FnMut(core::ops::Range<usize>),
+) {
+    let Some(cancel) = query else {
+        return body(range);
+    };
+    let mut start = range.start;
+    while start < range.end {
+        if cancel() {
+            return;
+        }
+        let end = range.end.min(start + LANE_ITEMS);
+        body(start..end);
+        start = end;
+    }
+}
+
+/// The ordinary, non-polling meter.
+pub(crate) struct Unmetered;
+
+impl Meter for Unmetered {
+    const POLLS: bool = false;
+
+    #[inline(always)]
+    fn work(&mut self, _: &'static str, _: u16) -> Result<(), CmgError> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn allocation(&mut self, _: &'static str, _: usize) -> Result<(), CmgError> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn checkpoint(&mut self, _: &'static str) -> Result<(), CmgError> {
+        Ok(())
+    }
+
+    #[inline]
+    fn try_capacity<T>(&mut self, count: usize, phase: &'static str) -> Result<Vec<T>, CmgError> {
+        crate::storage::try_capacity(count, phase)
+    }
+
+    #[inline]
+    fn try_filled<T: Clone>(
+        &mut self,
+        count: usize,
+        value: T,
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError> {
+        crate::storage::try_filled(count, value, phase)
+    }
+
+    #[inline]
+    fn copy_slice<T: Copy>(
+        &mut self,
+        values: &[T],
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError> {
+        let mut result = crate::storage::try_capacity(values.len(), phase)?;
+        result.extend_from_slice(values);
+        Ok(result)
+    }
+
+    #[inline]
+    fn sort_by<T: Copy>(
+        &mut self,
+        values: &mut [T],
+        compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+        _: &'static str,
+    ) -> Result<(), CmgError> {
+        values.sort_unstable_by(compare);
+        Ok(())
+    }
+
+    #[cfg(feature = "parallel")]
+    #[inline(always)]
+    fn query(&self) -> Option<Cancellation<'_>> {
+        None
+    }
+}
+
+impl Meter for CancelMeter<'_> {
+    const POLLS: bool = true;
+
+    #[inline]
+    fn work(&mut self, phase: &'static str, units: u16) -> Result<(), CmgError> {
+        CancelMeter::work(self, phase, units)
+    }
+
+    #[inline]
+    fn allocation(&mut self, phase: &'static str, bytes: usize) -> Result<(), CmgError> {
+        CancelMeter::allocation(self, phase, bytes)
+    }
+
+    fn checkpoint(&mut self, phase: &'static str) -> Result<(), CmgError> {
+        CancelMeter::checkpoint(self, phase)
+    }
+
+    fn try_capacity<T>(&mut self, count: usize, phase: &'static str) -> Result<Vec<T>, CmgError> {
+        CancelMeter::try_capacity(self, count, phase)
+    }
+
+    fn try_filled<T: Clone>(
+        &mut self,
+        count: usize,
+        value: T,
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError> {
+        let mut result = CancelMeter::try_capacity(self, count, phase)?;
+        for _ in 0..count {
+            self.work(phase, 8)?;
+            result.push(value.clone());
+        }
+        Ok(result)
+    }
+
+    fn copy_slice<T: Copy>(
+        &mut self,
+        values: &[T],
+        phase: &'static str,
+    ) -> Result<Vec<T>, CmgError> {
+        let mut result = CancelMeter::try_capacity(self, values.len(), phase)?;
+        for &value in values {
+            self.work(phase, 8)?;
+            result.push(value);
+        }
+        Ok(result)
+    }
+
+    fn sort_by<T: Copy>(
+        &mut self,
+        values: &mut [T],
+        compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+        phase: &'static str,
+    ) -> Result<(), CmgError> {
+        CancelMeter::sort_by(self, values, compare, phase)
+    }
+
+    #[cfg(feature = "parallel")]
+    #[inline]
+    fn query(&self) -> Option<Cancellation<'_>> {
+        Some(self.cancel)
+    }
+}
+
+// Workspace preparation fills large zeroed banks. Its polling meter counts
+// them in chunks rather than per value; the ordinary path is one reserve and
+// one fill with the caller's allocation-failure context.
+
+/// Values initialized per counted workspace operation (8 units each).
 const FILL_CHUNK: usize = 128;
 
-#[inline]
-pub(crate) fn count(
-    meter: &mut Option<&mut CancelMeter<'_>>,
-    phase: &'static str,
-    units: u16,
-) -> Result<(), CmgError> {
-    meter
-        .as_deref_mut()
-        .map_or(Ok(()), |meter| meter.work(phase, units))
-}
-
-pub(crate) fn checkpoint(
-    meter: &mut Option<&mut CancelMeter<'_>>,
-    phase: &'static str,
-) -> Result<(), CmgError> {
-    meter
-        .as_deref_mut()
-        .map_or(Ok(()), |meter| meter.checkpoint(phase))
-}
-
-/// Exact-capacity storage; allocator failure reports `context`.
-pub(crate) fn try_reserved<T>(
-    meter: &mut Option<&mut CancelMeter<'_>>,
+/// Exact-capacity workspace storage; allocator failure reports `context`.
+pub(crate) fn try_reserved<T, M: Meter>(
+    meter: &mut M,
     len: usize,
     context: &'static str,
 ) -> Result<Vec<T>, CmgError> {
-    if let Some(meter) = meter.as_deref_mut() {
-        meter.allocation(context, len.saturating_mul(core::mem::size_of::<T>()))?;
-    }
+    meter.allocation(context, len.saturating_mul(core::mem::size_of::<T>()))?;
     let mut values = Vec::new();
     values
         .try_reserve_exact(len)
@@ -219,24 +444,23 @@ pub(crate) fn try_reserved<T>(
     Ok(values)
 }
 
-/// `len` copies of `value` in exact-capacity storage.
-pub(crate) fn try_filled<T: Clone>(
-    meter: &mut Option<&mut CancelMeter<'_>>,
+/// `len` copies of `value` in exact-capacity workspace storage.
+pub(crate) fn try_filled<T: Clone, M: Meter>(
+    meter: &mut M,
     len: usize,
     value: T,
     context: &'static str,
 ) -> Result<Vec<T>, CmgError> {
     let mut values = try_reserved(meter, len, context)?;
-    match meter.as_deref_mut() {
-        None => values.resize(len, value),
-        Some(meter) => {
-            while values.len() < len {
-                let next = (len - values.len()).min(FILL_CHUNK);
-                // next <= 128, so the operation is at most 1024 units.
-                meter.work(context, 8 * next as u16)?;
-                values.resize(values.len() + next, value.clone());
-            }
+    if M::POLLS {
+        while values.len() < len {
+            let next = (len - values.len()).min(FILL_CHUNK);
+            // next <= 128, so the operation is at most 1024 units.
+            meter.work(context, 8 * next as u16)?;
+            values.resize(values.len() + next, value.clone());
         }
+    } else {
+        values.resize(len, value);
     }
     Ok(values)
 }

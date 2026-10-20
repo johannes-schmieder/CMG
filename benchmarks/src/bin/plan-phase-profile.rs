@@ -64,17 +64,24 @@ fn main() {
         ..ParallelOptions::default()
     })
     .expect("executor");
-    let preconditioner =
-        CmgPreconditioner::build_with_executor(&graph, CmgOptions::default(), &executor)
-            .expect("preconditioner");
-    black_box(ParallelCmgPlan::build(&preconditioner, &executor).expect("warm plan"));
+    let preconditioner = CmgPreconditioner::build_with(
+        &graph,
+        cmg::BuildOptions::from(CmgOptions::default()),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )
+    .expect("preconditioner");
+    black_box(ParallelCmgPlan::build(&preconditioner, executor.team()).expect("warm plan"));
     let mut samples = Vec::with_capacity(repetitions);
     let mut profiles = Vec::with_capacity(repetitions);
     let mut plan = None;
     for _ in 0..repetitions {
         let start = Instant::now();
         let (candidate, profile) =
-            ParallelCmgPlan::build_profiled(&preconditioner, &executor).expect("profiled plan");
+            ParallelCmgPlan::build_profiled(&preconditioner, executor.team())
+                .expect("profiled plan");
         samples.push(start.elapsed().as_nanos());
         profiles.push(profile);
         plan = Some(candidate);

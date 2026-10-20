@@ -16,16 +16,21 @@ Keep durable files only when they serve production code, correctness/regression 
 | `coarsen.rs` | aggregate mappings and Galerkin contraction |
 | `hierarchy.rs` | recursive hierarchy construction and stopping rules |
 | `ldl.rs` | grounded terminal factorization and solve |
-| `preconditioner.rs` | stationary recursive CMG cycle |
-| `pcg.rs` | certified PCG and repeated-RHS interfaces |
+| `build.rs` | `BuildOptions` and the construction `BuildContext` (team, cancellation, budget) |
+| `cancel.rs` | cancellation meters, bounded chunks and parallel-lane polling |
+| `preconditioner.rs` | the one construction pipeline, `ApplyContext` and the row-operator plan |
+| `preconditioner/cycle.rs` | the one stationary cycle recursion over scalar or interleaved lanes |
+| `preconditioner/batch.rs` | interleaved multi-RHS workspace and entry point |
+| `pcg.rs` | the one certified PCG recurrence, `SolveContext` and its entry points |
 | `prepared.rs` | fixed-topology validation and changing-weight numeric assembly |
 | `sddm.rs` / `sddm_solver.rs` | SDDM validation, augmentation, solve wrapper |
 | `workspace.rs` | reusable numerical scratch storage |
-| `execution.rs` | optional package-owned parallel executor |
+| `execution.rs` | borrowed `Team` handle and optional standalone owned executor |
+| `execution_stage.rs` | fixed-chunk stages dispatched on a borrowed team |
 | `csr.rs` | deterministic row-oriented operators for parallel kernels |
 | `parallel_solver.rs` | automatic memory-aware parallel routing |
 | `memory.rs` | checked pre-build estimates and retained-memory reports |
-| `pcg_profile.rs` | profiling-only PCG instrumentation |
+| `pcg_profile.rs` | profiling recorder for the production PCG recurrence |
 
 The public API is re-exported from `src/lib.rs`; implementation details should remain private unless a stable user-facing need exists.
 

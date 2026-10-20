@@ -99,26 +99,47 @@ fn build_pre(
             preserve_unpruned_stopping: true,
             factor_terminal_components: true,
         };
-        let budget = CmgPreconditioner::component_executor_construction_cmg_allocation_bound(
+        let budget = CmgPreconditioner::construction_allocation_bound(
             graph.vertex_count(),
             graph.edge_count(),
-            options,
-            component,
+            cmg::BuildOptions {
+                hierarchy: options,
+                components: component,
+            },
+            true,
         )
         .unwrap();
-        CmgPreconditioner::build_component_experiment_with_executor_and_cmg_budget(
-            graph, options, component, executor, budget,
+        CmgPreconditioner::build_with(
+            graph,
+            cmg::BuildOptions {
+                hierarchy: options,
+                components: component,
+            },
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                budget_bytes: Some(budget),
+                ..cmg::BuildContext::default()
+            },
         )
         .unwrap()
     } else {
-        let budget = CmgPreconditioner::executor_construction_cmg_allocation_bound(
+        let budget = CmgPreconditioner::construction_allocation_bound(
             graph.vertex_count(),
             graph.edge_count(),
-            options,
+            cmg::BuildOptions::from(options),
+            true,
         )
         .unwrap();
-        CmgPreconditioner::build_with_executor_and_cmg_budget(graph, options, executor, budget)
-            .unwrap()
+        CmgPreconditioner::build_with(
+            graph,
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                budget_bytes: Some(budget),
+                ..cmg::BuildContext::default()
+            },
+        )
+        .unwrap()
     }
 }
 
@@ -144,22 +165,41 @@ fn build_pre(
         };
         #[cfg(feature = "admitted-screen")]
         {
-            let budget = CmgPreconditioner::component_serial_construction_allocation_bound(
+            let budget = CmgPreconditioner::construction_allocation_bound(
                 graph.vertex_count(),
                 graph.edge_count(),
-                options,
-                component,
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: component,
+                },
+                false,
             )
             .unwrap();
-            CmgPreconditioner::build_component_experiment_serial_with_budget(
-                graph, options, component, budget,
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: component,
+                },
+                cmg::BuildContext {
+                    budget_bytes: Some(budget),
+                    ..cmg::BuildContext::default()
+                },
             )
             .unwrap()
         }
         #[cfg(all(feature = "candidate-screen", not(feature = "serial-setup-screen")))]
         {
-            CmgPreconditioner::build_component_experiment_with_executor(
-                graph, options, component, executor,
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: component,
+                },
+                cmg::BuildContext {
+                    team: Some(executor.team()),
+                    ..cmg::BuildContext::default()
+                },
             )
             .unwrap()
         }
@@ -168,18 +208,35 @@ fn build_pre(
             any(not(feature = "candidate-screen"), feature = "serial-setup-screen")
         ))]
         {
-            CmgPreconditioner::build_component_experiment(graph, options, component).unwrap()
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: component,
+                },
+                cmg::BuildContext::default(),
+            )
+            .unwrap()
         }
     } else {
         #[cfg(feature = "admitted-screen")]
         {
-            let budget = CmgPreconditioner::serial_construction_allocation_bound(
+            let budget = CmgPreconditioner::construction_allocation_bound(
                 graph.vertex_count(),
                 graph.edge_count(),
-                options,
+                cmg::BuildOptions::from(options),
+                false,
             )
             .unwrap();
-            CmgPreconditioner::build_serial_with_budget(graph, options, budget).unwrap()
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions::from(options),
+                cmg::BuildContext {
+                    budget_bytes: Some(budget),
+                    ..cmg::BuildContext::default()
+                },
+            )
+            .unwrap()
         }
         #[cfg(all(feature = "serial-setup-screen", not(feature = "admitted-screen")))]
         {
@@ -187,7 +244,15 @@ fn build_pre(
         }
         #[cfg(not(feature = "serial-setup-screen"))]
         {
-            CmgPreconditioner::build_with_executor(graph, options, executor).unwrap()
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions::from(options),
+                cmg::BuildContext {
+                    team: Some(executor.team()),
+                    ..cmg::BuildContext::default()
+                },
+            )
+            .unwrap()
         }
     }
 }
@@ -273,21 +338,24 @@ fn fallback_screen(input_dir: Option<&str>) {
             let start = Instant::now();
             let executor = build_executor(execution);
             let pre = build_pre(&graph, component, &executor, 8);
-            let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+            let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
             let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
             let mut solution = [0.0; N];
             let discarded_setup = start.elapsed().as_nanos();
             let solving = Instant::now();
-            let discarded = solve_pcg_with_plan_into_with_workspace(
+            let discarded = cmg::solve_pcg_into(
                 &graph,
                 &pre,
-                &plan,
                 &rhs,
                 None,
                 &mut solution,
                 PcgOptions::default(),
                 &mut workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .unwrap();
             let discarded_solve = solving.elapsed().as_nanos();
@@ -306,17 +374,16 @@ fn fallback_screen(input_dir: Option<&str>) {
             let preparing = Instant::now();
             let executor = build_executor(execution);
             let pre = build_pre(&graph, component, &executor, N + 1);
-            let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+            let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
             let setup = preparing.elapsed().as_nanos();
             let preparing = Instant::now();
             let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
             let workspace_time = preparing.elapsed().as_nanos();
             let retained = live() - base;
             let solving = Instant::now();
-            let accepted = solve_pcg_with_plan_into_with_workspace(
+            let accepted = cmg::solve_pcg_into(
                 &graph,
                 &pre,
-                &plan,
                 &rhs,
                 None,
                 &mut solution,
@@ -326,7 +393,11 @@ fn fallback_screen(input_dir: Option<&str>) {
                     ..Default::default()
                 },
                 &mut workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .unwrap();
             let solve = solving.elapsed().as_nanos();
@@ -398,7 +469,7 @@ fn main() {
                     ..Default::default()
                 });
                 let pre = build_pre(&graph, component, &executor, 64);
-                let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+                let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
                 let setup = start.elapsed().as_nanos();
                 let prepare = Instant::now();
                 let mut ws = PcgWorkspace::try_new(&pre).unwrap();
@@ -410,10 +481,9 @@ fn main() {
                 let mut iterations = 0;
                 let mut diagnostics = PcgDiagnostics::default();
                 for _ in 0..4 {
-                    diagnostics = solve_pcg_with_plan_into_with_workspace(
+                    diagnostics = cmg::solve_pcg_into(
                         &graph,
                         &pre,
-                        &plan,
                         &rhs,
                         None,
                         &mut output,
@@ -422,7 +492,11 @@ fn main() {
                             ..Default::default()
                         },
                         &mut ws,
-                        &executor,
+                        cmg::SolveContext {
+                            plan: Some(&plan),
+                            team: Some(executor.team()),
+                            ..cmg::SolveContext::default()
+                        },
                     )
                     .unwrap();
                     iterations += diagnostics.iterations();

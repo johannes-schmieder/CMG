@@ -73,31 +73,56 @@ fn main() -> ExitCode {
                     };
                     #[cfg(feature = "candidate-screen")]
                     {
-                        CmgPreconditioner::build_component_experiment_with_executor(
-                            &graph, options, component, &executor,
+                        CmgPreconditioner::build_with(
+                            &graph,
+                            cmg::BuildOptions {
+                                hierarchy: options,
+                                components: component,
+                            },
+                            cmg::BuildContext {
+                                team: Some(executor.team()),
+                                ..cmg::BuildContext::default()
+                            },
                         )
                     }
                     #[cfg(not(feature = "candidate-screen"))]
                     {
-                        CmgPreconditioner::build_component_experiment(&graph, options, component)
+                        CmgPreconditioner::build_with(
+                            &graph,
+                            cmg::BuildOptions {
+                                hierarchy: options,
+                                components: component,
+                            },
+                            cmg::BuildContext::default(),
+                        )
                     }
                 } else {
-                    CmgPreconditioner::build_with_executor(&graph, options, &executor)
+                    CmgPreconditioner::build_with(
+                        &graph,
+                        cmg::BuildOptions::from(options),
+                        cmg::BuildContext {
+                            team: Some(executor.team()),
+                            ..cmg::BuildContext::default()
+                        },
+                    )
                 }
                 .unwrap();
-                let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+                let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
                 let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
                 let mut solution = [0.0; N];
-                let diagnostics = solve_pcg_with_plan_into_with_workspace(
+                let diagnostics = cmg::solve_pcg_into(
                     &graph,
                     &pre,
-                    &plan,
                     &rhs,
                     None,
                     &mut solution,
                     PcgOptions::default(),
                     &mut workspace,
-                    &executor,
+                    cmg::SolveContext {
+                        plan: Some(&plan),
+                        team: Some(executor.team()),
+                        ..cmg::SolveContext::default()
+                    },
                 );
                 let forward = solution
                     .iter()

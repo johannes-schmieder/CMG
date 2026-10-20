@@ -127,6 +127,25 @@ pub trait Storage {
     }
 }
 
+/// A stored `u32` or native vertex index.
+pub(crate) trait StoredIndex: Copy + Send + Sync {
+    fn index(self) -> usize;
+}
+
+impl StoredIndex for u32 {
+    #[inline(always)]
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+impl StoredIndex for usize {
+    #[inline(always)]
+    fn index(self) -> usize {
+        self
+    }
+}
+
 pub(crate) fn add(a: usize, b: usize) -> Result<usize, CmgError> {
     a.checked_add(b).ok_or(CmgError::InvalidHierarchy {
         context: "CMG storage size overflows",

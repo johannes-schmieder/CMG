@@ -2,9 +2,6 @@ use cmg::{
     CmgError, CmgOptions, CmgPreconditioner, CmgProblemSize, Laplacian, ParallelOptions,
     PcgBatchMut, PcgBatchRef, PcgBatchWorkspace, PcgDiagnostics, PcgOptions, PcgWorkspace,
     PreparedLaplacianTopology, RepeatedPcgMemoryEstimate, RepeatedPcgMemoryReport, solve_pcg,
-    solve_pcg_batch_into_with_workspace,
-    solve_pcg_batch_with_retained_preconditioner_into_with_workspace,
-    solve_pcg_into_with_workspace, solve_pcg_with_retained_preconditioner_into_with_workspace,
 };
 
 fn strict_options() -> PcgOptions {
@@ -172,7 +169,7 @@ fn caller_buffer_zero_start_is_bitwise_identical_and_warm_start_is_projected() {
     let owned = solve_pcg(&graph, &preconditioner, &rhs, strict_options()).unwrap();
     let mut workspace = PcgWorkspace::new(&preconditioner);
     let mut solution = vec![f64::NAN; graph.vertex_count()];
-    let diagnostics = solve_pcg_into_with_workspace(
+    let diagnostics = cmg::solve_pcg_into(
         &graph,
         &preconditioner,
         &rhs,
@@ -180,6 +177,7 @@ fn caller_buffer_zero_start_is_bitwise_identical_and_warm_start_is_projected() {
         &mut solution,
         strict_options(),
         &mut workspace,
+        cmg::SolveContext::default(),
     )
     .unwrap();
     assert_eq!(diagnostics, owned.diagnostics());
@@ -189,7 +187,7 @@ fn caller_buffer_zero_start_is_bitwise_identical_and_warm_start_is_projected() {
     assert_close(&solution, &dense_grounded_oracle(&graph, &rhs), 1.0e-10);
     let bytes = workspace.byte_len();
     let warm = target.map(|value| value + 17.0);
-    let warm_diagnostics = solve_pcg_into_with_workspace(
+    let warm_diagnostics = cmg::solve_pcg_into(
         &graph,
         &preconditioner,
         &rhs,
@@ -197,6 +195,7 @@ fn caller_buffer_zero_start_is_bitwise_identical_and_warm_start_is_projected() {
         &mut solution,
         strict_options(),
         &mut workspace,
+        cmg::SolveContext::default(),
     )
     .unwrap();
     assert_eq!(workspace.byte_len(), bytes);
@@ -208,7 +207,7 @@ fn caller_buffer_zero_start_is_bitwise_identical_and_warm_start_is_projected() {
     let mut nonfinite = warm;
     nonfinite[2] = f64::NAN;
     assert!(matches!(
-        solve_pcg_into_with_workspace(
+        cmg::solve_pcg_into(
             &graph,
             &preconditioner,
             &rhs,
@@ -216,6 +215,7 @@ fn caller_buffer_zero_start_is_bitwise_identical_and_warm_start_is_projected() {
             &mut solution,
             strict_options(),
             &mut workspace,
+            cmg::SolveContext::default()
         ),
         Err(CmgError::NonFiniteMatrixValue { .. })
     ));
@@ -246,7 +246,7 @@ fn strided_batch_matches_owned_results_and_dense_oracle() {
     let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
     let mut workspace = PcgBatchWorkspace::new(&preconditioner).unwrap();
     let bytes = workspace.byte_len();
-    solve_pcg_batch_into_with_workspace(
+    cmg::solve_pcg_batch_into(
         &graph,
         &preconditioner,
         rhs_view,
@@ -254,7 +254,8 @@ fn strided_batch_matches_owned_results_and_dense_oracle() {
         output_view,
         &mut diagnostics,
         strict_options(),
-        &mut workspace,
+        core::slice::from_mut(&mut workspace),
+        cmg::SolveContext::default(),
     )
     .unwrap();
     assert_eq!(workspace.byte_len(), bytes);
@@ -278,7 +279,7 @@ fn strided_batch_matches_owned_results_and_dense_oracle() {
             guesses[vertex * 3 + rhs_index] = targets[rhs_index][vertex] + 11.0;
         }
     }
-    solve_pcg_batch_into_with_workspace(
+    cmg::solve_pcg_batch_into(
         &graph,
         &preconditioner,
         rhs_view,
@@ -286,7 +287,8 @@ fn strided_batch_matches_owned_results_and_dense_oracle() {
         PcgBatchMut::strided(&mut output, 2, graph.vertex_count(), 1, 4).unwrap(),
         &mut diagnostics,
         strict_options(),
-        &mut workspace,
+        core::slice::from_mut(&mut workspace),
+        cmg::SolveContext::default(),
     )
     .unwrap();
     assert!(diagnostics.iter().all(|value| value.iterations() == 0));
@@ -306,7 +308,7 @@ fn empty_batches_are_supported_and_nonfinite_rhs_is_rejected() {
     let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
     let mut workspace = PcgBatchWorkspace::new(&preconditioner).unwrap();
     let mut empty_output = [];
-    solve_pcg_batch_into_with_workspace(
+    cmg::solve_pcg_batch_into(
         &graph,
         &preconditioner,
         PcgBatchRef::contiguous(&[], 0, 3).unwrap(),
@@ -314,14 +316,15 @@ fn empty_batches_are_supported_and_nonfinite_rhs_is_rejected() {
         PcgBatchMut::contiguous(&mut empty_output, 0, 3).unwrap(),
         &mut [],
         strict_options(),
-        &mut workspace,
+        core::slice::from_mut(&mut workspace),
+        cmg::SolveContext::default(),
     )
     .unwrap();
 
     let mut output = [0.0; 3];
     let mut diagnostics = [PcgDiagnostics::default()];
     assert!(matches!(
-        solve_pcg_batch_into_with_workspace(
+        cmg::solve_pcg_batch_into(
             &graph,
             &preconditioner,
             PcgBatchRef::contiguous(&[1.0, f64::NAN, -1.0], 1, 3).unwrap(),
@@ -329,7 +332,8 @@ fn empty_batches_are_supported_and_nonfinite_rhs_is_rejected() {
             PcgBatchMut::contiguous(&mut output, 1, 3).unwrap(),
             &mut diagnostics,
             strict_options(),
-            &mut workspace,
+            core::slice::from_mut(&mut workspace),
+            cmg::SolveContext::default()
         ),
         Err(CmgError::NonFiniteMatrixValue { .. })
     ));
@@ -359,7 +363,7 @@ fn retained_preconditioner_sequences_are_certified_against_each_current_graph() 
         let fresh_result = solve_pcg(&current, &fresh, &rhs, strict_options()).unwrap();
         let mut solution = vec![0.0; 7];
         let guess = (frame_index > 0).then_some(prior_solution.as_slice());
-        let result = solve_pcg_with_retained_preconditioner_into_with_workspace(
+        let result = cmg::solve_pcg_into(
             &current,
             &retained,
             &rhs,
@@ -367,6 +371,10 @@ fn retained_preconditioner_sequences_are_certified_against_each_current_graph() 
             &mut solution,
             strict_options(),
             &mut retained_workspace,
+            cmg::SolveContext {
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
         );
         if let Ok(diagnostics) = result {
             assert!(fresh_residual(&current, &rhs, &solution) <= diagnostics.tolerance());
@@ -375,7 +383,7 @@ fn retained_preconditioner_sequences_are_certified_against_each_current_graph() 
             let mut batch_solution = vec![0.0; 7];
             let mut batch_diagnostics = [PcgDiagnostics::default()];
             let mut batch_workspace = PcgBatchWorkspace::new(&retained).unwrap();
-            solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
+            cmg::solve_pcg_batch_into(
                 &current,
                 &retained,
                 PcgBatchRef::contiguous(&rhs, 1, 7).unwrap(),
@@ -383,7 +391,11 @@ fn retained_preconditioner_sequences_are_certified_against_each_current_graph() 
                 PcgBatchMut::contiguous(&mut batch_solution, 1, 7).unwrap(),
                 &mut batch_diagnostics,
                 strict_options(),
-                &mut batch_workspace,
+                core::slice::from_mut(&mut batch_workspace),
+                cmg::SolveContext {
+                    retained_preconditioner: true,
+                    ..cmg::SolveContext::default()
+                },
             )
             .unwrap();
             assert_close(&batch_solution, fresh_result.solution(), 2.0e-8);
@@ -395,7 +407,7 @@ fn retained_preconditioner_sequences_are_certified_against_each_current_graph() 
     let unrelated_graph = unrelated.assemble(&frames[1]).unwrap();
     let rhs = unrelated_graph.matvec(&target).unwrap();
     assert!(matches!(
-        solve_pcg_with_retained_preconditioner_into_with_workspace(
+        cmg::solve_pcg_into(
             &unrelated_graph,
             &retained,
             &rhs,
@@ -403,6 +415,10 @@ fn retained_preconditioner_sequences_are_certified_against_each_current_graph() 
             &mut prior_solution,
             strict_options(),
             &mut retained_workspace,
+            cmg::SolveContext {
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            }
         ),
         Err(CmgError::InvalidHierarchy { .. })
     ));
@@ -420,7 +436,7 @@ fn retained_solver_never_accepts_an_old_operator_only_initial_guess() {
     assert!(fresh_residual(&current, &rhs, &old_solution) > 1.0);
     let mut workspace = PcgWorkspace::new(&retained);
     let mut solution = vec![0.0; 4];
-    let result = solve_pcg_with_retained_preconditioner_into_with_workspace(
+    let result = cmg::solve_pcg_into(
         &current,
         &retained,
         &rhs,
@@ -434,6 +450,10 @@ fn retained_solver_never_accepts_an_old_operator_only_initial_guess() {
             ..PcgOptions::default()
         },
         &mut workspace,
+        cmg::SolveContext {
+            retained_preconditioner: true,
+            ..cmg::SolveContext::default()
+        },
     );
     assert!(result.is_err());
 }
@@ -495,8 +515,6 @@ fn repeated_memory_report_counts_current_and_retained_numeric_states() {
 #[cfg(feature = "profiling")]
 #[test]
 fn profiled_caller_batch_is_bitwise_identical_to_production() {
-    use cmg::profile_pcg_batch_into_with_workspace;
-
     let graph = Laplacian::from_edges(8, (0..7).map(|vertex| (vertex, vertex + 1, 1.0))).unwrap();
     let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
     let right_hand_sides: Vec<Vec<f64>> = (0..3)
@@ -514,7 +532,7 @@ fn profiled_caller_batch_is_bitwise_identical_to_production() {
     let mut profiled_diagnostics = vec![PcgDiagnostics::default(); 3];
     let mut production_workspace = PcgBatchWorkspace::new(&preconditioner).unwrap();
     let mut profiled_workspace = PcgBatchWorkspace::new(&preconditioner).unwrap();
-    solve_pcg_batch_into_with_workspace(
+    cmg::solve_pcg_batch_into(
         &graph,
         &preconditioner,
         PcgBatchRef::contiguous(&packed, 3, 8).unwrap(),
@@ -522,10 +540,11 @@ fn profiled_caller_batch_is_bitwise_identical_to_production() {
         PcgBatchMut::contiguous(&mut production_output, 3, 8).unwrap(),
         &mut production_diagnostics,
         strict_options(),
-        &mut production_workspace,
+        core::slice::from_mut(&mut production_workspace),
+        cmg::SolveContext::default(),
     )
     .unwrap();
-    let profile = profile_pcg_batch_into_with_workspace(
+    let profile = cmg::profile_pcg_batch_into(
         &graph,
         &preconditioner,
         PcgBatchRef::contiguous(&packed, 3, 8).unwrap(),
@@ -534,6 +553,7 @@ fn profiled_caller_batch_is_bitwise_identical_to_production() {
         &mut profiled_diagnostics,
         strict_options(),
         &mut profiled_workspace,
+        cmg::SolveContext::default(),
     )
     .unwrap();
     assert_eq!(production_diagnostics, profiled_diagnostics);
@@ -547,14 +567,7 @@ fn profiled_caller_batch_is_bitwise_identical_to_production() {
 #[cfg(feature = "parallel")]
 #[test]
 fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
-    use cmg::{
-        ParallelCmgPlan, ParallelExecutor, ParallelOptions, solve_pcg_batch_into_with_executor,
-        solve_pcg_batch_into_with_plan_and_workspace,
-        solve_pcg_batch_with_plan_and_retained_preconditioner_into_with_workspace,
-        solve_pcg_batch_with_retained_preconditioner_into_with_executor,
-        solve_pcg_with_plan_and_retained_preconditioner_into_with_workspace,
-        solve_pcg_with_plan_into_with_workspace,
-    };
+    use cmg::{ParallelCmgPlan, ParallelExecutor, ParallelOptions};
 
     let topology =
         PreparedLaplacianTopology::prepare(64, (0..63).map(|vertex| (vertex, vertex + 1))).unwrap();
@@ -600,7 +613,7 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
             .collect();
         let mut output = vec![0.0; packed.len()];
         let mut diagnostics = vec![PcgDiagnostics::default(); 4];
-        solve_pcg_batch_into_with_executor(
+        cmg::solve_pcg_batch_into(
             &current,
             &fresh,
             PcgBatchRef::contiguous(&packed, 4, 64).unwrap(),
@@ -609,7 +622,11 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
             &mut diagnostics,
             strict_options(),
             &mut workspaces,
-            &executor,
+            cmg::SolveContext {
+                team: Some(executor.team()),
+                concurrent_right_hand_sides: true,
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
         for rhs in 0..4 {
@@ -621,19 +638,22 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
             );
         }
 
-        let fresh_plan = ParallelCmgPlan::build(&fresh, &executor).unwrap();
+        let fresh_plan = ParallelCmgPlan::build(&fresh, executor.team()).unwrap();
         let mut planned_workspace = PcgBatchWorkspace::new(&fresh).unwrap();
-        solve_pcg_batch_into_with_plan_and_workspace(
+        cmg::solve_pcg_batch_into(
             &current,
             &fresh,
-            &fresh_plan,
             PcgBatchRef::contiguous(&packed, 4, 64).unwrap(),
             None,
             PcgBatchMut::contiguous(&mut output, 4, 64).unwrap(),
             &mut diagnostics,
             strict_options(),
-            &mut planned_workspace,
-            &executor,
+            core::slice::from_mut(&mut planned_workspace),
+            cmg::SolveContext {
+                plan: Some(&fresh_plan),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
         for rhs in 0..4 {
@@ -651,7 +671,7 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
         let mut retained_workspaces: Vec<_> = (0..threads.min(4))
             .map(|_| PcgBatchWorkspace::new(&retained).unwrap())
             .collect();
-        solve_pcg_batch_with_retained_preconditioner_into_with_executor(
+        cmg::solve_pcg_batch_into(
             &current,
             &retained,
             PcgBatchRef::contiguous(&packed, 4, 64).unwrap(),
@@ -660,7 +680,12 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
             &mut diagnostics,
             strict_options(),
             &mut retained_workspaces,
-            &executor,
+            cmg::SolveContext {
+                team: Some(executor.team()),
+                concurrent_right_hand_sides: true,
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
         for rhs in 0..4 {
@@ -675,19 +700,23 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
             );
         }
 
-        let plan = ParallelCmgPlan::build(&retained, &executor).unwrap();
+        let plan = ParallelCmgPlan::build(&retained, executor.team()).unwrap();
         let mut retained_workspace = PcgBatchWorkspace::new(&retained).unwrap();
-        solve_pcg_batch_with_plan_and_retained_preconditioner_into_with_workspace(
+        cmg::solve_pcg_batch_into(
             &current,
             &retained,
-            &plan,
             PcgBatchRef::contiguous(&packed, 4, 64).unwrap(),
             None,
             PcgBatchMut::contiguous(&mut output, 4, 64).unwrap(),
             &mut diagnostics,
             strict_options(),
-            &mut retained_workspace,
-            &executor,
+            core::slice::from_mut(&mut retained_workspace),
+            cmg::SolveContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
         for rhs in 0..4 {
@@ -704,16 +733,19 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
 
         let mut single_solution = vec![0.0; 64];
         let mut single_workspace = PcgWorkspace::new(&fresh);
-        solve_pcg_with_plan_into_with_workspace(
+        cmg::solve_pcg_into(
             &current,
             &fresh,
-            &fresh_plan,
             &right_hand_sides[0],
             None,
             &mut single_solution,
             strict_options(),
             &mut single_workspace,
-            &executor,
+            cmg::SolveContext {
+                plan: Some(&fresh_plan),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
         assert_close(
@@ -723,16 +755,20 @@ fn parallel_caller_buffers_cover_one_and_eight_threads_and_retained_plan() {
         );
 
         let mut retained_single_workspace = PcgWorkspace::new(&retained);
-        solve_pcg_with_plan_and_retained_preconditioner_into_with_workspace(
+        cmg::solve_pcg_into(
             &current,
             &retained,
-            &plan,
             &right_hand_sides[0],
             None,
             &mut single_solution,
             strict_options(),
             &mut retained_single_workspace,
-            &executor,
+            cmg::SolveContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
         assert_close(

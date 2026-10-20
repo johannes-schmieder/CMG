@@ -1,6 +1,6 @@
 use cmg::{
     CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgWorkspace, solve_pcg_batch_with_executor, solve_pcg_with_plan_and_workspace,
+    PcgOptions, PcgWorkspace, solve_pcg_batch_concurrent,
 };
 use std::env;
 use std::error::Error;
@@ -200,28 +200,38 @@ fn run(
         ..PcgOptions::default()
     };
 
-    black_box(CmgPreconditioner::build_with_executor(
+    black_box(CmgPreconditioner::build_with(
         &graph,
-        cmg_options,
-        &executor,
+        cmg::BuildOptions::from(cmg_options),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
     )?);
     let mut setup_ns = Vec::with_capacity(repetitions);
     let mut preconditioner = None;
     for _ in 0..repetitions {
         let start = Instant::now();
-        let candidate = CmgPreconditioner::build_with_executor(&graph, cmg_options, &executor)?;
+        let candidate = CmgPreconditioner::build_with(
+            &graph,
+            cmg::BuildOptions::from(cmg_options),
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                ..cmg::BuildContext::default()
+            },
+        )?;
         setup_ns.push(start.elapsed().as_nanos());
         preconditioner = Some(candidate);
     }
     let preconditioner = preconditioner
         .ok_or_else(|| io::Error::other("preconditioner setup produced no result"))?;
 
-    black_box(ParallelCmgPlan::build(&preconditioner, &executor)?);
+    black_box(ParallelCmgPlan::build(&preconditioner, executor.team())?);
     let mut plan_ns = Vec::with_capacity(repetitions);
     let mut plan = None;
     for _ in 0..repetitions {
         let start = Instant::now();
-        let candidate = ParallelCmgPlan::build(&preconditioner, &executor)?;
+        let candidate = ParallelCmgPlan::build(&preconditioner, executor.team())?;
         plan_ns.push(start.elapsed().as_nanos());
         plan = Some(candidate);
     }
@@ -230,12 +240,15 @@ fn run(
     let mut cmg_workspace = preconditioner.workspace();
     let mut apply_output = vec![0.0; vertices];
     let rhs = &right_hand_sides[0];
-    plan.apply_compatible_into(
-        &preconditioner,
+    preconditioner.apply_compatible_into_with(
         rhs,
         &mut apply_output,
         &mut cmg_workspace,
-        &executor,
+        cmg::ApplyContext {
+            plan: Some(&plan),
+            team: Some(executor.team()),
+            cancel: None,
+        },
     )?;
     let apply_loops = calibrate_apply(
         &preconditioner,
@@ -249,12 +262,15 @@ fn run(
     for _ in 0..repetitions {
         let start = Instant::now();
         for _ in 0..apply_loops {
-            plan.apply_compatible_into(
-                &preconditioner,
+            preconditioner.apply_compatible_into_with(
                 rhs,
                 &mut apply_output,
                 &mut cmg_workspace,
-                &executor,
+                cmg::ApplyContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    cancel: None,
+                },
             )?;
             black_box(&apply_output);
         }
@@ -273,27 +289,33 @@ fn run(
         batch_max_backward_error,
     ) = if mode == "single" {
         let mut workspace = PcgWorkspace::new(&preconditioner);
-        black_box(solve_pcg_with_plan_and_workspace(
+        black_box(cmg::solve_pcg_with(
             &graph,
             &preconditioner,
-            &plan,
             rhs,
             pcg_options,
             &mut workspace,
-            &executor,
+            cmg::SolveContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
         )?);
         let mut solve_ns = Vec::with_capacity(repetitions);
         let mut final_result = None;
         for _ in 0..repetitions {
             let start = Instant::now();
-            let candidate = solve_pcg_with_plan_and_workspace(
+            let candidate = cmg::solve_pcg_with(
                 &graph,
                 &preconditioner,
-                &plan,
                 rhs,
                 pcg_options,
                 &mut workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )?;
             solve_ns.push(start.elapsed().as_nanos());
             final_result = Some(candidate);
@@ -301,18 +323,27 @@ fn run(
         let mut total_ns = Vec::with_capacity(repetitions);
         for _ in 0..repetitions {
             let start = Instant::now();
-            let local_preconditioner =
-                CmgPreconditioner::build_with_executor(&graph, cmg_options, &executor)?;
-            let local_plan = ParallelCmgPlan::build(&local_preconditioner, &executor)?;
+            let local_preconditioner = CmgPreconditioner::build_with(
+                &graph,
+                cmg::BuildOptions::from(cmg_options),
+                cmg::BuildContext {
+                    team: Some(executor.team()),
+                    ..cmg::BuildContext::default()
+                },
+            )?;
+            let local_plan = ParallelCmgPlan::build(&local_preconditioner, executor.team())?;
             let mut local_workspace = PcgWorkspace::new(&local_preconditioner);
-            let total_result = solve_pcg_with_plan_and_workspace(
+            let total_result = cmg::solve_pcg_with(
                 &graph,
                 &local_preconditioner,
-                &local_plan,
                 rhs,
                 pcg_options,
                 &mut local_workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&local_plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )?;
             require_certified(total_result.backward_error())?;
             black_box(total_result);
@@ -342,23 +373,23 @@ fn run(
         )
     } else {
         let batch = &right_hand_sides[..16];
-        black_box(solve_pcg_batch_with_executor(
+        black_box(solve_pcg_batch_concurrent(
             &graph,
             &preconditioner,
             batch,
             pcg_options,
-            &executor,
+            executor.team(),
         )?);
         let mut solve_ns = Vec::with_capacity(repetitions);
         let mut final_results = None;
         for _ in 0..repetitions {
             let start = Instant::now();
-            let candidate = solve_pcg_batch_with_executor(
+            let candidate = solve_pcg_batch_concurrent(
                 &graph,
                 &preconditioner,
                 batch,
                 pcg_options,
-                &executor,
+                executor.team(),
             )?;
             solve_ns.push(start.elapsed().as_nanos());
             final_results = Some(candidate);
@@ -521,7 +552,16 @@ fn calibrate_apply(
     loop {
         let start = Instant::now();
         for _ in 0..loops {
-            plan.apply_compatible_into(preconditioner, rhs, output, workspace, executor)?;
+            preconditioner.apply_compatible_into_with(
+                rhs,
+                output,
+                workspace,
+                cmg::ApplyContext {
+                    plan: Some(plan),
+                    team: Some(executor.team()),
+                    cancel: None,
+                },
+            )?;
             black_box(&output);
         }
         if start.elapsed() >= APPLY_TARGET || loops >= 1_048_576 {

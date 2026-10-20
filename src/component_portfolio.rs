@@ -6,7 +6,7 @@ use crate::components::ComponentWorkspace;
 use crate::pcg::{allowed_residual, euclidean_norm, make_diagnostics};
 use crate::{
     CmgError, CmgOptions, CmgPreconditioner, ComponentBuildOptions, Components, GroundedLdl,
-    Laplacian, PcgDiagnostics, PcgOptions, PcgWorkspace, solve_pcg_into_with_workspace,
+    Laplacian, PcgDiagnostics, PcgOptions, PcgWorkspace, solve_pcg_into,
 };
 
 /// Prepared experimental partition of one fixed numerical Laplacian.
@@ -100,14 +100,17 @@ impl ComponentPcgDiagnostics {
 }
 
 fn build_active(graph: &Laplacian, options: CmgOptions) -> Result<CmgPreconditioner, CmgError> {
-    CmgPreconditioner::build_component_experiment(
+    CmgPreconditioner::build_with(
         graph,
-        options,
-        ComponentBuildOptions {
-            prune_coarse_isolates: true,
-            preserve_unpruned_stopping: true,
-            factor_terminal_components: true,
+        crate::BuildOptions {
+            hierarchy: options,
+            components: ComponentBuildOptions {
+                prune_coarse_isolates: true,
+                preserve_unpruned_stopping: true,
+                factor_terminal_components: true,
+            },
         },
+        crate::BuildContext::default(),
     )
 }
 
@@ -239,7 +242,9 @@ impl ComponentPcgExperiment {
                     projected_rhs: zeros(n)?,
                     solution: zeros(n)?,
                     residual: zeros(n)?,
-                    component: split.components.try_workspace(None)?,
+                    component: split
+                        .components
+                        .try_workspace(&mut crate::cancel::Unmetered)?,
                     active_rhs: zeros(a)?,
                     active_guess: zeros(a)?,
                     active_solution: zeros(a)?,
@@ -302,7 +307,7 @@ impl ComponentPcgExperiment {
         }
         match (&self.route, &mut workspace.route) {
             (PortfolioRoute::Full(pre), PortfolioWorkspace::Full(ws)) => {
-                let original = solve_pcg_into_with_workspace(
+                let original = solve_pcg_into(
                     &self.graph,
                     pre,
                     rhs,
@@ -310,6 +315,7 @@ impl ComponentPcgExperiment {
                     solution,
                     options,
                     ws,
+                    crate::SolveContext::default(),
                 )?;
                 Ok(ComponentPcgDiagnostics {
                     original,
@@ -322,14 +328,17 @@ impl ComponentPcgExperiment {
                     &mut ws.projected_rhs,
                     options.validation,
                     &mut ws.component,
+                    &mut crate::cancel::Unmetered,
                 )?;
                 let rhs_norm = euclidean_norm(rhs);
                 let bound = self.graph.operator_norm_bound();
                 let initial_residual = if let Some(guess) = initial_guess {
                     ws.solution.copy_from_slice(guess);
-                    split
-                        .components
-                        .center_in_place_with_workspace(&mut ws.solution, &mut ws.component)?;
+                    split.components.center_in_place_with_workspace(
+                        &mut ws.solution,
+                        &mut ws.component,
+                        &mut crate::cancel::Unmetered,
+                    )?;
                     residual_norm(&self.graph, rhs, &ws.solution, &mut ws.residual)?
                 } else {
                     ws.solution.fill(0.0);
@@ -364,6 +373,7 @@ impl ComponentPcgExperiment {
                     &mut ws.tiny_solution,
                     &mut ws.forward,
                     &mut ws.backward,
+                    &mut crate::cancel::Unmetered,
                 )?;
                 let active = if let (Some(pre), Some(pcg)) = (&split.active, &mut ws.active_pcg) {
                     gather(
@@ -375,7 +385,7 @@ impl ComponentPcgExperiment {
                         gather(&ws.solution, &split.active_vertices, &mut ws.active_guess);
                     }
                     let graph = pre.hierarchy().levels()[0].graph();
-                    Some(solve_pcg_into_with_workspace(
+                    Some(solve_pcg_into(
                         graph,
                         pre,
                         &ws.active_rhs,
@@ -383,6 +393,7 @@ impl ComponentPcgExperiment {
                         &mut ws.active_solution,
                         options,
                         pcg,
+                        crate::SolveContext::default(),
                     )?)
                 } else {
                     None
@@ -393,9 +404,11 @@ impl ComponentPcgExperiment {
                     &split.active_vertices,
                     &mut ws.solution,
                 );
-                split
-                    .components
-                    .center_in_place_with_workspace(&mut ws.solution, &mut ws.component)?;
+                split.components.center_in_place_with_workspace(
+                    &mut ws.solution,
+                    &mut ws.component,
+                    &mut crate::cancel::Unmetered,
+                )?;
                 let residual = residual_norm(&self.graph, rhs, &ws.solution, &mut ws.residual)?;
                 let tolerance =
                     allowed_residual(options, rhs_norm, bound, euclidean_norm(&ws.solution));

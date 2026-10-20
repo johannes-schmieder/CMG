@@ -16,17 +16,20 @@ fn mixed(path: usize, pairs: usize) -> Laplacian {
 }
 
 fn build(graph: &Laplacian, threshold: usize, prune: bool, blocks: bool) -> CmgPreconditioner {
-    CmgPreconditioner::build_component_experiment(
+    CmgPreconditioner::build_with(
         graph,
-        CmgOptions {
-            direct_threshold: threshold,
-            ..CmgOptions::default()
+        cmg::BuildOptions {
+            hierarchy: CmgOptions {
+                direct_threshold: threshold,
+                ..CmgOptions::default()
+            },
+            components: ComponentBuildOptions {
+                prune_coarse_isolates: prune,
+                factor_terminal_components: blocks,
+                ..ComponentBuildOptions::default()
+            },
         },
-        ComponentBuildOptions {
-            prune_coarse_isolates: prune,
-            factor_terminal_components: blocks,
-            ..ComponentBuildOptions::default()
-        },
+        cmg::BuildContext::default(),
     )
     .unwrap()
 }
@@ -122,14 +125,17 @@ fn preserving_stopping_compacts_the_original_hierarchy_without_early_dense_facto
                 ..CmgOptions::default()
             };
             let baseline = CmgPreconditioner::build(&graph, options).unwrap();
-            let compact = CmgPreconditioner::build_component_experiment(
+            let compact = CmgPreconditioner::build_with(
                 &graph,
-                options,
-                ComponentBuildOptions {
-                    prune_coarse_isolates: true,
-                    preserve_unpruned_stopping: true,
-                    factor_terminal_components: true,
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: ComponentBuildOptions {
+                        prune_coarse_isolates: true,
+                        preserve_unpruned_stopping: true,
+                        factor_terminal_components: true,
+                    },
                 },
+                cmg::BuildContext::default(),
             )
             .unwrap();
             let old = baseline.hierarchy().levels();
@@ -201,17 +207,20 @@ fn preserving_stopping_handles_empty_children_and_finest_isolates() {
         Laplacian::from_edges(0, []).unwrap(),
     ] {
         let baseline = build(&graph, 8, false, false);
-        let compact = CmgPreconditioner::build_component_experiment(
+        let compact = CmgPreconditioner::build_with(
             &graph,
-            CmgOptions {
-                direct_threshold: 8,
-                ..CmgOptions::default()
+            cmg::BuildOptions {
+                hierarchy: CmgOptions {
+                    direct_threshold: 8,
+                    ..CmgOptions::default()
+                },
+                components: ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    preserve_unpruned_stopping: true,
+                    factor_terminal_components: true,
+                },
             },
-            ComponentBuildOptions {
-                prune_coarse_isolates: true,
-                preserve_unpruned_stopping: true,
-                factor_terminal_components: true,
-            },
+            cmg::BuildContext::default(),
         )
         .unwrap();
         let rhs = vector(&graph, 2);
@@ -265,9 +274,18 @@ fn empty_child_keeps_both_smoothing_sweeps_with_reused_workspaces() {
                     ..cmg::ParallelOptions::default()
                 })
                 .unwrap();
-                let plan = cmg::ParallelCmgPlan::build(&pre, &executor).unwrap();
-                plan.apply_compatible_into(&pre, &rhs, &mut output, &mut workspace, &executor)
-                    .unwrap();
+                let plan = cmg::ParallelCmgPlan::build(&pre, executor.team()).unwrap();
+                pre.apply_compatible_into_with(
+                    &rhs,
+                    &mut output,
+                    &mut workspace,
+                    cmg::ApplyContext {
+                        plan: Some(&plan),
+                        team: Some(executor.team()),
+                        cancel: None,
+                    },
+                )
+                .unwrap();
                 close(&output, &expected, 1e-12);
             }
         }
@@ -499,10 +517,7 @@ fn heterogeneous_interleaved_components_preserve_range_and_block_separation() {
 
 #[test]
 fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator() {
-    use cmg::{
-        PcgWorkspace, PreparedLaplacianTopology,
-        solve_pcg_with_retained_preconditioner_into_with_workspace,
-    };
+    use cmg::{PcgWorkspace, PreparedLaplacianTopology};
     let original = mixed(80, 30);
     let topology = PreparedLaplacianTopology::prepare(
         original.vertex_count(),
@@ -512,17 +527,20 @@ fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator(
     let weights: Vec<_> = original.edges().iter().map(|e| e.weight()).collect();
     let first = topology.assemble(&weights).unwrap();
     for preserve_unpruned_stopping in [false, true] {
-        let pre = CmgPreconditioner::build_component_experiment(
+        let pre = CmgPreconditioner::build_with(
             &first,
-            CmgOptions {
-                direct_threshold: 4,
-                ..CmgOptions::default()
+            cmg::BuildOptions {
+                hierarchy: CmgOptions {
+                    direct_threshold: 4,
+                    ..CmgOptions::default()
+                },
+                components: ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    factor_terminal_components: true,
+                    preserve_unpruned_stopping,
+                },
             },
-            ComponentBuildOptions {
-                prune_coarse_isolates: true,
-                factor_terminal_components: true,
-                preserve_unpruned_stopping,
-            },
+            cmg::BuildContext::default(),
         )
         .unwrap();
         let hierarchy = pre.hierarchy().clone();
@@ -540,7 +558,7 @@ fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator(
                 )
                 .unwrap();
             let rhs = current.matvec(&known).unwrap();
-            let result = solve_pcg_with_retained_preconditioner_into_with_workspace(
+            let result = cmg::solve_pcg_into(
                 &current,
                 &pre,
                 &rhs,
@@ -551,6 +569,10 @@ fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator(
                     ..PcgOptions::default()
                 },
                 &mut ws,
+                cmg::SolveContext {
+                    retained_preconditioner: true,
+                    ..cmg::SolveContext::default()
+                },
             )
             .unwrap();
             close(&out, &known, 1e-7);
@@ -568,14 +590,18 @@ fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator(
         .unwrap();
         let rhs = unrelated.matvec(&known).unwrap();
         assert!(
-            solve_pcg_with_retained_preconditioner_into_with_workspace(
+            cmg::solve_pcg_into(
                 &unrelated,
                 &pre,
                 &rhs,
                 None,
                 &mut out,
                 PcgOptions::default(),
-                &mut ws
+                &mut ws,
+                cmg::SolveContext {
+                    retained_preconditioner: true,
+                    ..cmg::SolveContext::default()
+                }
             )
             .is_err()
         );
@@ -585,23 +611,23 @@ fn prepared_numeric_generations_keep_pruning_fixed_and_certify_current_operator(
 #[cfg(feature = "parallel")]
 #[test]
 fn existing_parallel_plans_and_workspace_budgets_accept_compact_levels() {
-    use cmg::{
-        ParallelCmgPlan, ParallelExecutor, ParallelOptions, PcgWorkspace,
-        solve_pcg_batch_with_executor, solve_pcg_with_plan_and_workspace,
-    };
+    use cmg::{ParallelCmgPlan, ParallelExecutor, ParallelOptions, PcgWorkspace, solve_pcg_batch};
     let graph = mixed(128, 40);
     for preserve_unpruned_stopping in [false, true] {
-        let pre = CmgPreconditioner::build_component_experiment(
+        let pre = CmgPreconditioner::build_with(
             &graph,
-            CmgOptions {
-                direct_threshold: 4,
-                ..CmgOptions::default()
+            cmg::BuildOptions {
+                hierarchy: CmgOptions {
+                    direct_threshold: 4,
+                    ..CmgOptions::default()
+                },
+                components: ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    factor_terminal_components: true,
+                    preserve_unpruned_stopping,
+                },
             },
-            ComponentBuildOptions {
-                prune_coarse_isolates: true,
-                factor_terminal_components: true,
-                preserve_unpruned_stopping,
-            },
+            cmg::BuildContext::default(),
         )
         .unwrap();
         let rhs = graph.matvec(&vector(&graph, 1)).unwrap();
@@ -614,40 +640,45 @@ fn existing_parallel_plans_and_workspace_budgets_accept_compact_levels() {
                 workspace_memory_budget_bytes: Some(bytes),
             })
             .unwrap();
-            let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+            let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
             let mut ws = PcgWorkspace::new(&pre);
-            let a = solve_pcg_with_plan_and_workspace(
+            let a = cmg::solve_pcg_with(
                 &graph,
                 &pre,
-                &plan,
                 &rhs,
                 PcgOptions::default(),
                 &mut ws,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .unwrap();
-            let b = solve_pcg_with_plan_and_workspace(
+            let b = cmg::solve_pcg_with(
                 &graph,
                 &pre,
-                &plan,
                 &rhs,
                 PcgOptions::default(),
                 &mut ws,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .unwrap();
             assert_eq!(a, b);
             assert!(a.residual_norm() <= a.tolerance());
-            let batch = solve_pcg_batch_with_executor(
+            let batch = solve_pcg_batch(
                 &graph,
                 &pre,
                 &[rhs.clone(), rhs.clone()],
                 PcgOptions::default(),
-                &executor,
             )
             .unwrap();
             assert_eq!(batch[0], batch[1]);
-            assert_eq!(executor.batch_concurrency(bytes, 2).unwrap(), 1);
+            assert_eq!(executor.team().batch_concurrency(bytes, 2).unwrap(), 1);
         }
     }
 }

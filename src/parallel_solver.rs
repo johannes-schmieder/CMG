@@ -2,12 +2,10 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use rayon::prelude::*;
-
+use crate::pcg::{result_from_diagnostics, solve_owned_concurrently, solve_pcg_in_workspace};
 use crate::{
-    CmgError, CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor,
-    ParallelOptions, PcgOptions, PcgResult, PcgWorkspace, solve_pcg_with_plan_and_workspace,
-    solve_pcg_with_workspace,
+    BuildContext, CmgError, CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan,
+    ParallelOptions, PcgOptions, PcgResult, PcgWorkspace, SolveContext, Team,
 };
 
 /// Default finest-graph edge threshold for planned single-RHS execution.
@@ -150,7 +148,7 @@ pub struct ParallelPcgWorkspace {
 }
 
 crate::storage::storage_fields!(ParallelPcgWorkspace, workspaces);
-crate::storage::storage_fields!(ParallelPcgSolver, preconditioner, plan, executor);
+crate::storage::storage_fields!(ParallelPcgSolver, preconditioner, plan);
 
 impl ParallelPcgWorkspace {
     /// Allocate one workspace; the pool expands on demand for batch execution.
@@ -182,11 +180,15 @@ impl ParallelPcgWorkspace {
     }
 }
 
-/// A reusable owner of one CMG hierarchy, optional parallel plan, and thread pool.
+/// A reusable owner of one CMG hierarchy, its lazy parallel plan and routing
+/// policy for one execution shape.
 ///
-/// The prepared solver keeps the serial low-level APIs unchanged. Automatic
-/// routing is observable through [`Self::select_batch_execution`] and can be
-/// bypassed by using the existing explicit serial, planned, or batch functions.
+/// The solver owns no pool. It records the shape (worker ceiling and
+/// [`ParallelOptions`]) of the team it was prepared for; every call that
+/// executes borrows a team of exactly that shape, so routing and plans stay
+/// valid. Automatic routing is observable through
+/// [`Self::select_batch_execution`] and can be bypassed with
+/// [`crate::solve_pcg_into`] and [`crate::solve_pcg_batch_into`].
 #[derive(Debug)]
 pub struct ParallelPcgSolver {
     preconditioner: CmgPreconditioner,
@@ -194,7 +196,7 @@ pub struct ParallelPcgSolver {
     plan_initialization: Mutex<()>,
     eligible_plan_operators: usize,
     eligible_parallel_vector_work: bool,
-    executor: ParallelExecutor,
+    shape: ParallelOptions,
     policy: ParallelPcgPolicy,
     workspace_bytes: usize,
 }
@@ -211,51 +213,49 @@ impl ParallelPcgSolver {
         crate::CmgMemoryReport::new(self, workspace)
     }
 
-    /// Build a parallel hierarchy, routed plan, and executor with the default policy.
+    /// Build a hierarchy on `team` and prepare it with the default policy.
     pub fn build(
         graph: &Laplacian,
         cmg_options: CmgOptions,
-        parallel_options: ParallelOptions,
+        team: Team<'_>,
     ) -> Result<Self, CmgError> {
-        Self::build_with_policy(
-            graph,
-            cmg_options,
-            parallel_options,
-            ParallelPcgPolicy::default(),
-        )
+        Self::build_with_policy(graph, cmg_options, team, ParallelPcgPolicy::default())
     }
 
     /// Build with an explicit routing policy.
     pub fn build_with_policy(
         graph: &Laplacian,
         cmg_options: CmgOptions,
-        parallel_options: ParallelOptions,
+        team: Team<'_>,
         policy: ParallelPcgPolicy,
     ) -> Result<Self, CmgError> {
-        let executor = ParallelExecutor::new(parallel_options)?;
-        let preconditioner = CmgPreconditioner::build_with_executor(graph, cmg_options, &executor)?;
-        Self::from_preconditioner(preconditioner, executor, policy)
+        let preconditioner = CmgPreconditioner::build_with(
+            graph,
+            cmg_options.into(),
+            BuildContext {
+                team: Some(team),
+                ..BuildContext::default()
+            },
+        )?;
+        Self::from_preconditioner(preconditioner, team, policy)
     }
 
-    /// Combine an existing immutable preconditioner with an executor and policy.
+    /// Prepare an existing immutable preconditioner for `team`'s shape.
     pub fn from_preconditioner(
         preconditioner: CmgPreconditioner,
-        executor: ParallelExecutor,
+        team: Team<'_>,
         policy: ParallelPcgPolicy,
     ) -> Result<Self, CmgError> {
         let policy = policy.validate()?;
+        let shape = team.options();
         let eligible_plan_operators =
-            ParallelCmgPlan::eligible_operator_count(&preconditioner, &executor);
-        let parallel_options = executor.options();
-        let parallel_vector_floor = parallel_options
-            .min_parallel_len
-            .max(parallel_options.reduction_chunk_size.saturating_mul(8));
-        let eligible_parallel_vector_work = executor.thread_count() > 1
+            ParallelCmgPlan::eligible_operator_count(&preconditioner, shape);
+        let eligible_parallel_vector_work = shape.threads > 1
             && preconditioner.finest_components().count() == 1
             && preconditioner.hierarchy().levels()[0]
                 .graph()
                 .vertex_count()
-                >= parallel_vector_floor;
+                >= shape.reduction_floor();
         let workspace_bytes = PcgWorkspace::required_bytes(&preconditioner);
         Ok(Self {
             preconditioner,
@@ -263,7 +263,7 @@ impl ParallelPcgSolver {
             plan_initialization: Mutex::new(()),
             eligible_plan_operators,
             eligible_parallel_vector_work,
-            executor,
+            shape,
             policy,
             workspace_bytes,
         })
@@ -281,23 +281,24 @@ impl ParallelPcgSolver {
         &self.preconditioner
     }
 
-    /// Return the selectively routed parallel hierarchy plan, constructing it
-    /// on first access.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the validated hierarchy cannot be converted to deterministic
-    /// row storage. Use [`Self::try_plan`] to handle that error explicitly.
+    /// Return the execution shape every borrowed team must have: options
+    /// whose `threads` is the worker ceiling.
     #[must_use]
-    pub fn plan(&self) -> &ParallelCmgPlan {
-        self.try_plan()
-            .unwrap_or_else(|error| panic!("parallel CMG plan construction failed: {error}"))
+    pub const fn execution_shape(&self) -> ParallelOptions {
+        self.shape
+    }
+
+    /// Return the plan if it has been initialized.
+    #[must_use]
+    pub fn initialized_plan(&self) -> Option<&ParallelCmgPlan> {
+        self.plan.get()
     }
 
     /// Return the selectively routed parallel hierarchy plan, constructing it
-    /// on first access and reporting any construction error.
-    pub fn try_plan(&self) -> Result<&ParallelCmgPlan, CmgError> {
-        self.ensure_plan()
+    /// on `team` on first access and reporting any construction error.
+    pub fn try_plan(&self, team: Team<'_>) -> Result<&ParallelCmgPlan, CmgError> {
+        self.check_team(team)?;
+        self.ensure_plan_with_budget(team, None)
     }
 
     /// New CMG-owned plan layouts still needed by this solver (zero if already
@@ -306,7 +307,7 @@ impl ParallelPcgSolver {
         if self.plan.get().is_some() {
             Ok(0)
         } else {
-            ParallelCmgPlan::construction_allocation_bound(&self.preconditioner, &self.executor)
+            ParallelCmgPlan::construction_allocation_bound_for(&self.preconditioner, self.shape)
         }
     }
 
@@ -315,14 +316,13 @@ impl ParallelPcgSolver {
     /// subsequent calls allocate nothing and accept a zero incremental budget.
     /// Runtime/OS synchronization resources and already retained owners must be
     /// covered separately. Other unbudgeted methods still permit lazy setup.
-    pub fn try_plan_with_budget(&self, budget_bytes: usize) -> Result<&ParallelCmgPlan, CmgError> {
-        self.ensure_plan_with_budget(Some(budget_bytes))
-    }
-
-    /// Return the package-owned executor.
-    #[must_use]
-    pub const fn executor(&self) -> &ParallelExecutor {
-        &self.executor
+    pub fn try_plan_with_budget(
+        &self,
+        team: Team<'_>,
+        budget_bytes: usize,
+    ) -> Result<&ParallelCmgPlan, CmgError> {
+        self.check_team(team)?;
+        self.ensure_plan_with_budget(team, Some(budget_bytes))
     }
 
     /// Return the validated routing policy.
@@ -343,21 +343,24 @@ impl ParallelPcgSolver {
         self.workspace_bytes
     }
 
-    /// Select and report the execution strategy without performing a solve.
+    /// Select and report the execution strategy without performing a solve,
+    /// initializing the plan on `team` when the planned strategy is selected.
     pub fn select_batch_execution(
         &self,
         rhs_count: usize,
+        team: Team<'_>,
     ) -> Result<ParallelPcgBatchReport, CmgError> {
+        self.check_team(team)?;
         if rhs_count == 0 {
             return Ok(self.report(ParallelPcgExecution::Serial, 0, 0));
         }
-        let planned_eligible = self.executor.thread_count() > 1
+        let planned_eligible = self.shape.threads > 1
             && (self.eligible_plan_operators > 0 || self.eligible_parallel_vector_work)
             && self.graph().edges().len() >= self.policy.min_planned_edges;
         let concurrency = if rhs_count == 1 {
             1
         } else {
-            self.executor
+            self.shape
                 .batch_concurrency(self.workspace_bytes, rhs_count)?
         };
         let execution = if rhs_count == 1 {
@@ -378,15 +381,20 @@ impl ParallelPcgSolver {
             ParallelPcgExecution::Serial | ParallelPcgExecution::Planned => 1,
         };
         if execution == ParallelPcgExecution::Planned {
-            self.ensure_plan()?;
+            self.ensure_plan_with_budget(team, None)?;
         }
         Ok(self.report(execution, rhs_count, retained_count))
     }
 
     /// Solve one RHS using the automatically selected single-system strategy.
-    pub fn solve(&self, rhs: &[f64], options: PcgOptions) -> Result<PcgResult, CmgError> {
+    pub fn solve(
+        &self,
+        rhs: &[f64],
+        options: PcgOptions,
+        team: Team<'_>,
+    ) -> Result<PcgResult, CmgError> {
         let mut workspace = self.workspace();
-        self.solve_with_workspace(rhs, options, &mut workspace)
+        self.solve_with_workspace(rhs, options, &mut workspace, team)
     }
 
     /// Solve one RHS with a caller-owned reusable workspace pool.
@@ -395,31 +403,16 @@ impl ParallelPcgSolver {
         rhs: &[f64],
         options: PcgOptions,
         workspace: &mut ParallelPcgWorkspace,
+        team: Team<'_>,
     ) -> Result<PcgResult, CmgError> {
         workspace.ensure_count(1, &self.preconditioner);
-        match self.select_batch_execution(1)?.execution {
-            ParallelPcgExecution::Planned => {
-                let plan = self.ensure_plan()?;
-                solve_pcg_with_plan_and_workspace(
-                    self.graph(),
-                    &self.preconditioner,
-                    plan,
-                    rhs,
-                    options,
-                    &mut workspace.workspaces[0],
-                    &self.executor,
-                )
-            }
+        let context = match self.select_batch_execution(1, team)?.execution {
+            ParallelPcgExecution::Planned => self.planned(team)?,
             ParallelPcgExecution::Serial | ParallelPcgExecution::AcrossRightHandSides => {
-                solve_pcg_with_workspace(
-                    self.graph(),
-                    &self.preconditioner,
-                    rhs,
-                    options,
-                    &mut workspace.workspaces[0],
-                )
+                SolveContext::default()
             }
-        }
+        };
+        self.solve_one(rhs, options, &mut workspace.workspaces[0], context)
     }
 
     /// Solve a batch with an automatically selected memory-aware strategy.
@@ -427,9 +420,10 @@ impl ParallelPcgSolver {
         &self,
         right_hand_sides: &[Vec<f64>],
         options: PcgOptions,
+        team: Team<'_>,
     ) -> Result<ParallelPcgBatchResult, CmgError> {
         let mut workspace = self.workspace();
-        self.solve_batch_with_workspace(right_hand_sides, options, &mut workspace)
+        self.solve_batch_with_workspace(right_hand_sides, options, &mut workspace, team)
     }
 
     /// Solve a batch while reusing a caller-owned workspace pool.
@@ -438,6 +432,7 @@ impl ParallelPcgSolver {
         right_hand_sides: &[Vec<f64>],
         options: PcgOptions,
         workspace: &mut ParallelPcgWorkspace,
+        team: Team<'_>,
     ) -> Result<ParallelPcgBatchResult, CmgError> {
         for rhs in right_hand_sides {
             if rhs.len() != self.graph().vertex_count() {
@@ -448,7 +443,7 @@ impl ParallelPcgSolver {
                 ));
             }
         }
-        let report = self.select_batch_execution(right_hand_sides.len())?;
+        let report = self.select_batch_execution(right_hand_sides.len(), team)?;
         if right_hand_sides.is_empty() {
             return Ok(ParallelPcgBatchResult {
                 results: Vec::new(),
@@ -457,67 +452,72 @@ impl ParallelPcgSolver {
         }
         workspace.ensure_count(report.concurrency.max(1), &self.preconditioner);
         let results = match report.execution {
-            ParallelPcgExecution::Serial => right_hand_sides
-                .iter()
-                .map(|rhs| {
-                    solve_pcg_with_workspace(
-                        self.graph(),
-                        &self.preconditioner,
-                        rhs,
-                        options,
-                        &mut workspace.workspaces[0],
-                    )
-                })
-                .collect::<Result<Vec<_>, CmgError>>()?,
-            ParallelPcgExecution::Planned => right_hand_sides
-                .iter()
-                .map(|rhs| {
-                    solve_pcg_with_plan_and_workspace(
-                        self.graph(),
-                        &self.preconditioner,
-                        self.ensure_plan()?,
-                        rhs,
-                        options,
-                        &mut workspace.workspaces[0],
-                        &self.executor,
-                    )
-                })
-                .collect::<Result<Vec<_>, CmgError>>()?,
-            ParallelPcgExecution::AcrossRightHandSides => {
-                let mut results = Vec::with_capacity(right_hand_sides.len());
-                for rhs_chunk in right_hand_sides.chunks(report.concurrency) {
-                    let chunk_results: Vec<Result<PcgResult, CmgError>> =
-                        self.executor.install(|| {
-                            workspace.workspaces[..rhs_chunk.len()]
-                                .par_iter_mut()
-                                .zip(rhs_chunk.par_iter())
-                                .map(|(pcg_workspace, rhs)| {
-                                    solve_pcg_with_workspace(
-                                        self.graph(),
-                                        &self.preconditioner,
-                                        rhs,
-                                        options,
-                                        pcg_workspace,
-                                    )
-                                })
-                                .collect()
-                        });
-                    for result in chunk_results {
-                        results.push(result?);
-                    }
-                }
-                results
+            ParallelPcgExecution::Serial | ParallelPcgExecution::Planned => {
+                let context = if report.execution == ParallelPcgExecution::Planned {
+                    self.planned(team)?
+                } else {
+                    SolveContext::default()
+                };
+                right_hand_sides
+                    .iter()
+                    .map(|rhs| self.solve_one(rhs, options, &mut workspace.workspaces[0], context))
+                    .collect::<Result<Vec<_>, CmgError>>()?
             }
+            ParallelPcgExecution::AcrossRightHandSides => solve_owned_concurrently(
+                self.graph(),
+                &self.preconditioner,
+                right_hand_sides,
+                options,
+                team,
+                &mut workspace.workspaces[..report.concurrency],
+            )?,
         };
         Ok(ParallelPcgBatchResult { results, report })
     }
 
-    fn ensure_plan(&self) -> Result<&ParallelCmgPlan, CmgError> {
-        self.ensure_plan_with_budget(None)
+    fn planned<'s>(&'s self, team: Team<'s>) -> Result<SolveContext<'s>, CmgError> {
+        Ok(SolveContext {
+            plan: Some(self.ensure_plan_with_budget(team, None)?),
+            team: Some(team),
+            ..SolveContext::default()
+        })
+    }
+
+    fn solve_one(
+        &self,
+        rhs: &[f64],
+        options: PcgOptions,
+        workspace: &mut PcgWorkspace,
+        context: SolveContext<'_>,
+    ) -> Result<PcgResult, CmgError> {
+        let diagnostics = solve_pcg_in_workspace(
+            self.graph(),
+            &self.preconditioner,
+            rhs,
+            None,
+            options,
+            workspace,
+            context,
+        )?;
+        Ok(result_from_diagnostics(
+            workspace.solution().to_vec(),
+            diagnostics,
+        ))
+    }
+
+    fn check_team(&self, team: Team<'_>) -> Result<(), CmgError> {
+        if team.options() == self.shape {
+            Ok(())
+        } else {
+            Err(CmgError::InvalidHierarchy {
+                context: "team differs from the parallel PCG solver's execution shape",
+            })
+        }
     }
 
     fn ensure_plan_with_budget(
         &self,
+        team: Team<'_>,
         budget_bytes: Option<usize>,
     ) -> Result<&ParallelCmgPlan, CmgError> {
         if let Some(plan) = self.plan.get() {
@@ -531,9 +531,9 @@ impl ParallelPcgSolver {
             return Ok(plan);
         }
         let plan = if let Some(budget) = budget_bytes {
-            ParallelCmgPlan::build_with_budget(&self.preconditioner, &self.executor, budget)?
+            ParallelCmgPlan::build_with_budget(&self.preconditioner, team, budget)?
         } else {
-            ParallelCmgPlan::build(&self.preconditioner, &self.executor)?
+            ParallelCmgPlan::build(&self.preconditioner, team)?
         };
         if self.plan.set(plan).is_err() {
             return Err(CmgError::InvalidHierarchy {

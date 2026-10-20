@@ -1,21 +1,49 @@
-//! Stationary recursive CMG preconditioner application.
+//! Stationary recursive CMG preconditioner construction and application.
+
+/// Run `$body` with the context's meter: a cancellation meter that also polls
+/// once at completion, or the unmetered fast path.
+macro_rules! with_meter {
+    ($cancel:expr, $meter:ident => $body:expr) => {
+        match $cancel {
+            Some(cancel) => {
+                let $meter = &mut crate::cancel::CancelMeter::new(cancel);
+                let result = $body;
+                result.and_then(|value| {
+                    crate::cancel::Meter::checkpoint($meter, "CMG application")?;
+                    Ok(value)
+                })
+            }
+            None => {
+                let $meter = &mut crate::cancel::Unmetered;
+                $body
+            }
+        }
+    };
+}
+pub(crate) use with_meter;
 
 mod batch;
+mod cycle;
 pub use batch::CmgBatchWorkspace;
+#[cfg(feature = "parallel")]
+pub(crate) use cycle::rows_parallel;
+pub(crate) use cycle::{LevelParts, One, Parts, Store, Width};
 
-#[cfg(feature = "cycle-profiling")]
-use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
+use crate::cancel::{Meter, Unmetered};
+use crate::cmg_profile::CycleRecorder;
 use crate::components::CenteringPlan;
+#[cfg(feature = "parallel")]
+use crate::csr::CsrBuildProfile;
+#[cfg(feature = "parallel")]
+use crate::execution::Team;
 use crate::{
-    CmgError, CmgHierarchy, CmgOptions, CmgWorkspace, Components, GroundedLdl, Laplacian,
-    TerminalReason, ValidationOptions,
+    BuildContext, BuildOptions, Cancellation, CmgError, CmgHierarchy, CmgOptions, CmgWorkspace,
+    Components, GroundedLdl, Laplacian, TerminalReason, ValidationOptions,
 };
 #[cfg(feature = "parallel")]
-use crate::{CsrLaplacian, HierarchyLevel, ParallelExecutor};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
+use crate::{CsrLaplacian, HierarchyLevel};
+use cycle::Cycle;
 use std::sync::Arc;
-#[cfg(feature = "profiling")]
 use std::time::Instant;
 
 /// Timing for one hierarchy level considered during parallel-plan construction.
@@ -206,7 +234,7 @@ impl PreconditionerBuildProfile {
 /// The plan is optional and separate from [`CmgPreconditioner`], so serial users
 /// retain the compact one-edge-per-undirected-edge hierarchy without duplicated
 /// adjacency storage. Operators are retained only for nonterminal levels large
-/// enough to use the supplied executor.
+/// enough to use the supplied team.
 #[cfg(feature = "parallel")]
 #[derive(Debug, Clone)]
 pub struct ParallelCmgPlan {
@@ -222,7 +250,15 @@ impl ParallelCmgPlan {
     /// excluded. This is not a complete action/runtime admission bound.
     pub fn construction_allocation_bound(
         preconditioner: &CmgPreconditioner,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
+    ) -> Result<usize, CmgError> {
+        Self::construction_allocation_bound_for(preconditioner, team.options())
+    }
+
+    /// The bound of [`Self::construction_allocation_bound`] for a team shape.
+    pub(crate) fn construction_allocation_bound_for(
+        preconditioner: &CmgPreconditioner,
+        shape: crate::ParallelOptions,
     ) -> Result<usize, CmgError> {
         use crate::storage::{add, bytes};
         let levels = preconditioner.hierarchy.levels();
@@ -232,11 +268,11 @@ impl ParallelCmgPlan {
         )?;
         let mut peak = retained;
         for level in levels {
-            if Self::level_is_eligible(level, executor) {
+            if Self::level_is_eligible(level, shape) {
                 let graph = level.graph();
                 peak = peak.max(add(
                     retained,
-                    CsrLaplacian::construction_allocation_bound_with_executor(graph, executor)?,
+                    CsrLaplacian::construction_allocation_bound_for_shape(graph, shape)?,
                 )?);
                 retained = add(
                     retained,
@@ -255,53 +291,72 @@ impl ParallelCmgPlan {
     /// live parents/old plans and a policy for the uncovered Rayon runtime.
     pub fn build_with_budget(
         preconditioner: &CmgPreconditioner,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
         budget_bytes: usize,
     ) -> Result<Self, CmgError> {
         crate::storage::admit(
-            Self::construction_allocation_bound(preconditioner, executor)?,
+            Self::construction_allocation_bound(preconditioner, team)?,
             budget_bytes,
         )?;
-        Self::build(preconditioner, executor)
+        Self::build(preconditioner, team)
     }
 
     pub(crate) fn eligible_operator_count(
         preconditioner: &CmgPreconditioner,
-        executor: &ParallelExecutor,
+        shape: crate::ParallelOptions,
     ) -> usize {
         preconditioner
             .hierarchy
             .levels()
             .iter()
-            .filter(|level| Self::level_is_eligible(level, executor))
+            .filter(|level| Self::level_is_eligible(level, shape))
             .count()
     }
 
-    fn level_is_eligible(level: &HierarchyLevel, executor: &ParallelExecutor) -> bool {
+    fn level_is_eligible(level: &HierarchyLevel, shape: crate::ParallelOptions) -> bool {
         let graph = level.graph();
         let density_floor = graph
             .vertex_count()
             .saturating_add(graph.vertex_count() / 4);
         level.terminal_reason().is_none()
             && graph.edges().len() >= density_floor
-            && executor.should_parallel(graph.edges().len())
+            && shape.should_parallel(graph.edges().len())
     }
 
     /// Build deterministic row operators for one immutable preconditioner.
-    pub fn build(
+    pub fn build(preconditioner: &CmgPreconditioner, team: Team<'_>) -> Result<Self, CmgError> {
+        Self::build_levels::<false>(preconditioner, team, |_, _, _, _| {})
+    }
+
+    /// The one plan loop: a row operator for every eligible level. `PROFILE`
+    /// times each level's construction and passes it to `record` with the
+    /// operator's phase timings; it never changes eligibility or an operator.
+    fn build_levels<const PROFILE: bool>(
         preconditioner: &CmgPreconditioner,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
+        mut record: impl FnMut(usize, &HierarchyLevel, Option<&CsrLaplacian>, (u128, CsrBuildProfile)),
     ) -> Result<Self, CmgError> {
         let levels = preconditioner.hierarchy.levels();
         let mut level_operators = crate::storage::try_capacity(levels.len(), "plan operators")?;
         let mut level_lineages = crate::storage::try_capacity(levels.len(), "plan lineages")?;
-        for level in levels {
+        for (index, level) in levels.iter().enumerate() {
             let graph = level.graph();
-            let operator = if Self::level_is_eligible(level, executor) {
-                Some(CsrLaplacian::from_laplacian_with_executor(graph, executor)?)
+            let start = PROFILE.then(Instant::now);
+            let (operator, profile) = if Self::level_is_eligible(level, team.options()) {
+                let (operator, profile) =
+                    CsrLaplacian::from_laplacian_with_team_impl::<PROFILE>(graph, team)?;
+                (Some(operator), profile)
             } else {
-                None
+                (None, CsrBuildProfile::default())
             };
+            if let Some(start) = start {
+                record(
+                    index,
+                    level,
+                    operator.as_ref(),
+                    (start.elapsed().as_nanos(), profile),
+                );
+            }
             level_operators.push(operator);
             level_lineages.push(Arc::clone(graph.lineage()));
         }
@@ -315,63 +370,46 @@ impl ParallelCmgPlan {
     #[cfg(feature = "profiling")]
     pub fn build_profiled(
         preconditioner: &CmgPreconditioner,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
     ) -> Result<(Self, ParallelPlanBuildProfile), CmgError> {
         let total_start = Instant::now();
-        let mut level_operators = Vec::with_capacity(preconditioner.hierarchy.levels().len());
-        let mut profiles = Vec::with_capacity(preconditioner.hierarchy.levels().len());
-        for (level_index, level) in preconditioner.hierarchy.levels().iter().enumerate() {
-            let graph = level.graph();
-            let density_floor = graph
-                .vertex_count()
-                .saturating_add(graph.vertex_count() / 4);
-            let reason = if level.terminal_reason().is_some() {
-                "terminal"
-            } else if graph.edges().len() < density_floor {
-                "below-density-floor"
-            } else if !executor.should_parallel(graph.edges().len()) {
-                "below-executor-threshold"
-            } else {
-                "eligible"
-            };
-            let eligible = reason == "eligible";
-            let start = Instant::now();
-            let (operator, csr_profile) = if eligible {
-                let (operator, profile) =
-                    CsrLaplacian::from_laplacian_with_executor_profiled(graph, executor)?;
-                (Some(operator), profile)
-            } else {
-                (None, Default::default())
-            };
-            let construction_nanoseconds = start.elapsed().as_nanos();
-            profiles.push(ParallelPlanLevelProfile {
-                level: level_index,
-                vertices: graph.vertex_count(),
-                edges: graph.edge_count(),
-                eligible,
-                reason,
-                construction_nanoseconds,
-                row_counts_nanoseconds: csr_profile.row_counts_nanoseconds,
-                row_offsets_nanoseconds: csr_profile.row_offsets_nanoseconds,
-                allocation_nanoseconds: csr_profile.allocation_nanoseconds,
-                scatter_nanoseconds: csr_profile.scatter_nanoseconds,
-                validation_nanoseconds: csr_profile.validation_nanoseconds,
-                retained_bytes: operator.as_ref().map_or(0, CsrLaplacian::byte_len),
-            });
-            level_operators.push(operator);
-        }
-        let level_lineages = preconditioner
-            .hierarchy
-            .levels()
-            .iter()
-            .map(|level| Arc::clone(level.graph().lineage()))
-            .collect();
-        let plan = Self {
-            level_operators,
-            level_lineages,
-        };
+        let shape = team.options();
+        let mut levels = Vec::with_capacity(preconditioner.hierarchy.levels().len());
+        let plan = Self::build_levels::<true>(
+            preconditioner,
+            team,
+            |level_index, level, operator, (construction_nanoseconds, csr)| {
+                let graph = level.graph();
+                let density_floor = graph
+                    .vertex_count()
+                    .saturating_add(graph.vertex_count() / 4);
+                let reason = if level.terminal_reason().is_some() {
+                    "terminal"
+                } else if graph.edges().len() < density_floor {
+                    "below-density-floor"
+                } else if !shape.should_parallel(graph.edges().len()) {
+                    "below-executor-threshold"
+                } else {
+                    "eligible"
+                };
+                levels.push(ParallelPlanLevelProfile {
+                    level: level_index,
+                    vertices: graph.vertex_count(),
+                    edges: graph.edge_count(),
+                    eligible: operator.is_some(),
+                    reason,
+                    construction_nanoseconds,
+                    row_counts_nanoseconds: csr.row_counts_nanoseconds,
+                    row_offsets_nanoseconds: csr.row_offsets_nanoseconds,
+                    allocation_nanoseconds: csr.allocation_nanoseconds,
+                    scatter_nanoseconds: csr.scatter_nanoseconds,
+                    validation_nanoseconds: csr.validation_nanoseconds,
+                    retained_bytes: operator.map_or(0, CsrLaplacian::byte_len),
+                });
+            },
+        )?;
         let profile = ParallelPlanBuildProfile {
-            levels: profiles,
+            levels,
             total_nanoseconds: total_start.elapsed().as_nanos(),
         };
         Ok((plan, profile))
@@ -391,54 +429,6 @@ impl ParallelCmgPlan {
             .flatten()
             .map(CsrLaplacian::byte_len)
             .sum()
-    }
-
-    /// Apply a component-compatible right-hand side with deterministic parallel
-    /// level kernels and caller-owned workspace.
-    pub fn apply_compatible_into(
-        &self,
-        preconditioner: &CmgPreconditioner,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        self.apply_compatible_into_with_validation(
-            preconditioner,
-            rhs,
-            output,
-            workspace,
-            ValidationOptions::default(),
-            executor,
-        )
-    }
-
-    /// Apply a compatible right-hand side with explicit validation tolerances.
-    pub fn apply_compatible_into_with_validation(
-        &self,
-        preconditioner: &CmgPreconditioner,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        preconditioner
-            .apply_compatible_into_with_plan(rhs, output, workspace, validation, self, executor)
-    }
-
-    pub(crate) fn apply_compatible_into_prevalidated(
-        &self,
-        preconditioner: &CmgPreconditioner,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        preconditioner.apply_compatible_into_with_prevalidated_plan(
-            rhs, output, workspace, validation, self, executor,
-        )
     }
 
     pub(crate) fn validate(&self, preconditioner: &CmgPreconditioner) -> Result<(), CmgError> {
@@ -476,27 +466,19 @@ impl ParallelCmgPlan {
             .and_then(Option::as_ref)
     }
 
-    pub(crate) fn finest_matvec_into(
+    /// Finest-level `output = L input` with this plan's row operator, when
+    /// retained, else the edge list.
+    pub(crate) fn finest_matvec<M: Meter>(
         &self,
         graph: &Laplacian,
         input: &[f64],
         output: &mut [f64],
-        executor: &ParallelExecutor,
+        team: Option<Team<'_>>,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        self.matvec_into(0, graph, input, output, executor)
-    }
-
-    fn matvec_into(
-        &self,
-        level_index: usize,
-        graph: &Laplacian,
-        input: &[f64],
-        output: &mut [f64],
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        match self.level_operator(level_index) {
-            Some(operator) => operator.matvec_into_parallel(input, output, executor),
-            None => graph.matvec_into(input, output),
+        match self.level_operator(0) {
+            Some(operator) => operator.matvec_lanes(input, output, One, team, meter),
+            None => graph.matvec_lanes(input, output, One, meter),
         }
     }
 }
@@ -553,7 +535,7 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
-            None,
+            &mut crate::cancel::Unmetered,
         )
     }
 
@@ -569,7 +551,7 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
-            Some(&mut crate::cancel::CancelMeter::new(cancel)),
+            &mut crate::cancel::CancelMeter::new(cancel),
         )
     }
 
@@ -612,187 +594,181 @@ impl CmgPreconditioner {
             )
     }
 
-    /// Build the complete hierarchy and any direct terminal factorization.
+    /// Build the complete hierarchy and any direct terminal factorization
+    /// serially, with the ordinary component policy, no budget and no polling.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        Self::from_hierarchy(CmgHierarchy::build(graph, options)?)
+        Self::build_with(graph, BuildOptions::from(options), BuildContext::default())
     }
 
-    /// New requested layouts for an explicitly serial ordinary build, including
-    /// hierarchy, centering metadata and direct factor construction. Borrowed
-    /// graph/prepared topology, allocator/OS storage, runtime, solve workspaces,
-    /// plans and later lazy aggregation accessors are excluded. Arc layouts are
-    /// counted under the reviewed, non-ABI-stable standard-library model.
-    pub fn serial_construction_allocation_bound(
+    /// Conservative new requested layouts for [`Self::build_with`], including
+    /// hierarchy, centering metadata and direct-factor construction for the
+    /// selected component policy. `parallel` adds the parallel contraction slot
+    /// bank used when a team is supplied. Borrowed graph/prepared topology,
+    /// allocator/OS storage, any runtime, solve workspaces, plans and later lazy
+    /// aggregation accessors are excluded. Arc layouts follow the reviewed,
+    /// non-ABI-stable standard-library model. Every terminal reason except
+    /// direct skips factorization; pruning only reduces the terminal size.
+    pub fn construction_allocation_bound(
         vertices: usize,
         edges: usize,
-        options: CmgOptions,
-    ) -> Result<usize, CmgError> {
-        Self::serial_construction_bound_impl(vertices, edges, options, false)
-    }
-
-    fn serial_construction_bound_impl(
-        n: usize,
-        m: usize,
-        options: CmgOptions,
-        component_factor: bool,
+        options: BuildOptions,
+        parallel: bool,
     ) -> Result<usize, CmgError> {
         use crate::storage::{add, arc_bytes, bytes};
-        let options = options.validate()?;
-        let (hierarchy, scratch) = CmgHierarchy::serial_allocation_parts(n, m, options)?;
-        let count = n
-            .checked_mul(options.max_levels)
-            .ok_or(CmgError::AllocationFailed {
-                context: "centering budget overflows",
-            })?;
+        let (n, m) = (vertices, edges);
+        let hierarchy_options = options.hierarchy.validate()?;
+        let (hierarchy, scratch) = CmgHierarchy::serial_allocation_parts(n, m, hierarchy_options)?;
+        let count =
+            n.checked_mul(hierarchy_options.max_levels)
+                .ok_or(CmgError::AllocationFailed {
+                    context: "centering budget overflows",
+                })?;
         let metadata = add(
             add(bytes::<[usize; 2]>(count)?, arc_bytes::<Components>()?)?,
             add(
-                bytes::<CenteringPlan>(options.max_levels - 1)?,
-                bytes::<usize>(options.max_levels)?,
+                bytes::<CenteringPlan>(hierarchy_options.max_levels - 1)?,
+                bytes::<usize>(hierarchy_options.max_levels)?,
             )?,
         )?;
         // Direct terminals have n < threshold, except the n<=1/empty shortcut.
-        // No other terminal reason factors the graph. Pruning only reduces n.
-        let terminal_n = n.min(options.direct_threshold.saturating_sub(1).max(1));
-        let factor = {
+        let terminal_n = n.min(hierarchy_options.direct_threshold.saturating_sub(1).max(1));
+        let factor = if options.factor_terminal_components() {
             #[cfg(feature = "experimental-components")]
-            if component_factor {
+            {
                 GroundedLdl::component_construction_allocation_bound(terminal_n, m)?
-            } else {
-                GroundedLdl::construction_allocation_bound(terminal_n)?
             }
             #[cfg(not(feature = "experimental-components"))]
-            {
-                let _ = component_factor;
-                GroundedLdl::construction_allocation_bound(terminal_n)?
-            }
+            unreachable!()
+        } else {
+            GroundedLdl::construction_allocation_bound(terminal_n)?
         };
         let finalization = add(metadata, factor.max(bytes::<[usize; 4]>(n)?))?;
-        add(hierarchy, scratch.max(finalization))
-    }
-
-    /// Admit the explicitly serial ordinary construction path. All vector
-    /// provisioning is fallible; small Arc allocations remain infallible on
-    /// stable Rust. This is not an executor/runtime admission API.
-    pub fn build_serial_with_budget(
-        graph: &Laplacian,
-        options: CmgOptions,
-        budget_bytes: usize,
-    ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::serial_construction_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-            )?,
-            budget_bytes,
-        )?;
-        let hierarchy = CmgHierarchy::build_serial_with_budget(graph, options, budget_bytes)?;
-        Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
-            GroundedLdl::factor_with_budget(graph, budget_bytes)
-        })
-    }
-
-    /// Counterpart of the ordinary serial bound for opt-in component setup.
-    /// The same hierarchy bound covers either pruning stopping policy; only
-    /// the selected terminal-factor construction changes the factor allowance.
-    #[cfg(feature = "experimental-components")]
-    pub fn component_serial_construction_allocation_bound(
-        vertices: usize,
-        edges: usize,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-    ) -> Result<usize, CmgError> {
-        Self::serial_construction_bound_impl(
-            vertices,
-            edges,
-            options,
-            experiment.factor_terminal_components,
-        )
-    }
-
-    /// Explicitly serial admitted component construction. Does not enable any
-    /// experimental option automatically, create a pool, or change certification.
-    /// It may be used with a prepared numeric graph without duplicating topology.
-    #[cfg(feature = "experimental-components")]
-    pub fn build_component_experiment_serial_with_budget(
-        graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        budget_bytes: usize,
-    ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::component_serial_construction_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-                experiment,
-            )?,
-            budget_bytes,
-        )?;
-        let hierarchy = if experiment.prune_coarse_isolates {
-            CmgHierarchy::build_pruned_serial_admitted(
-                graph,
-                options,
-                experiment.preserve_unpruned_stopping,
-            )?
+        let serial = add(hierarchy, scratch.max(finalization))?;
+        if parallel {
+            add(serial, bytes::<Option<crate::Edge>>(m)?)
         } else {
-            CmgHierarchy::build_serial_with_budget(graph, options, budget_bytes)?
-        };
-        if experiment.factor_terminal_components {
-            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
-                GroundedLdl::factor_by_component_with_budget(graph, budget_bytes)
-            })
-        } else {
-            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
-                GroundedLdl::factor_with_budget(graph, budget_bytes)
-            })
+            Ok(serial)
         }
     }
 
-    /// Build the serial component candidate with cooperative cancellation.
+    /// Build a preconditioner under a construction context.
     ///
-    /// This uses the same hierarchy, stopping rules and arithmetic as the admitted
-    /// serial builder. The caller-supplied graph is already prepared; construction
-    /// owns only private candidate state until success. Kernels poll `cancel`
-    /// after a fixed number of counted primitive operations and before every
-    /// allocation, so work between polls is bounded; allocator, operating-system
-    /// and cleanup latency are not. Allocation is admitted against `budget_bytes`
-    /// before it begins. No thread pool or parallel application plan is created.
-    /// A cancellation returns [`CmgError::Cancelled`] and no partial state.
-    #[cfg(feature = "experimental-components")]
-    pub fn build_component_experiment_serial_controlled(
+    /// This is the one construction pipeline: hierarchy loop, finest
+    /// components, coarse centering plans, direct terminal factor and repeat
+    /// adjustment. With a budget, [`Self::construction_allocation_bound`] (with
+    /// `parallel` set when a team is supplied) is admitted before the first
+    /// allocation and every vector bank is fallible. With a cancellation query,
+    /// every traversal and numerical update is a bounded counted operation; the
+    /// query is polled at the fixed cadence and before every allocation, and a
+    /// true query returns [`CmgError::Cancelled`] with no partial state. With a
+    /// team, edge sets above the parallel setup threshold contract and sort on
+    /// the team's pool; forest grouping and factorization stay serial and no
+    /// pool is created. Hierarchy, factor, repeats and cycle bits never depend
+    /// on the context.
+    pub fn build_with(
         graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        budget_bytes: usize,
-        cancel: crate::Cancellation<'_>,
+        options: BuildOptions,
+        context: BuildContext<'_>,
     ) -> Result<Self, CmgError> {
-        let mut meter = crate::cancel::CancelMeter::new(cancel);
-        Self::build_component_controlled_impl(graph, options, experiment, budget_bytes, &mut meter)
+        match context.cancel {
+            Some(cancel) => Self::build_metered::<_, false>(
+                graph,
+                options,
+                context,
+                &mut crate::cancel::CancelMeter::new(cancel),
+            ),
+            None => Self::build_metered::<_, false>(graph, options, context, &mut Unmetered),
+        }
+        .map(|(preconditioner, _)| preconditioner)
     }
 
-    #[cfg(feature = "experimental-components")]
-    fn build_component_controlled_impl(
+    /// Build through [`Self::build_with`]'s pipeline while timing its stages.
+    #[cfg(feature = "profiling")]
+    pub fn build_with_profiled(
         graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        budget_bytes: usize,
-        meter: &mut crate::cancel::CancelMeter<'_>,
-    ) -> Result<Self, CmgError> {
+        options: BuildOptions,
+        context: BuildContext<'_>,
+    ) -> Result<(Self, PreconditionerBuildProfile), CmgError> {
+        let total_start = Instant::now();
+        let (preconditioner, (hierarchy_phases, hierarchy_nanoseconds, finalization_nanoseconds)) =
+            match context.cancel {
+                Some(cancel) => Self::build_metered::<_, true>(
+                    graph,
+                    options,
+                    context,
+                    &mut crate::cancel::CancelMeter::new(cancel),
+                ),
+                None => Self::build_metered::<_, true>(graph, options, context, &mut Unmetered),
+            }?;
+        let profile = PreconditionerBuildProfile {
+            hierarchy_nanoseconds,
+            hierarchy_phases: hierarchy_phases
+                .into_iter()
+                .map(|record| HierarchyPhaseProfile {
+                    level: record.level,
+                    phase: record.phase,
+                    nanoseconds: record.nanoseconds,
+                })
+                .collect(),
+            finalization_nanoseconds,
+            total_nanoseconds: total_start.elapsed().as_nanos(),
+        };
+        Ok((preconditioner, profile))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn build_metered<M: Meter, const PROFILE: bool>(
+        graph: &Laplacian,
+        options: BuildOptions,
+        context: BuildContext<'_>,
+        meter: &mut M,
+    ) -> Result<
+        (
+            Self,
+            (Vec<crate::hierarchy::HierarchyPhaseRecord>, u128, u128),
+        ),
+        CmgError,
+    > {
         // The allocation-bound formula uses fixed-work checked scalar arithmetic.
         meter.work("preconditioner admission", 1024)?;
-        crate::storage::admit(
-            Self::component_serial_construction_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-                experiment,
-            )?,
-            budget_bytes,
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(
+                Self::construction_allocation_bound(
+                    graph.vertex_count(),
+                    graph.edge_count(),
+                    options,
+                    context.team().is_some(),
+                )?,
+                budget,
+            )?;
+        }
+        let hierarchy_start = PROFILE.then(Instant::now);
+        let (hierarchy, phases) = CmgHierarchy::build_metered::<M, PROFILE>(
+            graph,
+            options.hierarchy,
+            options.level_policy(context.budget_bytes.is_some()),
+            context.team(),
+            meter,
         )?;
-        let mut hierarchy =
-            CmgHierarchy::build_component_controlled(graph, options, experiment, meter)?;
+        let hierarchy_nanoseconds = hierarchy_start.map_or(0, |start| start.elapsed().as_nanos());
+        let finalization_start = PROFILE.then(Instant::now);
+        let preconditioner =
+            Self::finalize(hierarchy, options.factor_terminal_components(), meter)?;
+        let finalization_nanoseconds =
+            finalization_start.map_or(0, |start| start.elapsed().as_nanos());
+        Ok((
+            preconditioner,
+            (phases, hierarchy_nanoseconds, finalization_nanoseconds),
+        ))
+    }
+
+    /// Finest components, coarse centering plans, terminal factor and the
+    /// factor-based penultimate repeat adjustment.
+    pub(crate) fn finalize<M: Meter>(
+        mut hierarchy: CmgHierarchy,
+        factor_terminal_components: bool,
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
         meter.work("preconditioner finest components", 64)?;
         let finest = hierarchy
             .levels()
@@ -803,7 +779,7 @@ impl CmgPreconditioner {
         let finest_components = if let Some(components) = finest.graph().prepared_components() {
             Arc::clone(components)
         } else {
-            let components = Components::try_from_endpoints_controlled(
+            let components = Components::from_endpoints(
                 finest.graph().vertex_count(),
                 finest
                     .graph()
@@ -822,10 +798,7 @@ impl CmgPreconditioner {
             meter.try_capacity(hierarchy.levels().len() - 1, "coarse centering plans")?;
         for level in hierarchy.levels().iter().skip(1) {
             meter.work("coarse centering plan", 32)?;
-            coarse_centering.push(CenteringPlan::try_from_laplacian_controlled(
-                level.graph(),
-                meter,
-            )?);
+            coarse_centering.push(CenteringPlan::from_laplacian(level.graph(), meter)?);
         }
         meter.work("preconditioner terminal decision", 64)?;
         let direct_terminal = if hierarchy.report().terminal_reason() == TerminalReason::Direct {
@@ -835,11 +808,13 @@ impl CmgPreconditioner {
                 .ok_or(CmgError::InvalidHierarchy {
                     context: "hierarchy contains no terminal level",
                 })?;
-            Some(if experiment.factor_terminal_components {
-                GroundedLdl::factor_by_component_controlled(terminal.graph(), budget_bytes, meter)?
-            } else {
-                GroundedLdl::factor_controlled(terminal.graph(), budget_bytes, meter)?
-            })
+            // Terminal admission is implied by the whole-build bound.
+            meter.work("terminal admission", 128)?;
+            Some(GroundedLdl::factor_metered(
+                terminal.graph(),
+                factor_terminal_components,
+                meter,
+            )?)
         } else {
             None
         };
@@ -862,299 +837,6 @@ impl CmgPreconditioner {
             }
         }
         meter.work("preconditioner publication", 64)?;
-        Ok(Self {
-            hierarchy,
-            finest_components,
-            coarse_centering,
-            direct_terminal,
-            repeat_counts,
-        })
-    }
-
-    /// New CMG-owned layouts for an admitted executor-aware ordinary build.
-    /// Rayon runtime and the borrowed executor/graph are explicitly excluded;
-    /// all other exclusions of the serial construction bound also apply.
-    #[cfg(feature = "parallel")]
-    pub fn executor_construction_cmg_allocation_bound(
-        vertices: usize,
-        edges: usize,
-        options: CmgOptions,
-    ) -> Result<usize, CmgError> {
-        crate::storage::add(
-            Self::serial_construction_allocation_bound(vertices, edges, options)?,
-            crate::storage::bytes::<Option<crate::Edge>>(edges)?,
-        )
-    }
-
-    /// Admit CMG-owned construction without disabling parallel setup. This
-    /// does NOT admit runtime memory: use only under a separate caller policy
-    /// permitting the existing unbounded Rayon runtime. No new pool is created.
-    #[cfg(feature = "parallel")]
-    pub fn build_with_executor_and_cmg_budget(
-        graph: &Laplacian,
-        options: CmgOptions,
-        executor: &ParallelExecutor,
-        cmg_budget_bytes: usize,
-    ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::executor_construction_cmg_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-            )?,
-            cmg_budget_bytes,
-        )?;
-        let hierarchy =
-            CmgHierarchy::build_executor_admitted::<false, false>(graph, options, executor)?;
-        Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
-            GroundedLdl::factor_with_budget(graph, cmg_budget_bytes)
-        })
-    }
-
-    /// Component counterpart of the CMG-owned executor construction bound.
-    /// Covers either pruning/stopping policy, but never the Rayon runtime.
-    #[cfg(all(feature = "parallel", feature = "experimental-components"))]
-    pub fn component_executor_construction_cmg_allocation_bound(
-        vertices: usize,
-        edges: usize,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-    ) -> Result<usize, CmgError> {
-        crate::storage::add(
-            Self::component_serial_construction_allocation_bound(
-                vertices, edges, options, experiment,
-            )?,
-            crate::storage::bytes::<Option<crate::Edge>>(edges)?,
-        )
-    }
-
-    /// Opt-in component setup with a CMG-owned-only budget and existing pool.
-    /// Retains parallel map/sort thresholds, stopping and factor policies.
-    /// Runtime memory remains uncovered; this is not strict parallel admission.
-    #[cfg(all(feature = "parallel", feature = "experimental-components"))]
-    pub fn build_component_experiment_with_executor_and_cmg_budget(
-        graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        executor: &ParallelExecutor,
-        cmg_budget_bytes: usize,
-    ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::component_executor_construction_cmg_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-                experiment,
-            )?,
-            cmg_budget_bytes,
-        )?;
-        let hierarchy = if !experiment.prune_coarse_isolates {
-            CmgHierarchy::build_executor_admitted::<false, false>(graph, options, executor)?
-        } else if experiment.preserve_unpruned_stopping {
-            CmgHierarchy::build_executor_admitted::<true, true>(graph, options, executor)?
-        } else {
-            CmgHierarchy::build_executor_admitted::<true, false>(graph, options, executor)?
-        };
-        if experiment.factor_terminal_components {
-            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
-                GroundedLdl::factor_by_component_with_budget(graph, cmg_budget_bytes)
-            })
-        } else {
-            Self::from_hierarchy_with_factor_impl::<true>(hierarchy, |graph| {
-                GroundedLdl::factor_with_budget(graph, cmg_budget_bytes)
-            })
-        }
-    }
-
-    /// Build an opt-in component experiment with independent setup changes.
-    ///
-    /// Uses the ordinary certified PCG, workspace, and fixed cycle application
-    /// paths. Active-count pruning can change termination and repeat counts;
-    /// preserving unpruned stopping separates storage pruning from that change.
-    /// Terminal component factors use ordered sparse numerical updates.
-    #[cfg(feature = "experimental-components")]
-    pub fn build_component_experiment(
-        graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-    ) -> Result<Self, CmgError> {
-        let hierarchy = if experiment.prune_coarse_isolates {
-            CmgHierarchy::build_pruned(graph, options, experiment.preserve_unpruned_stopping)?
-        } else {
-            CmgHierarchy::build(graph, options)?
-        };
-        if experiment.factor_terminal_components {
-            Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor_by_component)
-        } else {
-            Self::from_hierarchy(hierarchy)
-        }
-    }
-
-    /// Build with deterministic parallel hierarchy contraction and sorting.
-    ///
-    /// The resulting hierarchy, terminal factor, and repeat counts are exactly
-    /// the same as [`Self::build`].
-    #[cfg(feature = "parallel")]
-    pub fn build_with_executor(
-        graph: &Laplacian,
-        options: CmgOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        Self::from_hierarchy(CmgHierarchy::build_with_executor(graph, options, executor)?)
-    }
-
-    /// Build the explicit component path using an existing package-owned pool.
-    /// No extra executor or duplicate hierarchy is created. Contraction/sorting
-    /// retain the ordinary executor thresholds; forest work and factorization
-    /// remain serial. Options, stopping rules and certification are unchanged.
-    ///
-    /// This is not whole-build memory admission: see [`crate::CmgMemoryEstimate`]
-    /// and the unresolved construction/runtime limits in the ownership guide.
-    #[cfg(all(feature = "experimental-components", feature = "parallel"))]
-    pub fn build_component_experiment_with_executor(
-        graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        let hierarchy = if experiment.prune_coarse_isolates {
-            CmgHierarchy::build_pruned_with_executor(
-                graph,
-                options,
-                experiment.preserve_unpruned_stopping,
-                executor,
-            )?
-        } else {
-            CmgHierarchy::build_with_executor(graph, options, executor)?
-        };
-        if experiment.factor_terminal_components {
-            Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor_by_component)
-        } else {
-            Self::from_hierarchy(hierarchy)
-        }
-    }
-
-    /// Build through the production hierarchy and finalization paths while timing both stages.
-    #[cfg(all(feature = "parallel", feature = "profiling"))]
-    pub fn build_with_executor_profiled(
-        graph: &Laplacian,
-        options: CmgOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<(Self, PreconditionerBuildProfile), CmgError> {
-        let total_start = Instant::now();
-        let hierarchy_start = Instant::now();
-        let (hierarchy, hierarchy_phases) =
-            CmgHierarchy::build_with_executor_profiled(graph, options, executor)?;
-        let hierarchy_nanoseconds = hierarchy_start.elapsed().as_nanos();
-        let finalization_start = Instant::now();
-        let preconditioner = Self::from_hierarchy(hierarchy)?;
-        let finalization_nanoseconds = finalization_start.elapsed().as_nanos();
-        let profile = PreconditionerBuildProfile {
-            hierarchy_nanoseconds,
-            hierarchy_phases: hierarchy_phases
-                .into_iter()
-                .map(|record| HierarchyPhaseProfile {
-                    level: record.level,
-                    phase: record.phase,
-                    nanoseconds: record.nanoseconds,
-                })
-                .collect(),
-            finalization_nanoseconds,
-            total_nanoseconds: total_start.elapsed().as_nanos(),
-        };
-        Ok((preconditioner, profile))
-    }
-
-    fn from_hierarchy(hierarchy: CmgHierarchy) -> Result<Self, CmgError> {
-        Self::from_hierarchy_with_factor(hierarchy, GroundedLdl::factor)
-    }
-
-    fn from_hierarchy_with_factor(
-        hierarchy: CmgHierarchy,
-        factor: impl FnOnce(&Laplacian) -> Result<GroundedLdl, CmgError>,
-    ) -> Result<Self, CmgError> {
-        Self::from_hierarchy_with_factor_impl::<false>(hierarchy, factor)
-    }
-
-    fn from_hierarchy_with_factor_impl<const ADMITTED: bool>(
-        mut hierarchy: CmgHierarchy,
-        factor: impl FnOnce(&Laplacian) -> Result<GroundedLdl, CmgError>,
-    ) -> Result<Self, CmgError> {
-        let finest = hierarchy
-            .levels()
-            .first()
-            .ok_or(CmgError::InvalidHierarchy {
-                context: "hierarchy contains no finest level",
-            })?;
-        let finest_components = if let Some(components) = finest.graph().prepared_components() {
-            Arc::clone(components)
-        } else if ADMITTED {
-            Arc::new(Components::try_from_endpoints(
-                finest.graph().vertex_count(),
-                finest
-                    .graph()
-                    .edges()
-                    .iter()
-                    .map(|edge| (edge.u(), edge.v())),
-            )?)
-        } else {
-            Arc::new(Components::from_laplacian(finest.graph()))
-        };
-        let coarse_centering = if ADMITTED {
-            let mut plans = crate::storage::try_capacity(
-                hierarchy.levels().len() - 1,
-                "coarse centering plans",
-            )?;
-            for level in hierarchy.levels().iter().skip(1) {
-                plans.push(CenteringPlan::try_from_laplacian(level.graph())?);
-            }
-            plans
-        } else {
-            hierarchy
-                .levels()
-                .iter()
-                .skip(1)
-                .map(|level| CenteringPlan::from_laplacian(level.graph()))
-                .collect()
-        };
-        let direct_terminal = if hierarchy.report().terminal_reason() == TerminalReason::Direct {
-            let terminal = hierarchy
-                .levels()
-                .last()
-                .ok_or(CmgError::InvalidHierarchy {
-                    context: "hierarchy contains no terminal level",
-                })?;
-            Some(factor(terminal.graph())?)
-        } else {
-            None
-        };
-
-        let mut repeat_counts: Vec<usize> = if ADMITTED {
-            let mut counts = crate::storage::try_capacity(
-                hierarchy.levels().len(),
-                "preconditioner repeat counts",
-            )?;
-            counts.extend(hierarchy.levels().iter().map(|level| level.repeat()));
-            counts
-        } else {
-            hierarchy
-                .levels()
-                .iter()
-                .map(|level| level.repeat())
-                .collect()
-        };
-        if hierarchy.levels().len() >= 2 {
-            if let Some(factor) = &direct_terminal {
-                let penultimate = hierarchy.levels().len() - 2;
-                let repeat = repeat_from_nonzeros(
-                    hierarchy.levels()[penultimate].graph().matrix_nnz(),
-                    factor.factor_nonzeros(),
-                );
-                repeat_counts[penultimate] = repeat;
-                hierarchy.set_repeat(penultimate, repeat)?;
-            }
-        }
-
         Ok(Self {
             hierarchy,
             finest_components,
@@ -1230,7 +912,7 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
-            None,
+            &mut crate::cancel::Unmetered,
         )
     }
 
@@ -1247,7 +929,7 @@ impl CmgPreconditioner {
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
-            Some(&mut crate::cancel::CancelMeter::new(cancel)),
+            &mut crate::cancel::CancelMeter::new(cancel),
         )
     }
 
@@ -1259,14 +941,58 @@ impl CmgPreconditioner {
         Ok(output)
     }
 
-    /// Apply the preconditioner into caller-owned output and workspace.
+    /// Apply the preconditioner into caller-owned output and workspace,
+    /// validating and projecting the right-hand side with default tolerances.
     pub fn apply_into(
         &self,
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
     ) -> Result<(), CmgError> {
-        self.apply_into_with_validation(rhs, output, workspace, ValidationOptions::default())
+        self.apply_projected_into(
+            rhs,
+            output,
+            workspace,
+            ValidationOptions::default(),
+            ApplyContext::default(),
+        )
+    }
+
+    /// Validate and project a right-hand side, then apply the fixed cycle.
+    ///
+    /// A component sum accepted as floating-point roundoff is projected to
+    /// exact zero before the stationary CMG cycle is evaluated.
+    pub fn apply_projected_into(
+        &self,
+        rhs: &[f64],
+        output: &mut [f64],
+        workspace: &mut CmgWorkspace,
+        validation: ValidationOptions,
+        context: ApplyContext<'_>,
+    ) -> Result<(), CmgError> {
+        self.validate_application(rhs, output, workspace, context, "CmgPreconditioner::apply")?;
+        validation.validate()?;
+        with_meter!(context.cancel, meter => {
+            let mut projected_rhs = workspace.take_projected_rhs();
+            let result = (|| {
+                crate::cancel::chunked(meter, "CMG projected RHS copy", rhs.len(), 1, |range| {
+                    projected_rhs[range.clone()].copy_from_slice(&rhs[range]);
+                    Ok(())
+                })?;
+                let mut component_workspace = workspace.take_component();
+                let projection = self.finest_components.project_rhs_in_place_with_workspace(
+                    &mut projected_rhs,
+                    validation,
+                    &mut component_workspace,
+                    meter,
+                );
+                workspace.put_component(component_workspace);
+                projection?;
+                self.cycle_scalar(&projected_rhs, output, workspace, context, meter, &mut ())
+            })();
+            workspace.put_projected_rhs(projected_rhs);
+            result
+        })
     }
 
     /// Apply a right-hand side already known to be component-compatible.
@@ -1274,972 +1000,160 @@ impl CmgPreconditioner {
     /// This skips the fine-level compatibility scan and projection performed by
     /// [`Self::apply_into`]. It is intended for Krylov solvers that validate and
     /// project a submitted right-hand side once, then keep residuals in the
-    /// Laplacian range. Dimension, workspace, and option checks remain enabled;
-    /// recursive coarse-level roundoff is removed by deterministic component centering.
+    /// Laplacian range. Dimension and workspace checks remain enabled;
+    /// recursive coarse-level roundoff is removed by deterministic component
+    /// centering. An incompatible right-hand side does not represent a
+    /// solvable Laplacian system and should use [`Self::apply_into`] instead.
     pub fn apply_compatible_into(
         &self,
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
     ) -> Result<(), CmgError> {
-        self.apply_compatible_into_with_validation(
-            rhs,
-            output,
-            workspace,
-            ValidationOptions::default(),
-        )
+        self.apply_compatible_into_with(rhs, output, workspace, ApplyContext::default())
     }
 
-    /// Apply an already compatible right-hand side with explicit validation
-    /// tolerances for public validation; recursive coarse residuals are centered.
-    ///
-    /// Callers are responsible for ensuring component-wise compatibility. An
-    /// incompatible right-hand side does not represent a solvable Laplacian
-    /// system and should use [`Self::apply_into`] instead.
-    pub fn apply_compatible_into_with_validation(
+    /// Apply the fixed cycle to a compatible right-hand side under `context`.
+    pub fn apply_compatible_into_with(
         &self,
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
+        context: ApplyContext<'_>,
     ) -> Result<(), CmgError> {
-        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
-        if rhs.len() != dimension {
-            return Err(CmgError::dimension(
-                "CmgPreconditioner::apply compatible rhs",
-                dimension,
-                rhs.len(),
-            ));
-        }
-        if output.len() != dimension {
-            return Err(CmgError::dimension(
-                "CmgPreconditioner::apply compatible output",
-                dimension,
-                output.len(),
-            ));
-        }
-        workspace.validate(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
+        self.validate_application(
+            rhs,
+            output,
+            workspace,
+            context,
+            "CmgPreconditioner::apply compatible",
         )?;
-        validation.validate()?;
-        self.apply_level(0, rhs, output, workspace, 1)
+        with_meter!(context.cancel, meter => {
+            self.cycle_scalar(rhs, output, workspace, context, meter, &mut ())
+        })
     }
 
-    /// Profile the exact serial cycle for an already compatible right-hand side.
-    ///
-    /// Timings are exclusive across phases and recursive levels. As with
-    /// `apply_compatible_into`, the caller supplies a compatible RHS.
+    /// Apply the cycle of [`Self::apply_compatible_into_with`] while recording
+    /// exclusive phase timings; parent timings exclude recursive children.
     #[cfg(feature = "cycle-profiling")]
     pub fn profile_apply_compatible_into(
         &self,
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
+        context: ApplyContext<'_>,
     ) -> Result<crate::CmgApplyProfile, CmgError> {
-        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
-        for (context, actual) in [
-            ("CmgPreconditioner::apply compatible rhs", rhs.len()),
-            ("CmgPreconditioner::apply compatible output", output.len()),
-        ] {
-            if actual != dimension {
-                return Err(CmgError::dimension(context, dimension, actual));
-            }
-        }
-        self.validate_workspace(workspace)?;
+        self.validate_application(
+            rhs,
+            output,
+            workspace,
+            context,
+            "CmgPreconditioner::apply compatible",
+        )?;
         let mut profile = crate::CmgApplyProfile::new(self.hierarchy.levels().len());
-        self.apply_level_recorded(0, rhs, output, workspace, 1, &mut profile)?;
+        with_meter!(context.cancel, meter => {
+            self.cycle_scalar(rhs, output, workspace, context, meter, &mut profile)
+        })?;
         Ok(profile)
     }
 
-    #[cfg(feature = "cycle-profiling")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn apply_profiled_with_plan(
+    /// The prevalidated scalar cycle used by the solvers, under their meter.
+    pub(crate) fn apply_compatible_metered<M: Meter, R: CycleRecorder>(
         &self,
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
-        plan: &ParallelCmgPlan,
-        executor: &ParallelExecutor,
-        profile: &mut crate::CmgApplyProfile,
-    ) -> Result<(), CmgError> {
-        self.apply_level_with_plan_recorded(0, rhs, output, workspace, 1, plan, executor, profile)
-    }
-
-    pub(crate) fn apply_compatible_into_prevalidated(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-    ) -> Result<(), CmgError> {
-        self.apply_level(0, rhs, output, workspace, 1)
-    }
-
-    #[cfg(feature = "parallel")]
-    fn apply_compatible_into_with_plan(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-        plan: &ParallelCmgPlan,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        plan.validate(self)?;
-        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
-        if rhs.len() != dimension {
-            return Err(CmgError::dimension(
-                "ParallelCmgPlan::apply compatible rhs",
-                dimension,
-                rhs.len(),
-            ));
-        }
-        if output.len() != dimension {
-            return Err(CmgError::dimension(
-                "ParallelCmgPlan::apply compatible output",
-                dimension,
-                output.len(),
-            ));
-        }
-        self.validate_workspace(workspace)?;
-        validation.validate()?;
-        self.apply_compatible_into_with_prevalidated_plan(
-            rhs, output, workspace, validation, plan, executor,
-        )
-    }
-
-    #[cfg(feature = "parallel")]
-    fn apply_compatible_into_with_prevalidated_plan(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-        plan: &ParallelCmgPlan,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        debug_assert!(validation.validate().is_ok());
-        self.apply_level_with_plan(0, rhs, output, workspace, 1, plan, executor)
-    }
-
-    /// Apply with explicit compatibility-validation tolerances.
-    ///
-    /// A component sum accepted as floating-point roundoff is projected to
-    /// exact zero before the stationary CMG cycle is evaluated.
-    pub fn apply_into_with_validation(
-        &self,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        validation: ValidationOptions,
-    ) -> Result<(), CmgError> {
-        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
-        if rhs.len() != dimension {
-            return Err(CmgError::dimension(
-                "CmgPreconditioner::apply rhs",
-                dimension,
-                rhs.len(),
-            ));
-        }
-        if output.len() != dimension {
-            return Err(CmgError::dimension(
-                "CmgPreconditioner::apply output",
-                dimension,
-                output.len(),
-            ));
-        }
-        workspace.validate(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-        )?;
-        let mut projected_rhs = workspace.take_projected_rhs();
-        projected_rhs.copy_from_slice(rhs);
-        let result = (|| {
-            let mut component_workspace = workspace.take_component();
-            let projection = self.finest_components.project_rhs_in_place_with_workspace(
-                &mut projected_rhs,
-                validation,
-                &mut component_workspace,
-            );
-            workspace.put_component(component_workspace);
-            projection?;
-            self.apply_level(0, &projected_rhs, output, workspace, 1)
-        })();
-        workspace.put_projected_rhs(projected_rhs);
-        result
-    }
-
-    #[cfg(feature = "parallel")]
-    fn apply_level_with_plan(
-        &self,
-        level_index: usize,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        iterations: usize,
-        plan: &ParallelCmgPlan,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        let level = &self.hierarchy.levels()[level_index];
-        let dimension = level.graph().vertex_count();
-        if rhs.len() != dimension || output.len() != dimension {
-            return Err(CmgError::InvalidHierarchy {
-                context: "parallel recursive vector dimension does not match hierarchy level",
-            });
-        }
-
-        if let Some(reason) = level.terminal_reason() {
-            if reason == TerminalReason::Direct {
-                let factor = self
-                    .direct_terminal
-                    .as_ref()
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "direct terminal is missing its LDL factor",
-                    })?;
-                let mut local = workspace.take_level(level_index);
-                let result = factor.solve_into_compatible(
-                    rhs,
-                    output,
-                    &mut local.factor_forward,
-                    &mut local.factor_solution,
-                );
-                workspace.put_level(level_index, local);
-                return result;
-            }
-            assign_scaled_planned(output, level.inverse_diagonal(), rhs, executor, false);
-            return Ok(());
-        }
-
-        if iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero stationary iterations",
-            });
-        }
-        let child_iterations = self.repeat_counts[level_index];
-        if child_iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero child recursive repeats",
-            });
-        }
-        let parallel_level = plan.level_operator(level_index).is_some();
-
-        let mut local = workspace.take_level(level_index);
-        // With a zero-dimensional child, restriction and correction have no
-        // output. Keep both smoothing sweeps, but avoid forming the unused
-        // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
-        let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
-        let result = (|| {
-            for iteration in 0..iterations {
-                if iteration == 0 {
-                    assign_scaled_planned(
-                        output,
-                        level.inverse_diagonal(),
-                        rhs,
-                        executor,
-                        parallel_level,
-                    );
-                } else {
-                    plan.matvec_into(
-                        level_index,
-                        level.graph(),
-                        output,
-                        &mut local.residual,
-                        executor,
-                    )?;
-                    jacobi_add_planned(
-                        output,
-                        level.inverse_diagonal(),
-                        rhs,
-                        &local.residual,
-                        executor,
-                        parallel_level,
-                    );
-                }
-
-                if has_coarse_work {
-                    plan.matvec_into(
-                        level_index,
-                        level.graph(),
-                        output,
-                        &mut local.residual,
-                        executor,
-                    )?;
-                    #[cfg(feature = "experimental-components")]
-                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        residual_from_matvec_planned(
-                            &mut local.residual,
-                            rhs,
-                            executor,
-                            parallel_level,
-                        );
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
-                    let centering = &self.coarse_centering[level_index];
-                    let mut centering_workspace = workspace.take_centering(level_index);
-                    let centering_result = centering.center_in_place_with_workspace_and_executor(
-                        &mut local.coarse_rhs,
-                        &mut centering_workspace,
-                        executor,
-                    );
-                    workspace.put_centering(level_index, centering_workspace);
-                    centering_result?;
-                    self.apply_level_with_plan(
-                        level_index + 1,
-                        &local.coarse_rhs,
-                        &mut local.coarse_correction,
-                        workspace,
-                        child_iterations,
-                        plan,
-                        executor,
-                    )?;
-                    if parallel_level {
-                        level.prolong_add_into_with_executor(
-                            &local.coarse_correction,
-                            output,
-                            executor,
-                        )?;
-                    } else {
-                        level.prolong_add_into(&local.coarse_correction, output)?;
-                    }
-                }
-
-                plan.matvec_into(
-                    level_index,
-                    level.graph(),
-                    output,
-                    &mut local.residual,
-                    executor,
-                )?;
-                jacobi_add_planned(
-                    output,
-                    level.inverse_diagonal(),
-                    rhs,
-                    &local.residual,
-                    executor,
-                    parallel_level,
-                );
-            }
-            Ok(())
-        })();
-        workspace.put_level(level_index, local);
-        result
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "cycle-profiling")]
-    fn apply_level_with_plan_recorded<R: CycleRecorder>(
-        &self,
-        level_index: usize,
-        rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        iterations: usize,
-        plan: &ParallelCmgPlan,
-        executor: &ParallelExecutor,
+        context: ApplyContext<'_>,
+        meter: &mut M,
         recorder: &mut R,
     ) -> Result<(), CmgError> {
-        let level = &self.hierarchy.levels()[level_index];
-        let dimension = level.graph().vertex_count();
-        if rhs.len() != dimension || output.len() != dimension {
-            return Err(CmgError::InvalidHierarchy {
-                context: "parallel recursive vector dimension does not match hierarchy level",
-            });
-        }
-
-        recorder.enter(level_index);
-        if let Some(reason) = level.terminal_reason() {
-            let stamp = R::start();
-            if reason == TerminalReason::Direct {
-                let factor = self
-                    .direct_terminal
-                    .as_ref()
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "direct terminal is missing its LDL factor",
-                    })?;
-                let mut local = workspace.take_level(level_index);
-                let result = factor.solve_into_compatible(
-                    rhs,
-                    output,
-                    &mut local.factor_forward,
-                    &mut local.factor_solution,
-                );
-                workspace.put_level(level_index, local);
-                recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
-                return result;
-            }
-            assign_scaled_planned(output, level.inverse_diagonal(), rhs, executor, false);
-            recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
-            return Ok(());
-        }
-
-        if iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero stationary iterations",
-            });
-        }
-        let child_iterations = self.repeat_counts[level_index];
-        if child_iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero child recursive repeats",
-            });
-        }
-        let parallel_level = plan.level_operator(level_index).is_some();
-
-        let mut local = workspace.take_level(level_index);
-        // With a zero-dimensional child, restriction and correction have no
-        // output. Keep both smoothing sweeps, but avoid forming the unused
-        // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
-        let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
-        let result = (|| {
-            for iteration in 0..iterations {
-                recorder.iteration(level_index);
-                let stamp = R::start();
-                if iteration == 0 {
-                    assign_scaled_planned(
-                        output,
-                        level.inverse_diagonal(),
-                        rhs,
-                        executor,
-                        parallel_level,
-                    );
-                } else {
-                    plan.matvec_into(
-                        level_index,
-                        level.graph(),
-                        output,
-                        &mut local.residual,
-                        executor,
-                    )?;
-                    jacobi_add_planned(
-                        output,
-                        level.inverse_diagonal(),
-                        rhs,
-                        &local.residual,
-                        executor,
-                        parallel_level,
-                    );
-                }
-
-                recorder.finish(
-                    level_index,
-                    if iteration == 0 {
-                        CmgApplyPhase::Initialization
-                    } else {
-                        CmgApplyPhase::Smoothing
-                    },
-                    stamp,
-                );
-
-                if has_coarse_work {
-                    let stamp = R::start();
-                    plan.matvec_into(
-                        level_index,
-                        level.graph(),
-                        output,
-                        &mut local.residual,
-                        executor,
-                    )?;
-                    recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
-                    let stamp = R::start();
-                    #[cfg(feature = "experimental-components")]
-                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        residual_from_matvec_planned(
-                            &mut local.residual,
-                            rhs,
-                            executor,
-                            parallel_level,
-                        );
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
-                    recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
-                    let stamp = R::start();
-                    let centering = &self.coarse_centering[level_index];
-                    let mut centering_workspace = workspace.take_centering(level_index);
-                    let centering_result = centering.center_in_place_with_workspace_and_executor(
-                        &mut local.coarse_rhs,
-                        &mut centering_workspace,
-                        executor,
-                    );
-                    workspace.put_centering(level_index, centering_workspace);
-                    centering_result?;
-                    recorder.finish(level_index, CmgApplyPhase::Centering, stamp);
-                    self.apply_level_with_plan_recorded(
-                        level_index + 1,
-                        &local.coarse_rhs,
-                        &mut local.coarse_correction,
-                        workspace,
-                        child_iterations,
-                        plan,
-                        executor,
-                        recorder,
-                    )?;
-                    let stamp = R::start();
-                    if parallel_level {
-                        level.prolong_add_into_with_executor(
-                            &local.coarse_correction,
-                            output,
-                            executor,
-                        )?;
-                    } else {
-                        level.prolong_add_into(&local.coarse_correction, output)?;
-                    }
-                    recorder.finish(level_index, CmgApplyPhase::Prolongation, stamp);
-                }
-
-                let stamp = R::start();
-                plan.matvec_into(
-                    level_index,
-                    level.graph(),
-                    output,
-                    &mut local.residual,
-                    executor,
-                )?;
-                jacobi_add_planned(
-                    output,
-                    level.inverse_diagonal(),
-                    rhs,
-                    &local.residual,
-                    executor,
-                    parallel_level,
-                );
-                recorder.finish(level_index, CmgApplyPhase::Smoothing, stamp);
-            }
-            Ok(())
-        })();
-        workspace.put_level(level_index, local);
-        result
+        self.cycle_scalar(rhs, output, workspace, context, meter, recorder)
     }
 
-    fn apply_level(
+    fn validate_application(
         &self,
-        level_index: usize,
         rhs: &[f64],
-        output: &mut [f64],
-        workspace: &mut CmgWorkspace,
-        iterations: usize,
+        output: &[f64],
+        workspace: &CmgWorkspace,
+        context: ApplyContext<'_>,
+        name: &'static str,
     ) -> Result<(), CmgError> {
-        let level = &self.hierarchy.levels()[level_index];
-        let dimension = level.graph().vertex_count();
-        if rhs.len() != dimension || output.len() != dimension {
-            return Err(CmgError::InvalidHierarchy {
-                context: "recursive vector dimension does not match hierarchy level",
-            });
+        context.validate(self)?;
+        let dimension = self.hierarchy.levels()[0].graph().vertex_count();
+        if rhs.len() != dimension {
+            return Err(CmgError::dimension(name, dimension, rhs.len()));
         }
-
-        if let Some(reason) = level.terminal_reason() {
-            if reason == TerminalReason::Direct {
-                let factor = self
-                    .direct_terminal
-                    .as_ref()
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "direct terminal is missing its LDL factor",
-                    })?;
-                let mut local = workspace.take_level(level_index);
-                let result = factor.solve_into_compatible(
-                    rhs,
-                    output,
-                    &mut local.factor_forward,
-                    &mut local.factor_solution,
-                );
-                workspace.put_level(level_index, local);
-                return result;
-            }
-            for ((value, inverse_diagonal), rhs_value) in
-                output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
-            {
-                *value = *inverse_diagonal * *rhs_value;
-            }
-            return Ok(());
+        if output.len() != dimension {
+            return Err(CmgError::dimension(name, dimension, output.len()));
         }
-
-        if iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero stationary iterations",
-            });
-        }
-        let child_iterations = self.repeat_counts[level_index];
-        if child_iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero child recursive repeats",
-            });
-        }
-
-        let mut local = workspace.take_level(level_index);
-        // With a zero-dimensional child, restriction and correction have no
-        // output. Keep both smoothing sweeps, but avoid forming the unused
-        // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
-        let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
-        let result = (|| {
-            for iteration in 0..iterations {
-                if iteration == 0 {
-                    for ((value, inverse_diagonal), rhs_value) in
-                        output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
-                    {
-                        *value = *inverse_diagonal * *rhs_value;
-                    }
-                } else {
-                    level.graph().matvec_into(output, &mut local.residual)?;
-                    for (((value, inverse_diagonal), rhs_value), matrix_value) in output
-                        .iter_mut()
-                        .zip(level.inverse_diagonal())
-                        .zip(rhs)
-                        .zip(&local.residual)
-                    {
-                        *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-                    }
-                }
-
-                if has_coarse_work {
-                    level.graph().matvec_into(output, &mut local.residual)?;
-                    #[cfg(feature = "experimental-components")]
-                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
-                            *residual = *rhs_value - *residual;
-                        }
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
-                    let centering = &self.coarse_centering[level_index];
-                    let mut centering_workspace = workspace.take_centering(level_index);
-                    // Restricted residuals are component-compatible in exact
-                    // arithmetic. Remove only floating-point null-space drift before
-                    // the recursive solve instead of repeating full public-boundary
-                    // compatibility validation and exact correction passes.
-                    let centering_result = centering.center_in_place_with_workspace(
-                        &mut local.coarse_rhs,
-                        &mut centering_workspace,
-                    );
-                    workspace.put_centering(level_index, centering_workspace);
-                    centering_result?;
-                    self.apply_level(
-                        level_index + 1,
-                        &local.coarse_rhs,
-                        &mut local.coarse_correction,
-                        workspace,
-                        child_iterations,
-                    )?;
-                    level.prolong_add_into(&local.coarse_correction, output)?;
-                }
-
-                level.graph().matvec_into(output, &mut local.residual)?;
-                for (((value, inverse_diagonal), rhs_value), matrix_value) in output
-                    .iter_mut()
-                    .zip(level.inverse_diagonal())
-                    .zip(rhs)
-                    .zip(&local.residual)
-                {
-                    *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-                }
-            }
-            Ok(())
-        })();
-        workspace.put_level(level_index, local);
-        result
+        self.validate_workspace(workspace)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(feature = "cycle-profiling")]
-    fn apply_level_recorded<R: CycleRecorder>(
+    fn cycle_scalar<M: Meter, R: CycleRecorder>(
         &self,
-        level_index: usize,
         rhs: &[f64],
         output: &mut [f64],
         workspace: &mut CmgWorkspace,
-        iterations: usize,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] context: ApplyContext<'_>,
+        meter: &mut M,
         recorder: &mut R,
     ) -> Result<(), CmgError> {
-        let level = &self.hierarchy.levels()[level_index];
-        let dimension = level.graph().vertex_count();
-        if rhs.len() != dimension || output.len() != dimension {
-            return Err(CmgError::InvalidHierarchy {
-                context: "recursive vector dimension does not match hierarchy level",
-            });
+        Cycle {
+            cmg: self,
+            store: workspace,
+            #[cfg(feature = "parallel")]
+            plan: context.plan,
+            #[cfg(feature = "parallel")]
+            team: context.team,
         }
-
-        recorder.enter(level_index);
-        if let Some(reason) = level.terminal_reason() {
-            let stamp = R::start();
-            if reason == TerminalReason::Direct {
-                let factor = self
-                    .direct_terminal
-                    .as_ref()
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "direct terminal is missing its LDL factor",
-                    })?;
-                let mut local = workspace.take_level(level_index);
-                let result = factor.solve_into_compatible(
-                    rhs,
-                    output,
-                    &mut local.factor_forward,
-                    &mut local.factor_solution,
-                );
-                workspace.put_level(level_index, local);
-                recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
-                return result;
-            }
-            for ((value, inverse_diagonal), rhs_value) in
-                output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
-            {
-                *value = *inverse_diagonal * *rhs_value;
-            }
-            recorder.finish(level_index, CmgApplyPhase::Terminal, stamp);
-            return Ok(());
-        }
-
-        if iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero stationary iterations",
-            });
-        }
-        let child_iterations = self.repeat_counts[level_index];
-        if child_iterations == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "nonterminal level has zero child recursive repeats",
-            });
-        }
-
-        let mut local = workspace.take_level(level_index);
-        // With a zero-dimensional child, restriction and correction have no
-        // output. Keep both smoothing sweeps, but avoid forming the unused
-        // middle residual and making an empty recursive call.
-        #[cfg(feature = "experimental-components")]
-        let has_coarse_work = !local.coarse_rhs.is_empty();
-        #[cfg(not(feature = "experimental-components"))]
-        let has_coarse_work = true;
-        let result = (|| {
-            for iteration in 0..iterations {
-                recorder.iteration(level_index);
-                let stamp = R::start();
-                if iteration == 0 {
-                    for ((value, inverse_diagonal), rhs_value) in
-                        output.iter_mut().zip(level.inverse_diagonal()).zip(rhs)
-                    {
-                        *value = *inverse_diagonal * *rhs_value;
-                    }
-                } else {
-                    level.graph().matvec_into(output, &mut local.residual)?;
-                    for (((value, inverse_diagonal), rhs_value), matrix_value) in output
-                        .iter_mut()
-                        .zip(level.inverse_diagonal())
-                        .zip(rhs)
-                        .zip(&local.residual)
-                    {
-                        *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-                    }
-                }
-
-                recorder.finish(
-                    level_index,
-                    if iteration == 0 {
-                        CmgApplyPhase::Initialization
-                    } else {
-                        CmgApplyPhase::Smoothing
-                    },
-                    stamp,
-                );
-
-                if has_coarse_work {
-                    let stamp = R::start();
-                    level.graph().matvec_into(output, &mut local.residual)?;
-                    recorder.finish(level_index, CmgApplyPhase::ResidualMatvec, stamp);
-                    let stamp = R::start();
-                    #[cfg(feature = "experimental-components")]
-                    level.restrict_residual_into(rhs, &local.residual, &mut local.coarse_rhs)?;
-                    #[cfg(not(feature = "experimental-components"))]
-                    {
-                        for (residual, rhs_value) in local.residual.iter_mut().zip(rhs) {
-                            *residual = *rhs_value - *residual;
-                        }
-                        level.restrict_into(&local.residual, &mut local.coarse_rhs)?;
-                    }
-                    recorder.finish(level_index, CmgApplyPhase::Restriction, stamp);
-                    let stamp = R::start();
-                    let centering = &self.coarse_centering[level_index];
-                    let mut centering_workspace = workspace.take_centering(level_index);
-                    // Restricted residuals are component-compatible in exact
-                    // arithmetic. Remove only floating-point null-space drift before
-                    // the recursive solve instead of repeating full public-boundary
-                    // compatibility validation and exact correction passes.
-                    let centering_result = centering.center_in_place_with_workspace(
-                        &mut local.coarse_rhs,
-                        &mut centering_workspace,
-                    );
-                    workspace.put_centering(level_index, centering_workspace);
-                    centering_result?;
-                    recorder.finish(level_index, CmgApplyPhase::Centering, stamp);
-                    self.apply_level_recorded(
-                        level_index + 1,
-                        &local.coarse_rhs,
-                        &mut local.coarse_correction,
-                        workspace,
-                        child_iterations,
-                        recorder,
-                    )?;
-                    let stamp = R::start();
-                    level.prolong_add_into(&local.coarse_correction, output)?;
-                    recorder.finish(level_index, CmgApplyPhase::Prolongation, stamp);
-                }
-
-                let stamp = R::start();
-                level.graph().matvec_into(output, &mut local.residual)?;
-                for (((value, inverse_diagonal), rhs_value), matrix_value) in output
-                    .iter_mut()
-                    .zip(level.inverse_diagonal())
-                    .zip(rhs)
-                    .zip(&local.residual)
-                {
-                    *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-                }
-                recorder.finish(level_index, CmgApplyPhase::Smoothing, stamp);
-            }
-            Ok(())
-        })();
-        workspace.put_level(level_index, local);
-        result
+        .level(0, rhs, output, 1, meter, recorder)
     }
 }
 
-#[cfg(feature = "parallel")]
-fn assign_scaled_planned(
-    output: &mut [f64],
-    inverse_diagonal: &[f64],
-    rhs: &[f64],
-    executor: &ParallelExecutor,
-    parallel: bool,
-) {
-    if parallel {
-        assign_scaled_parallel(output, inverse_diagonal, rhs, executor);
-    } else {
-        for ((value, &diagonal), &right) in output.iter_mut().zip(inverse_diagonal).zip(rhs) {
-            *value = diagonal * right;
-        }
+/// Resources for one fixed-cycle application.
+///
+/// The default is the serial, uncancellable cycle. A [`ParallelCmgPlan`]
+/// selects its row operator on every level where it retained one; a team runs
+/// those levels' row kernels and transfers in parallel and centers a scalar
+/// workspace's single large coarse component with fixed-chunk team sums. These
+/// are the existing scalar-planned and interleaved arithmetic: results never
+/// depend on the worker count beyond the plan's operator set and that
+/// centering choice. With `cancel`, every kernel polls the sticky query after
+/// a bounded number of processed items (edges, rows, transfer entries, factor
+/// entries), parallel lanes poll it between bounded sub-ranges, and all lanes
+/// join before [`CmgError::Cancelled`] is returned; outputs are then
+/// unspecified and workspaces stay reusable. No context changes results.
+#[derive(Clone, Copy, Default)]
+pub struct ApplyContext<'a> {
+    /// Row operators retained for this preconditioner's large levels.
+    #[cfg(feature = "parallel")]
+    pub plan: Option<&'a ParallelCmgPlan>,
+    /// The borrowed host team for planned levels and scalar centering.
+    #[cfg(feature = "parallel")]
+    pub team: Option<Team<'a>>,
+    /// The caller's sticky cancellation query.
+    pub cancel: Option<Cancellation<'a>>,
+}
+
+impl core::fmt::Debug for ApplyContext<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut debug = formatter.debug_struct("ApplyContext");
+        #[cfg(feature = "parallel")]
+        debug
+            .field("plan", &self.plan.map(ParallelCmgPlan::operator_count))
+            .field("team", &self.team);
+        debug.field("cancel", &self.cancel.is_some()).finish()
     }
 }
 
-#[cfg(feature = "parallel")]
-fn jacobi_add_planned(
-    output: &mut [f64],
-    inverse_diagonal: &[f64],
-    rhs: &[f64],
-    matvec: &[f64],
-    executor: &ParallelExecutor,
-    parallel: bool,
-) {
-    if parallel {
-        jacobi_add_parallel(output, inverse_diagonal, rhs, matvec, executor);
-    } else {
-        for (((value, &diagonal), &right), &product) in
-            output.iter_mut().zip(inverse_diagonal).zip(rhs).zip(matvec)
-        {
-            *value += diagonal * (right - product);
+impl ApplyContext<'_> {
+    fn validate(&self, cmg: &CmgPreconditioner) -> Result<(), CmgError> {
+        #[cfg(feature = "parallel")]
+        if let Some(plan) = self.plan {
+            plan.validate(cmg)?;
         }
-    }
-}
-
-#[cfg(all(feature = "parallel", not(feature = "experimental-components")))]
-fn residual_from_matvec_planned(
-    matvec: &mut [f64],
-    rhs: &[f64],
-    executor: &ParallelExecutor,
-    parallel: bool,
-) {
-    if parallel {
-        residual_from_matvec_parallel(matvec, rhs, executor);
-    } else {
-        for (value, &right) in matvec.iter_mut().zip(rhs) {
-            *value = right - *value;
-        }
-    }
-}
-
-#[cfg(feature = "parallel")]
-fn assign_scaled_parallel(
-    output: &mut [f64],
-    inverse_diagonal: &[f64],
-    rhs: &[f64],
-    executor: &ParallelExecutor,
-) {
-    if executor.should_parallel(output.len()) {
-        executor.install(|| {
-            output
-                .par_iter_mut()
-                .zip(inverse_diagonal.par_iter())
-                .zip(rhs.par_iter())
-                .for_each(|((value, inverse_diagonal), rhs_value)| {
-                    *value = *inverse_diagonal * *rhs_value;
-                });
-        });
-    } else {
-        for ((value, inverse_diagonal), rhs_value) in
-            output.iter_mut().zip(inverse_diagonal).zip(rhs)
-        {
-            *value = *inverse_diagonal * *rhs_value;
-        }
-    }
-}
-
-#[cfg(feature = "parallel")]
-fn jacobi_add_parallel(
-    output: &mut [f64],
-    inverse_diagonal: &[f64],
-    rhs: &[f64],
-    matrix_value: &[f64],
-    executor: &ParallelExecutor,
-) {
-    if executor.should_parallel(output.len()) {
-        executor.install(|| {
-            output
-                .par_iter_mut()
-                .zip(inverse_diagonal.par_iter())
-                .zip(rhs.par_iter())
-                .zip(matrix_value.par_iter())
-                .for_each(|(((value, inverse_diagonal), rhs_value), matrix_value)| {
-                    *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-                });
-        });
-    } else {
-        for (((value, inverse_diagonal), rhs_value), matrix_value) in output
-            .iter_mut()
-            .zip(inverse_diagonal)
-            .zip(rhs)
-            .zip(matrix_value)
-        {
-            *value += *inverse_diagonal * (*rhs_value - *matrix_value);
-        }
-    }
-}
-
-#[cfg(all(feature = "parallel", not(feature = "experimental-components")))]
-fn residual_from_matvec_parallel(residual: &mut [f64], rhs: &[f64], executor: &ParallelExecutor) {
-    if executor.should_parallel(residual.len()) {
-        executor.install(|| {
-            residual
-                .par_iter_mut()
-                .zip(rhs.par_iter())
-                .for_each(|(value, rhs_value)| *value = *rhs_value - *value);
-        });
-    } else {
-        for (value, rhs_value) in residual.iter_mut().zip(rhs) {
-            *value = *rhs_value - *value;
-        }
+        let _ = cmg;
+        Ok(())
     }
 }
 
@@ -2253,6 +1167,8 @@ fn repeat_from_nonzeros(fine_nonzeros: usize, denominator_nonzeros: usize) -> us
 }
 
 #[cfg(all(test, feature = "experimental-components"))]
+// Context literals keep `..Default::default()` for their feature-gated fields.
+#[allow(clippy::needless_update)]
 mod controlled_build_tests {
     use super::*;
     use crate::ComponentBuildOptions;
@@ -2286,26 +1202,29 @@ mod controlled_build_tests {
                     }),
                 )
                 .unwrap();
-                let selected = CmgPreconditioner::build_component_experiment_serial_controlled(
+                let selected = CmgPreconditioner::build_with(
                     &graph,
-                    CmgOptions {
-                        max_levels: 8,
-                        ..Default::default()
+                    BuildOptions {
+                        hierarchy: CmgOptions {
+                            max_levels: 8,
+                            ..Default::default()
+                        },
+                        components: ComponentBuildOptions {
+                            prune_coarse_isolates: true,
+                            preserve_unpruned_stopping: true,
+                            factor_terminal_components: true,
+                        },
                     },
-                    ComponentBuildOptions {
-                        prune_coarse_isolates: true,
-                        preserve_unpruned_stopping: true,
-                        factor_terminal_components: true,
+                    BuildContext {
+                        cancel: Some(&|| false),
+                        budget_bytes: Some(usize::MAX),
+                        ..BuildContext::default()
                     },
-                    usize::MAX,
-                    &|| false,
                 )
                 .unwrap();
-                let legacy = CmgPreconditioner::from_hierarchy_with_factor(
-                    selected.hierarchy.clone(),
-                    GroundedLdl::factor_by_component,
-                )
-                .unwrap();
+                let legacy =
+                    CmgPreconditioner::finalize(selected.hierarchy.clone(), true, &mut Unmetered)
+                        .unwrap();
                 assert_eq!(selected, legacy);
                 let u = graph
                     .matvec(&(0..n).map(|i| (i % 7) as f64 - 3.0).collect::<Vec<_>>())

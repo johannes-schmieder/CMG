@@ -1,69 +1,51 @@
 //! Initial input graph only: bounded mapping and canonical parallel sorting.
 
-use super::{Edge, Laplacian, compare_raw_edges};
-use crate::{CmgError, ControlledStage, InstalledTeam, cancel::CancelMeter};
+use super::{Edge, Laplacian, compare_raw_edges, map_edge};
+use crate::cancel::{CancelMeter, Meter};
+use crate::{CmgError, ControlledStage, Team};
 
-const MIN_EDGES: usize = 65_536;
+pub(super) const MIN_EDGES: usize = 65_536;
 const CHUNK: usize = 8;
 
-impl Laplacian {
-    /// Construct an initial graph on an already admitted host team.
-    ///
-    /// At least 65,536 input edges use fixed logical chunks for validation,
-    /// mapping and sorting. The logical chunking is identical at every worker
-    /// ceiling, including one. Smaller inputs retain the serial algorithm.
-    /// Coarse/hierarchy builders are unaffected. Successful graph bits match
-    /// [`Self::from_edges_controlled`].
-    ///
-    /// The borrowed input and host runtime are excluded from `budget_bytes`.
-    /// The bound is unchanged: two compact edge banks, the diagonal, and three
-    /// Arc layouts. All scratch is admitted before use. No partial stage is
-    /// retried. `cancelled` is a cheap, sticky, allocation-free cancellation
-    /// query polled by the coordinator between bounded serial operations and by
-    /// workers before every logical chunk. All work joins before return or
-    /// unwind. Cancellation dominates worker errors after joining; otherwise the
-    /// earliest logical invalid edge wins.
-    pub fn from_edges_hosted_controlled(
-        vertex_count: usize,
-        edges: &[(usize, usize, f64)],
-        budget_bytes: usize,
-        team: &InstalledTeam<'_>,
-        cancelled: crate::Cancellation<'_>,
-    ) -> Result<Self, CmgError> {
-        let mut meter = CancelMeter::new(cancelled);
-        if edges.len() < MIN_EDGES {
-            return Self::from_edges_metered(vertex_count, edges, budget_bytes, &mut meter);
-        }
-        meter.work("input graph memory bound", 128)?;
-        let edge_bytes = crate::storage::bytes::<Edge>(edges.len())?;
-        let mut required = crate::storage::add(edge_bytes, edge_bytes)?;
-        required = crate::storage::add(required, crate::storage::bytes::<f64>(vertex_count)?)?;
-        required = crate::storage::add(required, crate::storage::arc_bytes::<Vec<Edge>>()?)?;
-        required = crate::storage::add(required, crate::storage::arc_bytes::<Vec<f64>>()?)?;
-        required = crate::storage::add(required, crate::storage::arc_bytes::<()>()?)?;
-        crate::storage::admit(required, budget_bytes)?;
-        let mut raw = initialized_bank(edges.len(), &mut meter)?;
-        stage(
-            "hosted input edge mapping",
-            CHUNK,
-            team,
-            &mut raw,
-            cancelled,
-            |chunk, output| {
-                for (index, value) in output.iter_mut().enumerate() {
-                    *value = map_edge(vertex_count, edges[chunk * CHUNK + index])?;
-                }
-                Ok(())
-            },
-        )?;
-        sort(&mut raw, &mut meter, team, cancelled)?;
-        // The spare sort bank has been dropped. Canonical compensated duplicate
-        // reduction and diagonal additions are the exact existing serial loop.
-        Self::from_sorted_edges_controlled(vertex_count, raw, &mut meter)
-    }
+/// Validate, map and sort a large borrowed input in fixed logical chunks on a
+/// team, then reduce duplicates with the serial canonical merge.
+///
+/// The logical chunking is identical at every worker ceiling, including one.
+/// Successful graph bits match the serial construction. The borrowed input and
+/// team runtime are outside the caller's admitted bound; all scratch belongs
+/// to that bound and is provisioned before dispatch. `cancelled` is polled by
+/// workers before every logical chunk and after each join; the coordinator's
+/// meter polls between its bounded serial operations. Cancellation dominates
+/// worker errors after joining; otherwise the earliest logical invalid edge
+/// wins. No partial stage is retried.
+pub(super) fn build<M: Meter>(
+    vertex_count: usize,
+    edges: &[(usize, usize, f64)],
+    team: Team<'_>,
+    cancelled: crate::Cancellation<'_>,
+    meter: &mut M,
+) -> Result<Laplacian, CmgError> {
+    meter.work("input graph memory bound", 128)?;
+    let mut raw = initialized_bank(edges.len(), meter)?;
+    stage(
+        "hosted input edge mapping",
+        CHUNK,
+        team,
+        &mut raw,
+        cancelled,
+        |chunk, output| {
+            for (index, value) in output.iter_mut().enumerate() {
+                *value = map_edge(vertex_count, edges[chunk * CHUNK + index])?;
+            }
+            Ok(())
+        },
+    )?;
+    sort(&mut raw, meter, team, cancelled)?;
+    // The spare sort bank has been dropped; reduce in the canonical order.
+    Laplacian::from_sorted_edges(vertex_count, raw, true, meter)
 }
 
-fn initialized_bank(len: usize, meter: &mut CancelMeter<'_>) -> Result<Vec<Edge>, CmgError> {
+fn initialized_bank<M: Meter>(len: usize, meter: &mut M) -> Result<Vec<Edge>, CmgError> {
     let mut values = meter.try_capacity(len, "hosted input edge bank")?;
     // Safe Rust requires initialized disjoint output storage. Its first-touch
     // cost is counted for cancellation polling; the bank never grows after admission.
@@ -77,58 +59,12 @@ fn initialized_bank(len: usize, meter: &mut CancelMeter<'_>) -> Result<Vec<Edge>
     Ok(values)
 }
 
-fn map_edge(
-    vertex_count: usize,
-    (left, right, weight): (usize, usize, f64),
-) -> Result<Edge, CmgError> {
-    if left >= vertex_count {
-        return Err(CmgError::VertexOutOfBounds {
-            vertex: left,
-            vertex_count,
-        });
-    }
-    if right >= vertex_count {
-        return Err(CmgError::VertexOutOfBounds {
-            vertex: right,
-            vertex_count,
-        });
-    }
-    if left > u32::MAX as usize {
-        return Err(CmgError::VertexIndexTooWide {
-            vertex: left,
-            maximum: u32::MAX as usize,
-        });
-    }
-    if right > u32::MAX as usize {
-        return Err(CmgError::VertexIndexTooWide {
-            vertex: right,
-            maximum: u32::MAX as usize,
-        });
-    }
-    if left == right {
-        return Err(CmgError::SelfLoop { vertex: left });
-    }
-    if !weight.is_finite() || weight <= 0.0 {
-        return Err(CmgError::InvalidEdgeWeight {
-            u: left,
-            v: right,
-            weight,
-        });
-    }
-    let (u, v) = if left < right {
-        (left, right)
-    } else {
-        (right, left)
-    };
-    Ok(Edge::from_compact_parts(u as u32, v as u32, weight))
-}
-
 /// Dispatch one stage of fixed logical chunks, translating its cancellation to
 /// the stage's phase. Chunk boundaries never depend on the worker ceiling.
 fn stage(
     phase: &'static str,
     chunk_len: usize,
-    team: &InstalledTeam<'_>,
+    team: Team<'_>,
     values: &mut [Edge],
     cancelled: crate::Cancellation<'_>,
     kernel: impl Fn(usize, &mut [Edge]) -> Result<(), CmgError> + Sync,
@@ -139,10 +75,10 @@ fn stage(
     }
 }
 
-fn sort(
+fn sort<M: Meter>(
     values: &mut Vec<Edge>,
-    meter: &mut CancelMeter<'_>,
-    team: &InstalledTeam<'_>,
+    meter: &mut M,
+    team: Team<'_>,
     cancelled: crate::Cancellation<'_>,
 ) -> Result<(), CmgError> {
     stage(

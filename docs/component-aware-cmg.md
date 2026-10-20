@@ -13,40 +13,43 @@ latest kernel checkpoint below improves both connected terminal setup and
 mixed-component cycles. The original active-count stopping experiment remains
 available for comparison; it still regresses on some worker-firm cases.
 
-## Executor-aware integration candidate
+## Team-aware integration candidate
 
-`build_component_experiment_with_executor(graph, options, component, executor)`
-reuses an existing `ParallelExecutor`. It passes the same executor into coarse
-contraction/sorting, including the existing 65,536-edge setup threshold. Forest
-construction and terminal factors remain serial, as in the ordinary builder.
-It creates neither an additional worker pool nor a preliminary hierarchy.
-The intended explicit options remain:
+`CmgPreconditioner::build_with(graph, BuildOptions { hierarchy, components },
+BuildContext { team: Some(team), .. })` borrows a host `Team`. It passes the
+team into coarse contraction/sorting, including the existing 65,536-edge setup
+threshold. Forest construction and terminal factors remain serial, as in the
+ordinary builder. It creates neither a worker pool nor a preliminary
+hierarchy. The intended explicit options remain:
 
-For the practical estimated-runtime policy, construct one executor using
-`ParallelRuntimeAllowance::default().estimate(parallel_options)` followed by
-`ParallelExecutor::new_with_estimated_memory_budget`. Retain the returned
-estimate alongside the solver, keeping heuristic heap/stack allowances separate
-from CMG-owned capacity reports. This is an explicit alternative to strict
-runtime admission, not a new default or a claim of bounded Rayon storage.
-The [ownership guide](memory-ownership.md#optional-estimated-runtime-policy)
+For the practical estimated-runtime policy, size the host team's allowance with
+`ParallelRuntimeAllowance::default().estimate(parallel_options)` and keep that
+heuristic heap/stack allowance separate from CMG-owned capacity reports. This
+is an explicit alternative to strict runtime admission, not a new default or a
+claim of bounded Rayon storage. The
+[ownership guide](memory-ownership.md#optional-estimated-runtime-policy)
 documents stack configuration and how to avoid double counting.
 
 ```rust
 # #[cfg(all(feature = "parallel", feature = "experimental-components"))]
-# fn example(graph: &cmg::Laplacian, executor: &cmg::ParallelExecutor) -> Result<(), cmg::CmgError> {
-let component = cmg::ComponentBuildOptions {
-    prune_coarse_isolates: true,
-    preserve_unpruned_stopping: true,
-    factor_terminal_components: true,
+# fn example(graph: &cmg::Laplacian, team: cmg::Team<'_>) -> Result<(), cmg::CmgError> {
+let options = cmg::BuildOptions {
+    hierarchy: cmg::CmgOptions::default(),
+    components: cmg::ComponentBuildOptions {
+        prune_coarse_isolates: true,
+        preserve_unpruned_stopping: true,
+        factor_terminal_components: true,
+    },
 };
 // This admits CMG-owned storage only. The caller must separately permit the
-// existing executor's uncovered Rayon runtime; strict runtime admission rejects.
-let options = cmg::CmgOptions::default();
-let setup_bytes = cmg::CmgPreconditioner::component_executor_construction_cmg_allocation_bound(
-    graph.vertex_count(), graph.edge_count(), options, component,
+// host team's uncovered Rayon runtime; strict runtime admission rejects.
+let setup_bytes = cmg::CmgPreconditioner::construction_allocation_bound(
+    graph.vertex_count(), graph.edge_count(), options, true,
 )?;
-let preconditioner = cmg::CmgPreconditioner::build_component_experiment_with_executor_and_cmg_budget(
-    graph, options, component, executor, setup_bytes,
+let preconditioner = cmg::CmgPreconditioner::build_with(
+    graph,
+    options,
+    cmg::BuildContext { team: Some(team), budget_bytes: Some(setup_bytes), ..Default::default() },
 )?;
 let required = cmg::PcgBatchWorkspace::bank_allocation_bytes(&preconditioner, 4)?;
 let workspaces = cmg::PcgBatchWorkspace::new_bank_with_budget(
@@ -65,7 +68,7 @@ For a later prepared fereg session, the exact sequence is:
 3. Charge live parents/old frames, then create the next numeric frame using
    `assemble_with_workspace_budgeted` and its `numeric_allocation_bytes` query.
 4. Reserve the queried CMG-owned construction bytes after charging existing
-   parents; reuse one executor and build the explicit preconditioner above.
+   parents; borrow the host team and build the explicit preconditioner above.
    Build a `ParallelCmgPlan` only if the existing caller policy requests it.
 5. Prepare a fixed admitted workspace bank and call the existing caller-buffer
    functions. For changing weights, use the explicit retained-preconditioner
@@ -73,20 +76,19 @@ For a later prepared fereg session, the exact sequence is:
    that retained hierarchy. The current numeric frame supplies all operator
    products and residual certificates. No rebuild/refresh policy is added here.
 6. Measure simultaneously live owners in one `CmgStorageReport`; retire old
-   frames/banks and eventually the joined executor before new admission.
+   frames/banks before new admission.
 
-In fereg's current `build_graph_route_from_numeric`, retain the subsequent
-`ParallelPcgSolver::from_preconditioner(preconditioner, executor, policy)` call.
-Only the explicit component builder needs replacing there; the existing solver
-continues to own the same executor and lazy plan. Do not build a second plan or
-pool beside that solver. Report the solver, caller-buffer bank and prepared
-parents together; the solver's executor makes the uncovered runtime scope
-visible. Fereg's owned-result route also needs its returned `PcgResult` bank or
+In fereg's `build_graph_route_from_numeric`, the subsequent
+`ParallelPcgSolver::from_preconditioner(preconditioner, team, policy)` call
+records the host team's shape and owns the lazy plan; it owns no pool. Do not
+build a second plan or pool beside that solver. Report the solver,
+caller-buffer bank and prepared parents together; the host keeps the
+uncovered runtime scope visible in its own allowance. Fereg's owned-result route also needs its returned `PcgResult` bank or
 `ParallelPcgBatchResult` included as a root, outside the workspace report.
 
 When its existing policy needs a plan, query
 `solver.plan_construction_allocation_bound()` and initialize with
-`solver.try_plan_with_budget(remaining_cmg_layout_budget)` at the preparation
+`solver.try_plan_with_budget(team, remaining_cmg_layout_budget)` at the preparation
 boundary. These cover new CMG plan/CSR layouts, not Rayon queues or the retained
 parents. A standalone low-level caller can use the corresponding
 `ParallelCmgPlan::construction_allocation_bound` / `build_with_budget` pair.
@@ -152,17 +154,20 @@ Start with two independent changes that retain one global PCG recurrence:
 All experimental options are under `experimental-components` and are off by default:
 
 ```rust
-use cmg::{CmgOptions, CmgPreconditioner, ComponentBuildOptions};
-let preconditioner = CmgPreconditioner::build_component_experiment(
+use cmg::{BuildContext, BuildOptions, CmgOptions, CmgPreconditioner, ComponentBuildOptions};
+let preconditioner = CmgPreconditioner::build_with(
     graph,
-    CmgOptions::default(),
-    ComponentBuildOptions {
-        prune_coarse_isolates: true,
-        factor_terminal_components: true,
-        preserve_unpruned_stopping: true,
+    BuildOptions {
+        hierarchy: CmgOptions::default(),
+        components: ComponentBuildOptions {
+            prune_coarse_isolates: true,
+            factor_terminal_components: true,
+            preserve_unpruned_stopping: true,
+        },
     },
+    BuildContext::default(),
 )?;
-// Use the existing certified solve_pcg / caller-workspace / planned interfaces.
+// Use the certified solve_pcg_with / solve_pcg_batch_into interfaces.
 ```
 
 Keep baseline, pruning-only, block-LDL-only, and combined builds available. These

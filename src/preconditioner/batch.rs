@@ -1,16 +1,12 @@
 //! Interleaved, fixed-cycle CMG applications sharing one hierarchy traversal.
 
-use super::CmgPreconditioner;
-#[cfg(feature = "parallel")]
-use super::ParallelCmgPlan;
-#[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
-use crate::storage::{add, bytes, try_capacity, try_filled};
-use crate::{CmgError, TerminalReason};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
+use super::cycle::{Cycle, LevelParts, Parts, Store};
+use super::{ApplyContext, CmgPreconditioner};
+use crate::cancel::Meter;
+use crate::storage::{add, bytes};
+use crate::{CmgError, CmgWorkspace};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct BatchLevel {
     rows: usize,
     coarse_rows: usize,
@@ -127,17 +123,64 @@ impl CmgBatchWorkspace {
         max_rhs: usize,
         budget_bytes: usize,
     ) -> Result<Self, CmgError> {
-        crate::storage::admit(Self::allocation_bytes(cmg, max_rhs)?, budget_bytes)?;
+        Self::try_new_metered(cmg, max_rhs, budget_bytes, &mut crate::cancel::Unmetered)
+    }
+
+    /// Cancellable `try_new` with the same layout, contents and errors. It
+    /// polls `cancel` while computing the layout, before every allocation, at
+    /// the fixed construction cadence while zero-filling and before returning.
+    /// A true query drops the partial workspace and returns
+    /// [`CmgError::Cancelled`].
+    pub fn try_new_controlled(
+        cmg: &CmgPreconditioner,
+        max_rhs: usize,
+        budget_bytes: usize,
+        cancel: crate::Cancellation<'_>,
+    ) -> Result<Self, CmgError> {
+        Self::try_new_metered(
+            cmg,
+            max_rhs,
+            budget_bytes,
+            &mut crate::cancel::CancelMeter::new(cancel),
+        )
+    }
+
+    fn try_new_metered<M: Meter>(
+        cmg: &CmgPreconditioner,
+        max_rhs: usize,
+        budget_bytes: usize,
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
         if max_rhs == 1 {
+            crate::storage::admit(
+                CmgWorkspace::allocation_bytes(
+                    &cmg.hierarchy,
+                    cmg.direct_terminal.as_ref(),
+                    &cmg.finest_components,
+                    &cmg.coarse_centering,
+                    meter,
+                )?,
+                budget_bytes,
+            )?;
             return Ok(Self {
                 capacity: 1,
-                storage: BatchStorage::Scalar(cmg.try_workspace()?),
+                storage: BatchStorage::Scalar(CmgWorkspace::try_new(
+                    &cmg.hierarchy,
+                    cmg.direct_terminal.as_ref(),
+                    &cmg.finest_components,
+                    &cmg.coarse_centering,
+                    meter,
+                )?),
             });
         }
-        let mut levels = try_capacity(cmg.hierarchy.levels().len(), "CMG batch levels")?;
+        meter.work("CMG batch layout", 64)?;
+        crate::storage::admit(Self::allocation_bytes(cmg, max_rhs)?, budget_bytes)?;
+        let mut levels = meter.try_capacity(cmg.hierarchy.levels().len(), "CMG batch levels")?;
         for index in 0..cmg.hierarchy.levels().len() {
+            meter.work("CMG batch level", 64)?;
             let (rows, coarse_rows, factor_rows, components) = shape(cmg, index);
-            let zero = |rows| try_filled(area(rows, max_rhs)?, 0.0, "CMG batch workspace");
+            let mut zero =
+                |rows| meter.try_filled(area(rows, max_rhs)?, 0.0, "CMG batch workspace");
             levels.push(BatchLevel {
                 rows,
                 coarse_rows,
@@ -153,6 +196,7 @@ impl CmgBatchWorkspace {
                 means: zero(components)?,
             });
         }
+        meter.checkpoint("CMG batch workspace finish")?;
         Ok(Self {
             capacity: max_rhs,
             storage: BatchStorage::Interleaved(levels),
@@ -200,31 +244,87 @@ impl CmgBatchWorkspace {
     }
 }
 
+impl LevelParts for BatchLevel {
+    #[inline]
+    fn parts(&mut self, columns: usize) -> Parts<'_> {
+        Parts {
+            residual: &mut self.residual[..self.rows * columns],
+            coarse_rhs: &mut self.coarse_rhs[..self.coarse_rows * columns],
+            coarse_correction: &mut self.coarse_correction[..self.coarse_rows * columns],
+            forward: &mut self.forward[..self.factor_rows * columns],
+            solution: &mut self.factor_solution[..self.factor_rows * columns],
+            sums: &mut self.sums[..self.components * columns],
+            corrections: &mut self.corrections[..self.components * columns],
+            means: &mut self.means[..self.components * columns],
+        }
+    }
+}
+
+/// Interleaved levels of one batch application with its lane count.
+struct Interleaved<'w> {
+    levels: &'w mut [BatchLevel],
+    columns: usize,
+}
+
+impl Store for Interleaved<'_> {
+    type Width = usize;
+    type Level = BatchLevel;
+    const TEAM_CENTERING: bool = false;
+
+    #[inline]
+    fn width(&self) -> usize {
+        self.columns
+    }
+
+    #[inline]
+    fn take(&mut self, index: usize) -> BatchLevel {
+        core::mem::take(&mut self.levels[index])
+    }
+
+    #[inline]
+    fn put(&mut self, index: usize, level: BatchLevel) {
+        self.levels[index] = level;
+    }
+}
+
 impl CmgPreconditioner {
     /// Apply the fixed stationary cycle to component-compatible right-hand sides.
     ///
     /// Inputs and outputs have exactly `vertex_count * columns` entries, with
     /// lane `j` of vertex `i` at `i * columns + j`. `columns` may be zero and
-    /// must not exceed workspace capacity. No CMG-owned allocation, fine-level projection,
-    /// adaptive solve or stopping test occurs. Each column uses the scalar
-    /// cycle's edge, transfer, terminal and compensated centering order. A
-    /// capacity-one workspace delegates to the unchanged scalar implementation.
+    /// must not exceed workspace capacity. No CMG-owned allocation, fine-level
+    /// projection, adaptive solve or stopping test occurs. Each column uses the
+    /// scalar cycle's edge, transfer, terminal and compensated centering order;
+    /// coarse sums keep that serial order independently of the context's team.
+    /// A capacity-one workspace runs the scalar cycle under the same context.
     pub fn apply_compatible_batch_into(
         &self,
         rhs: &[f64],
         output: &mut [f64],
         columns: usize,
         workspace: &mut CmgBatchWorkspace,
+        context: ApplyContext<'_>,
     ) -> Result<(), CmgError> {
+        context.validate(self)?;
         self.validate_batch(rhs, output, columns, workspace)?;
         if columns == 0 {
             return Ok(());
         }
         match &mut workspace.storage {
-            BatchStorage::Scalar(workspace) => self.apply_compatible_into(rhs, output, workspace),
-            BatchStorage::Interleaved(levels) => {
-                self.apply_batch_level(0, rhs, output, columns, levels, 1, BatchExecution::serial())
+            BatchStorage::Scalar(workspace) => {
+                self.apply_compatible_into_with(rhs, output, workspace, context)
             }
+            BatchStorage::Interleaved(levels) => with_meter!(context.cancel, meter => {
+                Cycle {
+                    cmg: self,
+                    store: Interleaved { levels, columns },
+                    #[cfg(feature = "parallel")]
+                    plan: context.plan,
+                    #[cfg(feature = "parallel")]
+                    team: context.team,
+                }
+                .level(0, rhs, output, 1, meter, &mut ())
+            }),
         }
     }
 
@@ -245,266 +345,5 @@ impl CmgPreconditioner {
             }
         }
         workspace.validate(self, columns)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn apply_batch_level(
-        &self,
-        index: usize,
-        rhs: &[f64],
-        output: &mut [f64],
-        columns: usize,
-        workspace: &mut [BatchLevel],
-        iterations: usize,
-        execution: BatchExecution<'_>,
-    ) -> Result<(), CmgError> {
-        let level = &self.hierarchy.levels()[index];
-        let (local, children) = workspace
-            .split_first_mut()
-            .ok_or(CmgError::InvalidHierarchy {
-                context: "missing CMG batch level",
-            })?;
-        if let Some(reason) = level.terminal_reason() {
-            if reason == TerminalReason::Direct {
-                let factor = self
-                    .direct_terminal
-                    .as_ref()
-                    .ok_or(CmgError::InvalidHierarchy {
-                        context: "direct terminal is missing its LDL factor",
-                    })?;
-                factor.solve_batch_compatible(
-                    rhs,
-                    output,
-                    columns,
-                    &mut local.forward[..local.factor_rows * columns],
-                    &mut local.factor_solution[..local.factor_rows * columns],
-                );
-            } else {
-                execution.rows(output, columns, false, |row, values| {
-                    for (lane, value) in values.iter_mut().enumerate() {
-                        *value = level.inverse_diagonal()[row] * rhs[row * columns + lane];
-                    }
-                });
-            }
-            return Ok(());
-        }
-        let repeats = self.repeat_counts[index];
-        if iterations == 0 || repeats == 0 {
-            return Err(CmgError::InvalidHierarchy {
-                context: "CMG batch level has zero stationary repeats",
-            });
-        }
-        let residual = &mut local.residual[..local.rows * columns];
-        let coarse_rhs = &mut local.coarse_rhs[..local.coarse_rows * columns];
-        let correction = &mut local.coarse_correction[..local.coarse_rows * columns];
-        for iteration in 0..iterations {
-            if iteration == 0 {
-                execution.rows(
-                    output,
-                    columns,
-                    execution.parallel_level(index),
-                    |row, values| {
-                        for (lane, value) in values.iter_mut().enumerate() {
-                            *value = level.inverse_diagonal()[row] * rhs[row * columns + lane];
-                        }
-                    },
-                );
-            } else {
-                execution.matvec(index, level.graph(), output, residual, columns);
-                execution.jacobi(
-                    index,
-                    output,
-                    rhs,
-                    residual,
-                    level.inverse_diagonal(),
-                    columns,
-                );
-            }
-            if !coarse_rhs.is_empty() {
-                execution.matvec(index, level.graph(), output, residual, columns);
-                level.restrict_batch_residual(rhs, residual, coarse_rhs, columns)?;
-                self.coarse_centering[index].center_batch(
-                    coarse_rhs,
-                    columns,
-                    &mut local.sums[..local.components * columns],
-                    &mut local.corrections[..local.components * columns],
-                    &mut local.means[..local.components * columns],
-                )?;
-                self.apply_batch_level(
-                    index + 1,
-                    coarse_rhs,
-                    correction,
-                    columns,
-                    children,
-                    repeats,
-                    execution,
-                )?;
-                level.prolong_batch_add(correction, output, columns)?;
-            }
-            execution.matvec(index, level.graph(), output, residual, columns);
-            execution.jacobi(
-                index,
-                output,
-                rhs,
-                residual,
-                level.inverse_diagonal(),
-                columns,
-            );
-        }
-        Ok(())
-    }
-}
-
-#[cfg(feature = "parallel")]
-impl ParallelCmgPlan {
-    /// Apply interleaved fixed CMG cycles using this plan and its caller-owned
-    /// executor. Layout, compatibility and capacity requirements match
-    /// [`CmgPreconditioner::apply_compatible_batch_into`]. Row kernels share one
-    /// graph traversal across columns; coarse sums retain serial compensated
-    /// order, independently of worker count, rather than parallel chunk sums.
-    pub fn apply_compatible_batch_into(
-        &self,
-        cmg: &CmgPreconditioner,
-        rhs: &[f64],
-        output: &mut [f64],
-        columns: usize,
-        workspace: &mut CmgBatchWorkspace,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        self.validate(cmg)?;
-        cmg.validate_batch(rhs, output, columns, workspace)?;
-        if columns == 0 {
-            return Ok(());
-        }
-        match &mut workspace.storage {
-            BatchStorage::Scalar(workspace) => {
-                self.apply_compatible_into(cmg, rhs, output, workspace, executor)
-            }
-            BatchStorage::Interleaved(levels) => cmg.apply_batch_level(
-                0,
-                rhs,
-                output,
-                columns,
-                levels,
-                1,
-                BatchExecution {
-                    plan: Some(self),
-                    executor: Some(executor),
-                },
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct BatchExecution<'a> {
-    #[cfg(feature = "parallel")]
-    plan: Option<&'a ParallelCmgPlan>,
-    #[cfg(feature = "parallel")]
-    executor: Option<&'a ParallelExecutor>,
-    #[cfg(not(feature = "parallel"))]
-    marker: core::marker::PhantomData<&'a ()>,
-}
-impl BatchExecution<'_> {
-    fn serial() -> Self {
-        Self {
-            #[cfg(feature = "parallel")]
-            plan: None,
-            #[cfg(feature = "parallel")]
-            executor: None,
-            #[cfg(not(feature = "parallel"))]
-            marker: core::marker::PhantomData,
-        }
-    }
-    fn parallel_level(self, index: usize) -> bool {
-        #[cfg(feature = "parallel")]
-        {
-            self.plan
-                .and_then(|plan| plan.level_operator(index))
-                .is_some()
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            let _ = index;
-            false
-        }
-    }
-    fn rows(
-        self,
-        output: &mut [f64],
-        columns: usize,
-        parallel: bool,
-        operation: impl Fn(usize, &mut [f64]) + Send + Sync,
-    ) {
-        #[cfg(feature = "parallel")]
-        if let Some(executor) = self.executor.filter(|_| parallel) {
-            let chunk = executor.work_chunk_len(output.len() / columns) * columns;
-            executor.install(|| {
-                output
-                    .par_chunks_mut(chunk)
-                    .enumerate()
-                    .for_each(|(block, values)| {
-                        for (offset, row) in values.chunks_exact_mut(columns).enumerate() {
-                            operation(block * (chunk / columns) + offset, row);
-                        }
-                    })
-            });
-            return;
-        }
-        let _ = parallel;
-        for (row, values) in output.chunks_exact_mut(columns).enumerate() {
-            operation(row, values);
-        }
-    }
-    fn matvec(
-        self,
-        index: usize,
-        graph: &crate::Laplacian,
-        input: &[f64],
-        output: &mut [f64],
-        columns: usize,
-    ) {
-        #[cfg(feature = "parallel")]
-        if let Some(operator) = self.plan.and_then(|plan| plan.level_operator(index)) {
-            operator.matvec_batch(
-                input,
-                output,
-                columns,
-                self.executor.expect("batch plan executor"),
-            );
-            return;
-        }
-        let _ = index;
-        output.fill(0.0);
-        for edge in graph.edges() {
-            let u = edge.u() * columns;
-            let v = edge.v() * columns;
-            for lane in 0..columns {
-                let difference = edge.weight() * (input[u + lane] - input[v + lane]);
-                output[u + lane] += difference;
-                output[v + lane] -= difference;
-            }
-        }
-    }
-    fn jacobi(
-        self,
-        index: usize,
-        output: &mut [f64],
-        rhs: &[f64],
-        matrix: &[f64],
-        diagonal: &[f64],
-        columns: usize,
-    ) {
-        self.rows(
-            output,
-            columns,
-            self.parallel_level(index),
-            |row, values| {
-                for (lane, value) in values.iter_mut().enumerate() {
-                    let offset = row * columns + lane;
-                    *value += diagonal[row] * (rhs[offset] - matrix[offset]);
-                }
-            },
-        );
     }
 }

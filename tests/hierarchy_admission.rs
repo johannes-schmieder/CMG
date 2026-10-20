@@ -1,4 +1,6 @@
 //! Serial construction admission: independent requested-layout observation.
+// Context literals keep `..Default::default()` for their feature-gated fields.
+#![allow(clippy::needless_update)]
 use cmg::*;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -94,18 +96,37 @@ fn report(roots: &[&dyn CmgStorage]) -> usize {
 
 fn check_hierarchy(graph: &Laplacian, options: CmgOptions) {
     let reference = CmgHierarchy::build(graph, options).unwrap();
-    let bound = CmgHierarchy::serial_construction_allocation_bound(
+    let bound = CmgHierarchy::construction_allocation_bound(
         graph.vertex_count(),
         graph.edge_count(),
         options,
+        false,
     )
     .unwrap();
     let before = live();
     let calls = CALLS.with(Cell::get);
-    assert!(CmgHierarchy::build_serial_with_budget(graph, options, bound - 1).is_err());
+    assert!(
+        CmgHierarchy::build_with(
+            graph,
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                budget_bytes: Some(bound - 1),
+                ..cmg::BuildContext::default()
+            }
+        )
+        .is_err()
+    );
     assert_eq!(CALLS.with(Cell::get), calls);
     PEAK.with(|peak| peak.set(before));
-    let hierarchy = CmgHierarchy::build_serial_with_budget(graph, options, bound).unwrap();
+    let hierarchy = CmgHierarchy::build_with(
+        graph,
+        cmg::BuildOptions::from(options),
+        cmg::BuildContext {
+            budget_bytes: Some(bound),
+            ..cmg::BuildContext::default()
+        },
+    )
+    .unwrap();
     let peak = (PEAK.with(Cell::get) - before) as usize;
     assert!(peak <= bound, "standalone hierarchy {peak} > {bound}");
     assert_eq!(hierarchy, reference);
@@ -137,29 +158,40 @@ fn check(
     let bound = if component.is_some() {
         #[cfg(feature = "experimental-components")]
         {
-            CmgPreconditioner::component_serial_construction_allocation_bound(
+            CmgPreconditioner::construction_allocation_bound(
                 graph.vertex_count(),
                 graph.edge_count(),
-                options,
-                experiment.unwrap(),
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: experiment.unwrap(),
+                },
+                false,
             )
             .unwrap()
         }
         #[cfg(not(feature = "experimental-components"))]
         unreachable!()
     } else {
-        CmgPreconditioner::serial_construction_allocation_bound(
+        CmgPreconditioner::construction_allocation_bound(
             graph.vertex_count(),
             graph.edge_count(),
-            options,
+            cmg::BuildOptions::from(options),
+            false,
         )
         .unwrap()
     };
     let reference = if component.is_some() {
         #[cfg(feature = "experimental-components")]
         {
-            CmgPreconditioner::build_component_experiment(graph, options, experiment.unwrap())
-                .unwrap()
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions {
+                    hierarchy: options,
+                    components: experiment.unwrap(),
+                },
+                cmg::BuildContext::default(),
+            )
+            .unwrap()
         }
         #[cfg(not(feature = "experimental-components"))]
         unreachable!()
@@ -170,17 +202,29 @@ fn check(
         if component.is_some() {
             #[cfg(feature = "experimental-components")]
             {
-                CmgPreconditioner::build_component_experiment_serial_with_budget(
+                CmgPreconditioner::build_with(
                     graph,
-                    options,
-                    experiment.unwrap(),
-                    budget,
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: experiment.unwrap(),
+                    },
+                    cmg::BuildContext {
+                        budget_bytes: Some(budget),
+                        ..cmg::BuildContext::default()
+                    },
                 )
             }
             #[cfg(not(feature = "experimental-components"))]
             unreachable!()
         } else {
-            CmgPreconditioner::build_serial_with_budget(graph, options, budget)
+            CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions::from(options),
+                cmg::BuildContext {
+                    budget_bytes: Some(budget),
+                    ..cmg::BuildContext::default()
+                },
+            )
         }
     };
     let before = live();
@@ -297,19 +341,32 @@ fn serial_hierarchy_bounds_preserve_all_stopping_and_component_policies() {
     assert!(seen.into_iter().all(|present| present));
     let options = CmgOptions::default();
     assert!(
-        CmgPreconditioner::serial_construction_allocation_bound(usize::MAX, 0, options).is_err()
+        CmgPreconditioner::construction_allocation_bound(
+            usize::MAX,
+            0,
+            cmg::BuildOptions::from(options),
+            false
+        )
+        .is_err()
     );
     assert!(
-        CmgPreconditioner::serial_construction_allocation_bound(1, usize::MAX, options).is_err()
+        CmgPreconditioner::construction_allocation_bound(
+            1,
+            usize::MAX,
+            cmg::BuildOptions::from(options),
+            false
+        )
+        .is_err()
     );
     assert!(
-        CmgPreconditioner::serial_construction_allocation_bound(
+        CmgPreconditioner::construction_allocation_bound(
             1,
             0,
-            CmgOptions {
+            cmg::BuildOptions::from(CmgOptions {
                 max_levels: usize::MAX,
                 ..options
-            }
+            }),
+            false
         )
         .is_err()
     );
@@ -476,7 +533,15 @@ fn controlled_graph_allocations_are_gated_bounded_and_released() {
             + arc_diagonal
             + arc_identity;
         check_controlled_allocations(bound, |cancel| {
-            Laplacian::from_edges_controlled(vertices, &edges, bound, cancel)
+            Laplacian::build(
+                vertices,
+                &edges,
+                cmg::BuildContext {
+                    cancel: Some(cancel),
+                    budget_bytes: Some(bound),
+                    ..cmg::BuildContext::default()
+                },
+            )
         });
     }
 }
@@ -510,16 +575,28 @@ fn controlled_preconditioner_allocations_are_gated_bounded_and_released() {
                     preserve_unpruned_stopping: true,
                     factor_terminal_components,
                 };
-                let bound = CmgPreconditioner::component_serial_construction_allocation_bound(
+                let bound = CmgPreconditioner::construction_allocation_bound(
                     graph.vertex_count(),
                     graph.edge_count(),
-                    options,
-                    experiment,
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: experiment,
+                    },
+                    false,
                 )
                 .unwrap();
                 let construct = |cancel: Cancellation<'_>| {
-                    CmgPreconditioner::build_component_experiment_serial_controlled(
-                        graph, options, experiment, bound, cancel,
+                    CmgPreconditioner::build_with(
+                        graph,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: experiment,
+                        },
+                        cmg::BuildContext {
+                            cancel: Some(cancel),
+                            budget_bytes: Some(bound),
+                            ..cmg::BuildContext::default()
+                        },
                     )
                 };
                 check_controlled_allocations(bound, construct);
@@ -542,21 +619,29 @@ fn controlled_multilevel_build_reports_a_late_allocation_failure_without_leaking
         preserve_unpruned_stopping: true,
         factor_terminal_components: true,
     };
-    let bound = CmgPreconditioner::component_serial_construction_allocation_bound(
+    let bound = CmgPreconditioner::construction_allocation_bound(
         graph.vertex_count(),
         graph.edge_count(),
-        options,
-        experiment,
+        cmg::BuildOptions {
+            hierarchy: options,
+            components: experiment,
+        },
+        false,
     )
     .unwrap();
     let never = || false;
     let construct = |budget_bytes| {
-        CmgPreconditioner::build_component_experiment_serial_controlled(
+        CmgPreconditioner::build_with(
             &graph,
-            options,
-            experiment,
-            budget_bytes,
-            &never,
+            cmg::BuildOptions {
+                hierarchy: options,
+                components: experiment,
+            },
+            cmg::BuildContext {
+                cancel: Some(&never),
+                budget_bytes: Some(budget_bytes),
+                ..cmg::BuildContext::default()
+            },
         )
     };
     let candidate = construct(bound).unwrap();

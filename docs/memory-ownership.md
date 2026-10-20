@@ -66,13 +66,10 @@ caller must reserve them before supplying the remaining incremental budget.
 | Fixed RHS bank | `bank_allocation_bytes`, `new_bank_with_budget` | every workspace plus the outer capacity bank |
 | Serial CSR | `CsrLaplacian::construction_allocation_bound`, `from_laplacian_with_budget` | new row/column/weight arrays and simultaneous cursor bank |
 | Parallel plan | `ParallelCmgPlan::construction_allocation_bound`, `build_with_budget` | descriptor banks, earlier retained operators, current serial/parallel CSR temporaries; **not Rayon runtime** |
-| Ordinary terminal factor | `GroundedLdl::construction_allocation_bound`, `factor_with_budget` | components, dense numeric banks, retained factor and conversion overlap |
-| Component terminal factor | `component_construction_allocation_bound`, `factor_by_component_with_budget` | grouping, component-local sparse fill, accumulated factors, compaction/conversion |
-| Serial hierarchy | `CmgHierarchy::serial_construction_allocation_bound`, `build_serial_with_budget` | retained levels, forest, contraction, report, pruning-stage allowance |
-| Serial ordinary preconditioner | `CmgPreconditioner::serial_construction_allocation_bound`, `build_serial_with_budget` | hierarchy plus centering metadata, repeat bank and direct factor |
-| Serial component preconditioner | `component_serial_construction_allocation_bound`, `build_component_experiment_serial_with_budget` | same construction scope under the explicitly supplied component options |
-| Executor-aware hierarchy/ordinary preconditioner | `executor_construction_cmg_allocation_bound`, `build_with_executor_and_cmg_budget` | CMG-owned construction including fixed parallel mapping banks; **not Rayon runtime** |
-| Executor-aware component preconditioner | `component_executor_construction_cmg_allocation_bound`, `build_component_experiment_with_executor_and_cmg_budget` | same CMG-owned scope with explicit component options; **not Rayon runtime** |
+| Ordinary terminal factor | `GroundedLdl::construction_allocation_bound`, `factor_with` with a budget | components, dense numeric banks, retained factor and conversion overlap |
+| Component terminal factor | `component_construction_allocation_bound`, `factor_with` with a budget and component blocks | grouping, component-local sparse fill, accumulated factors, compaction/conversion |
+| Hierarchy | `CmgHierarchy::construction_allocation_bound`, `build_with` with a budget | retained levels, forest, contraction, report, pruning-stage allowance; with `parallel` set, the fixed parallel mapping bank |
+| Preconditioner (ordinary or component options) | `CmgPreconditioner::construction_allocation_bound`, `build_with` with a budget | hierarchy plus centering metadata, repeat bank and direct factor under the supplied `BuildOptions`; with `parallel` set, the fixed parallel mapping bank; **not Rayon runtime** |
 
 All size arithmetic is checked, including `Layout::array`'s addressable-size
 limit. Budgets are checked before the first covered allocation. Fixed banks use

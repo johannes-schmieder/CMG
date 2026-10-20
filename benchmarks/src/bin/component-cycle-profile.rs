@@ -5,8 +5,7 @@ mod fixtures;
 
 use cmg::{
     CmgApplyPhase, CmgOptions, CmgPreconditioner, Components, ParallelCmgPlan, ParallelExecutor,
-    ParallelOptions, PcgOptions, PcgWorkspace, profile_pcg_with_plan,
-    solve_pcg_with_plan_and_workspace,
+    ParallelOptions, PcgOptions, PcgWorkspace,
 };
 
 fn main() {
@@ -49,18 +48,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         selected += 1;
         #[cfg(feature = "experimental-components")]
-        let pre = CmgPreconditioner::build_component_experiment(
+        let pre = CmgPreconditioner::build_with(
             &case.graph,
-            CmgOptions::default(),
-            cmg::ComponentBuildOptions {
-                prune_coarse_isolates: true,
-                preserve_unpruned_stopping: true,
-                factor_terminal_components: true,
+            cmg::BuildOptions {
+                hierarchy: CmgOptions::default(),
+                components: cmg::ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    preserve_unpruned_stopping: true,
+                    factor_terminal_components: true,
+                },
             },
+            cmg::BuildContext::default(),
         )?;
         #[cfg(not(feature = "experimental-components"))]
         let pre = CmgPreconditioner::build(&case.graph, CmgOptions::default())?;
-        let plan = ParallelCmgPlan::build(&pre, &executor)?;
+        let plan = ParallelCmgPlan::build(&pre, executor.team())?;
         let components = Components::from_laplacian(&case.graph);
         let mut workspace = PcgWorkspace::new(&pre);
         for column in 0..rhs_count {
@@ -69,23 +71,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             components.center_in_place(&mut target)?;
             let rhs = case.graph.matvec(&target)?;
-            let reference = solve_pcg_with_plan_and_workspace(
+            let reference = cmg::solve_pcg_with(
                 &case.graph,
                 &pre,
-                &plan,
                 &rhs,
                 PcgOptions::default(),
                 &mut workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )?;
             for round in 0..repetitions + 2 {
-                let result = profile_pcg_with_plan(
+                let result = cmg::profile_pcg(
                     &case.graph,
                     &pre,
-                    &plan,
                     &rhs,
                     PcgOptions::default(),
-                    &executor,
+                    cmg::SolveContext {
+                        plan: Some(&plan),
+                        team: Some(executor.team()),
+                        ..cmg::SolveContext::default()
+                    },
                 )?;
                 assert!(
                     result

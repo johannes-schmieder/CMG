@@ -1,5 +1,7 @@
 #[cfg(feature = "parallel")]
-use cmg::{CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions};
+use cmg::{
+    CmgOptions, Laplacian, ParallelExecutor, ParallelOptions, ParallelPcgSolver, PcgOptions,
+};
 
 #[cfg(feature = "parallel")]
 fn compatible_rhs(graph: &Laplacian, rhs_index: usize) -> Result<Vec<f64>, cmg::CmgError> {
@@ -29,26 +31,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|index| compatible_rhs(&graph, index))
         .collect::<Result<_, _>>()?;
 
-    // Build once and reuse the hierarchy, optional within-solve plan, thread
-    // pool, and bounded workspace pool for all later solves on this graph.
-    let solver = ParallelPcgSolver::build(
-        &graph,
-        CmgOptions::default(),
-        ParallelOptions {
-            threads: 0, // detect available CPUs; use an explicit cap if desired
-            workspace_memory_budget_bytes: Some(512 * 1024 * 1024),
-            ..ParallelOptions::default()
-        },
-    )?;
+    // The application owns one pool; CMG borrows it as a team and never
+    // creates its own. Build once and reuse the hierarchy, optional
+    // within-solve plan and bounded workspace pool for all later solves.
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads: 0, // detect available CPUs; use an explicit cap if desired
+        workspace_memory_budget_bytes: Some(512 * 1024 * 1024),
+        ..ParallelOptions::default()
+    })?;
+    let team = executor.team();
+    let solver = ParallelPcgSolver::build(&graph, CmgOptions::default(), team)?;
     let mut workspace = solver.workspace();
     let batch = solver.solve_batch_with_workspace(
         &right_hand_sides,
         PcgOptions::default(),
         &mut workspace,
+        team,
     )?;
     let report = batch.report();
 
-    println!("threads: {}", solver.executor().thread_count());
+    println!("threads: {}", team.worker_ceiling());
     println!("execution: {:?}", report.execution());
     println!("concurrency: {}", report.concurrency());
     println!("parallel-plan bytes: {}", report.plan_bytes());

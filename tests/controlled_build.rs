@@ -1,9 +1,14 @@
 #![cfg(feature = "experimental-components")]
 //! Cancellation-only controlled construction: exact bits, every poll, parking.
+// Context literals keep `..Default::default()` for their feature-gated fields.
+#![allow(clippy::needless_update)]
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use cmg::{CmgError, CmgOptions, CmgPreconditioner, ComponentBuildOptions, Laplacian};
+use cmg::{
+    ApplyContext, CmgBatchWorkspace, CmgError, CmgOptions, CmgPreconditioner,
+    ComponentBuildOptions, Laplacian,
+};
 
 fn graph(n: usize) -> Laplacian {
     let mut edges = Vec::new();
@@ -61,21 +66,31 @@ fn uncancelled_construction_preserves_hierarchy_factor_and_cycle_bits() {
                         direct_threshold: 8,
                         ..CmgOptions::default()
                     };
-                    let old = CmgPreconditioner::build_component_experiment_serial_with_budget(
+                    let old = CmgPreconditioner::build_with(
                         &graph,
-                        options,
-                        experiment,
-                        usize::MAX,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: experiment,
+                        },
+                        cmg::BuildContext {
+                            budget_bytes: Some(usize::MAX),
+                            ..cmg::BuildContext::default()
+                        },
                     )
                     .unwrap();
                     let first = StopAt::new(usize::MAX);
                     let query = || first.query();
-                    let new = CmgPreconditioner::build_component_experiment_serial_controlled(
+                    let new = CmgPreconditioner::build_with(
                         &graph,
-                        options,
-                        experiment,
-                        usize::MAX,
-                        &query,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: experiment,
+                        },
+                        cmg::BuildContext {
+                            cancel: Some(&query),
+                            budget_bytes: Some(usize::MAX),
+                            ..cmg::BuildContext::default()
+                        },
                     )
                     .unwrap();
                     assert_eq!(old.hierarchy(), new.hierarchy());
@@ -92,12 +107,17 @@ fn uncancelled_construction_preserves_hierarchy_factor_and_cycle_bits() {
                     // The poll schedule is a deterministic function of the input.
                     let second = StopAt::new(usize::MAX);
                     let query = || second.query();
-                    CmgPreconditioner::build_component_experiment_serial_controlled(
+                    CmgPreconditioner::build_with(
                         &graph,
-                        options,
-                        experiment,
-                        usize::MAX,
-                        &query,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: experiment,
+                        },
+                        cmg::BuildContext {
+                            cancel: Some(&query),
+                            budget_bytes: Some(usize::MAX),
+                            ..cmg::BuildContext::default()
+                        },
                     )
                     .unwrap();
                     assert!(first.polls() > 0);
@@ -119,12 +139,17 @@ fn terminal_factor_follows_the_direct_threshold_without_a_work_screen() {
         factor_terminal_components: true,
     };
     let never = || false;
-    let built = CmgPreconditioner::build_component_experiment_serial_controlled(
+    let built = CmgPreconditioner::build_with(
         &graph,
-        CmgOptions::default(),
-        experiment,
-        usize::MAX,
-        &never,
+        cmg::BuildOptions {
+            hierarchy: CmgOptions::default(),
+            components: experiment,
+        },
+        cmg::BuildContext {
+            cancel: Some(&never),
+            budget_bytes: Some(usize::MAX),
+            ..cmg::BuildContext::default()
+        },
     )
     .unwrap();
     assert_eq!(built.hierarchy().levels().len(), 1);
@@ -144,12 +169,17 @@ fn cancellation_at_every_poll_returns_cancelled_and_a_fresh_build_recovers() {
         factor_terminal_components: true,
     };
     let build = |cancel: cmg::Cancellation<'_>| {
-        CmgPreconditioner::build_component_experiment_serial_controlled(
+        CmgPreconditioner::build_with(
             &graph,
-            options,
-            experiment,
-            usize::MAX,
-            cancel,
+            cmg::BuildOptions {
+                hierarchy: options,
+                components: experiment,
+            },
+            cmg::BuildContext {
+                cancel: Some(cancel),
+                budget_bytes: Some(usize::MAX),
+                ..cmg::BuildContext::default()
+            },
         )
     };
     let count = StopAt::new(usize::MAX);
@@ -184,12 +214,17 @@ fn cancellation_query_can_park_then_continue_or_cancel_without_a_pool() {
                 }
                 decided.load(Ordering::Relaxed)
             };
-            CmgPreconditioner::build_component_experiment_serial_controlled(
+            CmgPreconditioner::build_with(
                 &graph,
-                CmgOptions::default(),
-                ComponentBuildOptions::default(),
-                usize::MAX,
-                &query,
+                cmg::BuildOptions {
+                    hierarchy: CmgOptions::default(),
+                    components: ComponentBuildOptions::default(),
+                },
+                cmg::BuildContext {
+                    cancel: Some(&query),
+                    budget_bytes: Some(usize::MAX),
+                    ..cmg::BuildContext::default()
+                },
             )
         });
         ready_rx.recv().unwrap();
@@ -249,12 +284,17 @@ fn controlled_weighted_cycles_are_fixed_linear_symmetric_and_positive_on_the_ran
             };
             let never = || false;
             let build = || {
-                CmgPreconditioner::build_component_experiment_serial_controlled(
+                CmgPreconditioner::build_with(
                     &graph,
-                    options,
-                    experiment,
-                    usize::MAX,
-                    &never,
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: experiment,
+                    },
+                    cmg::BuildContext {
+                        cancel: Some(&never),
+                        budget_bytes: Some(usize::MAX),
+                        ..cmg::BuildContext::default()
+                    },
                 )
                 .unwrap()
             };
@@ -381,4 +421,74 @@ fn scalar_workspace_preparation_polls_inside_initialization_and_recovers() {
         )
         .unwrap();
     assert_eq!(bits(&actual), bits(&expected));
+}
+
+#[test]
+fn batch_workspace_preparation_polls_inside_initialization_and_recovers() {
+    let connected = graph(4_097);
+    let preconditioner = CmgPreconditioner::build(
+        &connected,
+        CmgOptions {
+            direct_threshold: 3,
+            ..CmgOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(preconditioner.hierarchy().levels().len() > 1);
+    let never = || false;
+    for columns in [1, 3] {
+        let bytes = CmgBatchWorkspace::allocation_bytes(&preconditioner, columns).unwrap();
+        assert!(matches!(
+            CmgBatchWorkspace::try_new_controlled(&preconditioner, columns, bytes - 1, &never),
+            Err(CmgError::MemoryBudgetExceeded { .. })
+        ));
+        let count = StopAt::new(usize::MAX);
+        let query = || count.query();
+        let mut controlled =
+            CmgBatchWorkspace::try_new_controlled(&preconditioner, columns, bytes, &query).unwrap();
+        // Eight units per initialized value: the zero fill itself is polled.
+        assert!(count.polls() >= 3 * 4_097 * columns * 8 / 65_536);
+        for stop in [0, 1, count.polls() / 2, count.polls() - 1] {
+            let cancel = StopAt::new(stop);
+            let query = || cancel.query();
+            assert!(matches!(
+                CmgBatchWorkspace::try_new_controlled(&preconditioner, columns, bytes, &query),
+                Err(CmgError::Cancelled { .. })
+            ));
+            assert_eq!(cancel.polls(), stop + 1);
+        }
+        let mut ordinary = CmgBatchWorkspace::try_new(&preconditioner, columns, bytes).unwrap();
+        assert_eq!(controlled.capacity(), ordinary.capacity());
+        let rhs: Vec<f64> = connected
+            .matvec(
+                &(0..4_097)
+                    .map(|v| (v as f64 / 7.0).sin())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .into_iter()
+            .flat_map(|value| (0..columns).map(move |lane| value * (lane + 1) as f64))
+            .collect();
+        let mut expected = vec![0.0; rhs.len()];
+        let mut actual = vec![0.0; rhs.len()];
+        preconditioner
+            .apply_compatible_batch_into(
+                &rhs,
+                &mut expected,
+                columns,
+                &mut ordinary,
+                ApplyContext::default(),
+            )
+            .unwrap();
+        preconditioner
+            .apply_compatible_batch_into(
+                &rhs,
+                &mut actual,
+                columns,
+                &mut controlled,
+                ApplyContext::default(),
+            )
+            .unwrap();
+        assert_eq!(bits(&actual), bits(&expected));
+    }
 }

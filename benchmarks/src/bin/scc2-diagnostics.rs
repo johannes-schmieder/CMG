@@ -1,7 +1,6 @@
 use cmg::{
     CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgResult, PcgWorkspace, profile_pcg_with_plan, solve_pcg_batch_with_executor,
-    solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
+    PcgOptions, PcgResult, PcgWorkspace, solve_pcg_batch_concurrent,
 };
 use std::env;
 use std::error::Error;
@@ -262,10 +261,13 @@ fn run(
     let reused_preconditioner = if reuse_hierarchy {
         Some(
             recorder.measure(0, false, "retained_preconditioner_setup", || {
-                Ok(Box::new(CmgPreconditioner::build_with_executor(
+                Ok(Box::new(CmgPreconditioner::build_with(
                     &graph,
-                    cmg_options,
-                    &hierarchy_executor,
+                    cmg::BuildOptions::from(cmg_options),
+                    cmg::BuildContext {
+                        team: Some(hierarchy_executor.team()),
+                        ..cmg::BuildContext::default()
+                    },
                 )?))
             })?,
         )
@@ -279,7 +281,7 @@ fn run(
                     reused_preconditioner
                         .as_deref()
                         .ok_or_else(|| io::Error::other("plan reuse needs a hierarchy"))?,
-                    &plan_executor,
+                    plan_executor.team(),
                 )?))
             })?,
         )
@@ -317,10 +319,13 @@ fn run(
         } else {
             Some(
                 recorder.measure(repetition, measured, "preconditioner_setup", || {
-                    Ok(Box::new(CmgPreconditioner::build_with_executor(
+                    Ok(Box::new(CmgPreconditioner::build_with(
                         &graph,
-                        cmg_options,
-                        &hierarchy_executor,
+                        cmg::BuildOptions::from(cmg_options),
+                        cmg::BuildContext {
+                            team: Some(hierarchy_executor.team()),
+                            ..cmg::BuildContext::default()
+                        },
                     )?))
                 })?,
             )
@@ -340,7 +345,7 @@ fn run(
                 recorder.measure(repetition, measured, "parallel_plan_setup", || {
                     Ok(Box::new(ParallelCmgPlan::build(
                         preconditioner,
-                        &plan_executor,
+                        plan_executor.team(),
                     )?))
                 })?,
             )
@@ -446,12 +451,14 @@ fn run(
     let mut phase_records = Vec::new();
     let mut plan_levels_json = "[]".to_owned();
     for repetition in 1..=repetitions {
-        let (profiled_preconditioner, setup_profile) =
-            CmgPreconditioner::build_with_executor_profiled(
-                &graph,
-                cmg_options,
-                &hierarchy_executor,
-            )?;
+        let (profiled_preconditioner, setup_profile) = CmgPreconditioner::build_with_profiled(
+            &graph,
+            cmg::BuildOptions::from(cmg_options),
+            cmg::BuildContext {
+                team: Some(hierarchy_executor.team()),
+                ..cmg::BuildContext::default()
+            },
+        )?;
         if profiled_preconditioner != *preconditioner {
             return Err(io::Error::other(
                 "profiled hierarchy differs from the production hierarchy",
@@ -490,7 +497,7 @@ fn run(
         }
         if !omit_plan {
             let (profiled_plan, plan_profile) =
-                ParallelCmgPlan::build_profiled(preconditioner, &plan_executor)?;
+                ParallelCmgPlan::build_profiled(preconditioner, plan_executor.team())?;
             if profiled_plan.operator_count() != plan_operator_count
                 || profiled_plan.byte_len() != plan_bytes
             {
@@ -549,13 +556,16 @@ fn run(
     }
     if rhs_count == 1 && actual_strategy == "planned" && plan.is_some() {
         for repetition in 1..=repetitions {
-            let profiled = profile_pcg_with_plan(
+            let profiled = cmg::profile_pcg(
                 &graph,
                 preconditioner,
-                plan.ok_or_else(|| io::Error::other("profile needs a plan"))?,
                 &selected_rhs[0],
                 pcg_options,
-                &solve_executor,
+                cmg::SolveContext {
+                    plan: Some(plan.ok_or_else(|| io::Error::other("profile needs a plan"))?),
+                    team: Some(solve_executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )?;
             let reference = final_results
                 .first()
@@ -664,7 +674,9 @@ fn run(
         .map_or(0, |factor| factor.byte_len());
     let workspace_bytes = PcgWorkspace::new(preconditioner).byte_len();
     let workspace_concurrency = if actual_strategy == "across-rhs" {
-        solve_executor.batch_concurrency(workspace_bytes, rhs_count)?
+        solve_executor
+            .team()
+            .batch_concurrency(workspace_bytes, rhs_count)?
     } else {
         1
     };
@@ -803,31 +815,43 @@ fn solve_strategy(
         "serial" => rhs
             .iter()
             .map(|vector| {
-                solve_pcg_with_workspace(graph, preconditioner, vector, options, &mut workspaces[0])
-                    .map_err(Into::into)
+                cmg::solve_pcg_with(
+                    graph,
+                    preconditioner,
+                    vector,
+                    options,
+                    &mut workspaces[0],
+                    cmg::SolveContext::default(),
+                )
+                .map_err(Into::into)
             })
             .collect(),
         "planned" => rhs
             .iter()
             .map(|vector| {
-                solve_pcg_with_plan_and_workspace(
+                cmg::solve_pcg_with(
                     graph,
                     preconditioner,
-                    plan.ok_or_else(|| io::Error::other("planned solve needs a plan"))?,
                     vector,
                     options,
                     &mut workspaces[0],
-                    executor,
+                    cmg::SolveContext {
+                        plan: Some(
+                            plan.ok_or_else(|| io::Error::other("planned solve needs a plan"))?,
+                        ),
+                        team: Some(executor.team()),
+                        ..cmg::SolveContext::default()
+                    },
                 )
                 .map_err(Into::into)
             })
             .collect(),
-        "across-rhs" => Ok(solve_pcg_batch_with_executor(
+        "across-rhs" => Ok(solve_pcg_batch_concurrent(
             graph,
             preconditioner,
             rhs,
             options,
-            executor,
+            executor.team(),
         )?),
         _ => unreachable!(),
     }
@@ -1014,8 +1038,17 @@ fn apply_strategy(
     if matches!(strategy, "serial") || plan.is_none() {
         preconditioner.apply_compatible_into(rhs, output, workspace)?;
     } else {
-        plan.ok_or_else(|| io::Error::other("planned apply needs a plan"))?
-            .apply_compatible_into(preconditioner, rhs, output, workspace, executor)?;
+        let plan = plan.ok_or_else(|| io::Error::other("planned apply needs a plan"))?;
+        preconditioner.apply_compatible_into_with(
+            rhs,
+            output,
+            workspace,
+            cmg::ApplyContext {
+                plan: Some(plan),
+                team: Some(executor.team()),
+                cancel: None,
+            },
+        )?;
     }
     Ok(())
 }

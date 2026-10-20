@@ -1,6 +1,6 @@
 //! Reusable caller-owned storage for CMG applications.
 
-use crate::cancel::{CancelMeter, checkpoint, count, try_filled, try_reserved};
+use crate::cancel::{Meter, try_filled, try_reserved};
 use crate::components::{CenteringPlan, CenteringWorkspace, ComponentWorkspace};
 use crate::{CmgError, CmgHierarchy, Components, GroundedLdl};
 
@@ -76,10 +76,9 @@ impl CmgWorkspace {
         direct_terminal: Option<&GroundedLdl>,
         finest_components: &Components,
         coarse_centering: &[CenteringPlan],
-        mut meter: Option<&mut CancelMeter<'_>>,
+        meter: &mut impl Meter,
     ) -> Result<usize, CmgError> {
         use crate::storage::{add, bytes};
-        let meter = &mut meter;
         let levels = hierarchy.levels();
         let mut total = add(
             bytes::<LevelWorkspace>(levels.len())?,
@@ -92,11 +91,11 @@ impl CmgWorkspace {
             ComponentWorkspace::allocation_bytes(finest_components.count())?,
         )?;
         for plan in coarse_centering {
-            count(meter, "CMG workspace centering layouts", 32)?;
+            meter.work("CMG workspace centering layouts", 32)?;
             total = add(total, plan.workspace_allocation_bytes()?)?;
         }
         for (index, level) in levels.iter().enumerate() {
-            count(meter, "CMG workspace level layouts", 64)?;
+            meter.work("CMG workspace level layouts", 64)?;
             total = add(total, bytes::<f64>(level.graph().vertex_count())?)?;
             let coarse = levels
                 .get(index + 1)
@@ -107,7 +106,7 @@ impl CmgWorkspace {
             total,
             bytes::<[f64; 2]>(direct_terminal.map_or(0, GroundedLdl::active_dimension))?,
         )?;
-        checkpoint(meter, "CMG workspace layouts")?;
+        meter.checkpoint("CMG workspace layouts")?;
         Ok(total)
     }
 
@@ -212,13 +211,12 @@ impl CmgWorkspace {
         direct_terminal: Option<&GroundedLdl>,
         finest_components: &Components,
         coarse_centering: &[CenteringPlan],
-        mut meter: Option<&mut CancelMeter<'_>>,
+        meter: &mut impl Meter,
     ) -> Result<Self, CmgError> {
-        let meter = &mut meter;
         let mut dimensions =
             try_reserved(meter, hierarchy.levels().len(), "CMG workspace dimensions")?;
         for level in hierarchy.levels() {
-            count(meter, "CMG workspace dimensions", 16)?;
+            meter.work("CMG workspace dimensions", 16)?;
             dimensions.push(level.graph().vertex_count());
         }
         let projected_rhs = try_filled(
@@ -230,7 +228,7 @@ impl CmgWorkspace {
         let last = dimensions.len().saturating_sub(1);
         let mut levels = try_reserved(meter, dimensions.len(), "CMG workspace levels")?;
         for (index, &dimension) in dimensions.iter().enumerate() {
-            count(meter, "CMG workspace level dimensions", 32)?;
+            meter.work("CMG workspace level dimensions", 32)?;
             let coarse_dimension = dimensions.get(index + 1).copied().unwrap_or(0);
             let factor_dimension = if index == last {
                 direct_terminal
@@ -263,14 +261,14 @@ impl CmgWorkspace {
             });
         }
         debug_assert_eq!(coarse_centering.len(), dimensions.len().saturating_sub(1));
-        let component_workspace = finest_components.try_workspace(meter.as_deref_mut())?;
+        let component_workspace = finest_components.try_workspace(meter)?;
         let mut centering_workspaces =
             try_reserved(meter, coarse_centering.len(), "CMG centering workspaces")?;
         for plan in coarse_centering {
-            count(meter, "CMG centering workspace plan", 16)?;
-            centering_workspaces.push(plan.try_workspace(meter.as_deref_mut())?);
+            meter.work("CMG centering workspace plan", 16)?;
+            centering_workspaces.push(plan.try_workspace(meter)?);
         }
-        checkpoint(meter, "CMG workspace finish")?;
+        meter.checkpoint("CMG workspace finish")?;
         Ok(Self {
             levels,
             component_workspace,
@@ -405,14 +403,6 @@ impl CmgWorkspace {
         self.projected_rhs = projected_rhs;
     }
 
-    pub(crate) fn take_level(&mut self, level: usize) -> LevelWorkspace {
-        core::mem::take(&mut self.levels[level])
-    }
-
-    pub(crate) fn put_level(&mut self, level: usize, workspace: LevelWorkspace) {
-        self.levels[level] = workspace;
-    }
-
     pub(crate) fn take_component(&mut self) -> ComponentWorkspace {
         core::mem::take(&mut self.component_workspace)
     }
@@ -420,13 +410,59 @@ impl CmgWorkspace {
     pub(crate) fn put_component(&mut self, workspace: ComponentWorkspace) {
         self.component_workspace = workspace;
     }
+}
 
-    pub(crate) fn take_centering(&mut self, level: usize) -> CenteringWorkspace {
-        core::mem::take(&mut self.centering_workspaces[level])
+/// One scalar level moved out of the workspace during its recursive visit.
+pub(crate) struct ScalarLevel {
+    level: LevelWorkspace,
+    centering: CenteringWorkspace,
+}
+
+impl crate::preconditioner::LevelParts for ScalarLevel {
+    #[inline]
+    fn parts(&mut self, _: usize) -> crate::preconditioner::Parts<'_> {
+        let (sums, corrections, means) = self.centering.parts();
+        crate::preconditioner::Parts {
+            residual: &mut self.level.residual,
+            coarse_rhs: &mut self.level.coarse_rhs,
+            coarse_correction: &mut self.level.coarse_correction,
+            forward: &mut self.level.factor_forward,
+            solution: &mut self.level.factor_solution,
+            sums,
+            corrections,
+            means,
+        }
+    }
+}
+
+impl crate::preconditioner::Store for &mut CmgWorkspace {
+    type Width = crate::preconditioner::One;
+    type Level = ScalarLevel;
+    const TEAM_CENTERING: bool = true;
+
+    #[inline]
+    fn width(&self) -> crate::preconditioner::One {
+        crate::preconditioner::One
     }
 
-    pub(crate) fn put_centering(&mut self, level: usize, workspace: CenteringWorkspace) {
-        self.centering_workspaces[level] = workspace;
+    #[inline]
+    fn take(&mut self, index: usize) -> ScalarLevel {
+        ScalarLevel {
+            level: core::mem::take(&mut self.levels[index]),
+            centering: self
+                .centering_workspaces
+                .get_mut(index)
+                .map(core::mem::take)
+                .unwrap_or_default(),
+        }
+    }
+
+    #[inline]
+    fn put(&mut self, index: usize, level: ScalarLevel) {
+        self.levels[index] = level.level;
+        if let Some(centering) = self.centering_workspaces.get_mut(index) {
+            *centering = level.centering;
+        }
     }
 }
 
@@ -486,7 +522,7 @@ mod tests {
 #[cfg(test)]
 mod cancellable_preparation_tests {
     use super::CmgWorkspace;
-    use crate::cancel::{CancelMeter, StopAt};
+    use crate::cancel::{CancelMeter, StopAt, Unmetered};
     use crate::components::CenteringPlan;
     use crate::{CmgError, CmgOptions, CmgPreconditioner, Components, Laplacian};
 
@@ -523,14 +559,13 @@ mod cancellable_preparation_tests {
         let graph =
             Laplacian::from_edges(600, (0..300).map(|pair| (2 * pair, 2 * pair + 1, 1.0))).unwrap();
         let components = Components::from_laplacian(&graph);
-        let plan = CenteringPlan::from_laplacian(&graph);
+        let plan = CenteringPlan::from_laplacian(&graph, &mut Unmetered).unwrap();
         assert_eq!(components.count(), 300);
 
-        let (workspace, phases) =
-            cancel_at_every_poll(|meter| components.try_workspace(Some(meter)));
+        let (workspace, phases) = cancel_at_every_poll(|meter| components.try_workspace(meter));
         assert_eq!(
             format!("{workspace:?}"),
-            format!("{:?}", components.try_workspace(None).unwrap())
+            format!("{:?}", components.try_workspace(&mut Unmetered).unwrap())
         );
         for phase in [
             "component workspace sums",
@@ -546,10 +581,10 @@ mod cancellable_preparation_tests {
         }
         assert_eq!(phases.len(), 7 * 4);
 
-        let (workspace, phases) = cancel_at_every_poll(|meter| plan.try_workspace(Some(meter)));
+        let (workspace, phases) = cancel_at_every_poll(|meter| plan.try_workspace(meter));
         assert_eq!(
             format!("{workspace:?}"),
-            format!("{:?}", plan.try_workspace(None).unwrap())
+            format!("{:?}", plan.try_workspace(&mut Unmetered).unwrap())
         );
         for phase in [
             "centering workspace sums",
@@ -577,30 +612,28 @@ mod cancellable_preparation_tests {
             let components = Components::from_laplacian(&graph);
             let plans: Vec<_> = hierarchy.levels()[1..]
                 .iter()
-                .map(|level| CenteringPlan::from_laplacian(level.graph()))
+                .map(|level| CenteringPlan::from_laplacian(level.graph(), &mut Unmetered).unwrap())
                 .collect();
             assert!(hierarchy.levels().len() > 1 || direct_threshold == 128);
 
-            let ordinary_bytes =
-                CmgWorkspace::allocation_bytes(hierarchy, terminal, &components, &plans, None)
-                    .unwrap();
+            let ordinary_bytes = CmgWorkspace::allocation_bytes(
+                hierarchy,
+                terminal,
+                &components,
+                &plans,
+                &mut Unmetered,
+            )
+            .unwrap();
             let (bytes, phases) = cancel_at_every_poll(|meter| {
-                CmgWorkspace::allocation_bytes(
-                    hierarchy,
-                    terminal,
-                    &components,
-                    &plans,
-                    Some(meter),
-                )
+                CmgWorkspace::allocation_bytes(hierarchy, terminal, &components, &plans, meter)
             });
             assert_eq!(bytes, ordinary_bytes);
             assert!(occurrences(&phases, "CMG workspace level layouts") >= 1);
             assert_eq!(phases.last(), Some(&"CMG workspace layouts"));
 
-            let prepare = |meter: Option<&mut CancelMeter<'_>>| {
+            let (mut controlled, phases) = cancel_at_every_poll(|meter| {
                 CmgWorkspace::try_new(hierarchy, terminal, &components, &plans, meter)
-            };
-            let (mut controlled, phases) = cancel_at_every_poll(|meter| prepare(Some(meter)));
+            });
             // Each residual polls before its allocation and once per counted
             // 128-value chunk; the finest one (300 values) has three chunks.
             let residual_polls: usize = hierarchy
@@ -623,7 +656,9 @@ mod cancellable_preparation_tests {
 
             // A cancelled attempt leaves nothing behind: a fresh preparation
             // equals the ordinary workspace and applies identical bits.
-            let mut ordinary = prepare(None).unwrap();
+            let mut ordinary =
+                CmgWorkspace::try_new(hierarchy, terminal, &components, &plans, &mut Unmetered)
+                    .unwrap();
             assert_eq!(format!("{controlled:?}"), format!("{ordinary:?}"));
             assert_eq!(controlled.byte_len(), ordinary.byte_len());
             controlled

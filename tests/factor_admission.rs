@@ -90,12 +90,26 @@ fn check(graph: &Laplacian, component: bool) {
         if component {
             #[cfg(feature = "experimental-components")]
             {
-                GroundedLdl::factor_by_component_with_budget(graph, budget)
+                GroundedLdl::factor_with(
+                    graph,
+                    true,
+                    cmg::BuildContext {
+                        budget_bytes: Some(budget),
+                        ..cmg::BuildContext::default()
+                    },
+                )
             }
             #[cfg(not(feature = "experimental-components"))]
             unreachable!()
         } else {
-            GroundedLdl::factor_with_budget(graph, budget)
+            GroundedLdl::factor_with(
+                graph,
+                false,
+                cmg::BuildContext {
+                    budget_bytes: Some(budget),
+                    ..cmg::BuildContext::default()
+                },
+            )
         }
     };
     let before = live();

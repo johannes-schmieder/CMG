@@ -1,8 +1,9 @@
 //! Canonical weighted graph-Laplacian representation.
 
-use crate::{CmgError, Components};
+use crate::cancel::{CancelMeter, Meter, Unmetered};
 #[cfg(feature = "parallel")]
-use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
+use crate::execution::PARALLEL_SETUP_MIN_ITEMS;
+use crate::{CmgError, Components};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -145,153 +146,191 @@ impl Laplacian {
     ///
     /// Endpoint order is canonicalized, duplicate edges are sorted by weight
     /// and summed with compensated summation, and the final edge list is sorted
-    /// lexicographically by endpoint pair.
+    /// lexicographically by endpoint pair. This is the serial convenience form
+    /// of [`Self::from_edges_with`].
     pub fn from_edges<I>(vertex_count: usize, edges: I) -> Result<Self, CmgError>
     where
         I: IntoIterator<Item = (usize, usize, f64)>,
     {
-        let mut raw = collect_validated_edges(vertex_count, edges)?;
-        raw.sort_unstable_by(compare_raw_edges);
-        Self::from_sorted_raw_edges(vertex_count, raw)
+        let raw = edges
+            .into_iter()
+            .map(|edge| map_edge(vertex_count, edge))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::canonical(vertex_count, raw, &mut Unmetered)
     }
 
-    /// Build a graph with cooperative cancellation and a checked memory budget.
+    /// Requested layouts admitted by [`Self::build`] and
+    /// [`Self::from_edges_with`]: two compact edge banks, the diagonal and three
+    /// Arc owners, including modeled control blocks. Borrowed input and
+    /// allocator overhead are excluded.
+    pub fn construction_allocation_bound(vertices: usize, edges: usize) -> Result<usize, CmgError> {
+        use crate::storage::{add, arc_bytes, bytes};
+        let edge_bytes = bytes::<Edge>(edges)?;
+        let mut required = add(edge_bytes, edge_bytes)?;
+        required = add(required, bytes::<f64>(vertices)?)?;
+        required = add(required, arc_bytes::<Vec<Edge>>()?)?;
+        required = add(required, arc_bytes::<Vec<f64>>()?)?;
+        add(required, arc_bytes::<()>()?)
+    }
+
+    /// Build a Laplacian from a borrowed edge slice under a construction context.
     ///
-    /// The borrowed input slice is excluded from `budget_bytes`. The admitted
-    /// bound covers two compact edge buffers, the diagonal and three Arc owners,
-    /// including modeled control blocks. Allocator overhead and latency are not
-    /// bounded. `cancel` is polled between bounded operations and before every
-    /// allocation; a cancelled build returns [`CmgError::Cancelled`] and
-    /// publishes no graph. Canonical ordering and arithmetic match
-    /// [`Self::from_edges`].
-    pub fn from_edges_controlled(
+    /// Canonical ordering and arithmetic match [`Self::from_edges`]. A budget is
+    /// admitted against [`Self::construction_allocation_bound`] before the first
+    /// allocation. With a cancellation query every bounded operation is counted,
+    /// the query is polled at the fixed cadence and before every allocation, and
+    /// a true query returns [`CmgError::Cancelled`] with no graph. With a team,
+    /// edge sets of at least 65,536 records are validated, mapped and sorted in
+    /// fixed logical chunks (cancellation polled before every chunk); duplicate
+    /// reduction and the diagonal keep the serial canonical order.
+    pub fn build(
         vertex_count: usize,
         edges: &[(usize, usize, f64)],
-        budget_bytes: usize,
-        cancel: crate::Cancellation<'_>,
+        context: crate::BuildContext<'_>,
     ) -> Result<Self, CmgError> {
-        let mut meter = crate::cancel::CancelMeter::new(cancel);
-        Self::from_edges_metered(vertex_count, edges, budget_bytes, &mut meter)
-    }
-
-    fn from_edges_metered(
-        vertex_count: usize,
-        edges: &[(usize, usize, f64)],
-        budget_bytes: usize,
-        meter: &mut crate::cancel::CancelMeter<'_>,
-    ) -> Result<Self, CmgError> {
-        meter.work("input graph memory bound", 128)?;
-        let edge_bytes = crate::storage::bytes::<Edge>(edges.len())?;
-        let mut required = crate::storage::add(edge_bytes, edge_bytes)?;
-        required = crate::storage::add(required, crate::storage::bytes::<f64>(vertex_count)?)?;
-        required = crate::storage::add(required, crate::storage::arc_bytes::<Vec<Edge>>()?)?;
-        required = crate::storage::add(required, crate::storage::arc_bytes::<Vec<f64>>()?)?;
-        required = crate::storage::add(required, crate::storage::arc_bytes::<()>()?)?;
-        crate::storage::admit(required, budget_bytes)?;
-        let mut raw = meter.try_capacity(edges.len(), "input compact edges")?;
-        for &(left, right, weight) in edges {
-            meter.work("input edge validation and mapping", 128)?;
-            if left >= vertex_count {
-                return Err(CmgError::VertexOutOfBounds {
-                    vertex: left,
-                    vertex_count,
-                });
-            }
-            if right >= vertex_count {
-                return Err(CmgError::VertexOutOfBounds {
-                    vertex: right,
-                    vertex_count,
-                });
-            }
-            if left > u32::MAX as usize {
-                return Err(CmgError::VertexIndexTooWide {
-                    vertex: left,
-                    maximum: u32::MAX as usize,
-                });
-            }
-            if right > u32::MAX as usize {
-                return Err(CmgError::VertexIndexTooWide {
-                    vertex: right,
-                    maximum: u32::MAX as usize,
-                });
-            }
-            if left == right {
-                return Err(CmgError::SelfLoop { vertex: left });
-            }
-            if !weight.is_finite() || weight <= 0.0 {
-                return Err(CmgError::InvalidEdgeWeight {
-                    u: left,
-                    v: right,
-                    weight,
-                });
-            }
-            let (u, v) = if left < right {
-                (left, right)
-            } else {
-                (right, left)
-            };
-            raw.push(Edge::from_compact_parts(u as u32, v as u32, weight));
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(
+                Self::construction_allocation_bound(vertex_count, edges.len())?,
+                budget,
+            )?;
         }
-        Self::from_compact_edges_controlled(vertex_count, raw, meter)
+        #[cfg(feature = "parallel")]
+        if let Some(team) = context.team.filter(|_| edges.len() >= hosted::MIN_EDGES) {
+            let cancelled = context.cancel.unwrap_or(&|| false);
+            return match context.cancel {
+                Some(cancel) => hosted::build(
+                    vertex_count,
+                    edges,
+                    team,
+                    cancelled,
+                    &mut CancelMeter::new(cancel),
+                ),
+                None => hosted::build(vertex_count, edges, team, cancelled, &mut Unmetered),
+            };
+        }
+        match context.cancel {
+            Some(cancel) => Self::build_serial(vertex_count, edges, &mut CancelMeter::new(cancel)),
+            None => Self::build_serial(vertex_count, edges, &mut Unmetered),
+        }
     }
 
-    /// Build a Laplacian while parallelizing deterministic edge sorting.
+    /// Build a Laplacian from an exact-size edge iterator under a context.
     ///
-    /// Validation and compensated duplicate aggregation are identical to
-    /// [`Self::from_edges`]. The package-owned executor is used only when the
-    /// collected edge count exceeds its configured parallel threshold.
-    #[cfg(feature = "parallel")]
-    pub fn from_edges_with_executor<I>(
+    /// Validation and canonical arithmetic match [`Self::from_edges`]. With a
+    /// team, edge sets of at least 65,536 records sort in place on the team's
+    /// pool when its policy enables parallel work; the iterator is consumed
+    /// serially. Budget and cancellation follow [`Self::build`].
+    pub fn from_edges_with<I>(
         vertex_count: usize,
         edges: I,
-        executor: &ParallelExecutor,
+        context: crate::BuildContext<'_>,
     ) -> Result<Self, CmgError>
     where
         I: IntoIterator<Item = (usize, usize, f64)>,
+        I::IntoIter: ExactSizeIterator,
     {
-        let mut raw = collect_validated_edges(vertex_count, edges)?;
-        if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
-            executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
+        let edges = edges.into_iter();
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(
+                Self::construction_allocation_bound(vertex_count, edges.len())?,
+                budget,
+            )?;
+        }
+        match context.cancel {
+            Some(cancel) => {
+                Self::from_iter_with(vertex_count, edges, context, &mut CancelMeter::new(cancel))
+            }
+            None => Self::from_iter_with(vertex_count, edges, context, &mut Unmetered),
+        }
+    }
+
+    fn from_iter_with<M: Meter>(
+        vertex_count: usize,
+        edges: impl ExactSizeIterator<Item = (usize, usize, f64)>,
+        context: crate::BuildContext<'_>,
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
+        let raw = map_edges(vertex_count, edges, meter)?;
+        #[cfg(feature = "parallel")]
+        if let Some(team) = context
+            .team
+            .filter(|team| raw.len() >= PARALLEL_SETUP_MIN_ITEMS && team.should_parallel(raw.len()))
+        {
+            return Self::canonical_parallel(vertex_count, raw, team, meter);
+        }
+        let _ = context;
+        Self::canonical(vertex_count, raw, meter)
+    }
+
+    fn build_serial<M: Meter>(
+        vertex_count: usize,
+        edges: &[(usize, usize, f64)],
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
+        // The admission formula is fixed-work checked scalar arithmetic.
+        meter.work("input graph memory bound", 128)?;
+        let raw = map_edges(vertex_count, edges.iter().copied(), meter)?;
+        Self::canonical(vertex_count, raw, meter)
+    }
+
+    /// Canonicalize owned compact edges: total-order sort, then compensated
+    /// duplicate reduction with the diagonal in canonical edge order.
+    pub(crate) fn canonical<M: Meter>(
+        vertex_count: usize,
+        mut raw: Vec<Edge>,
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
+        if M::POLLS {
+            // Sorting by the full comparator gives precisely the order of the
+            // endpoint sort followed by each duplicate group's weight sort.
+            meter.sort_by(&mut raw, compare_raw_edges, "coarse edge sorting")?;
+            Self::from_sorted_edges(vertex_count, raw, true, meter)
         } else {
-            raw.sort_unstable_by(compare_raw_edges);
+            sort_compact_edge_endpoints(&mut raw);
+            Self::from_sorted_edges(vertex_count, raw, false, meter)
         }
-        Self::from_sorted_raw_edges(vertex_count, raw)
     }
 
-    pub(crate) fn from_compact_edges(
+    /// Canonicalize with the deterministic in-place parallel sort of a team.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn canonical_parallel<M: Meter>(
         vertex_count: usize,
         mut raw: Vec<Edge>,
+        team: crate::Team<'_>,
+        meter: &mut M,
     ) -> Result<Self, CmgError> {
-        sort_compact_edge_endpoints(&mut raw);
-        Self::from_endpoint_sorted_raw_edges(vertex_count, raw)
+        // Rayon's unstable sort is in place. A total comparator makes the result
+        // independent of scheduling; its runtime storage is outside CMG admission.
+        meter.checkpoint("parallel edge sorting")?;
+        team.install(|| raw.par_sort_unstable_by(compare_raw_edges));
+        meter.checkpoint("parallel edge sorting")?;
+        Self::from_sorted_edges(vertex_count, raw, true, meter)
     }
 
-    /// Build a canonical coarse graph with bounded, cancellable setup work.
-    pub(crate) fn from_compact_edges_controlled(
+    /// Merge endpoint-sorted edges into the front of their own buffer and
+    /// accumulate the diagonal while each merged edge is hot. Unless weights
+    /// are already sorted within each endpoint group, each group is sorted by
+    /// weight before its compensated sum.
+    pub(super) fn from_sorted_edges<M: Meter>(
         vertex_count: usize,
         mut raw: Vec<Edge>,
-        meter: &mut crate::cancel::CancelMeter<'_>,
+        weights_are_sorted: bool,
+        meter: &mut M,
     ) -> Result<Self, CmgError> {
-        // Sorting by the full comparator gives precisely the order used by the
-        // original endpoint sort followed by each duplicate group's weight sort.
-        meter.sort_by(&mut raw, compare_raw_edges, "coarse edge sorting")?;
-        Self::from_sorted_edges_controlled(vertex_count, raw, meter)
-    }
-
-    fn from_sorted_edges_controlled(
-        vertex_count: usize,
-        mut raw: Vec<Edge>,
-        meter: &mut crate::cancel::CancelMeter<'_>,
-    ) -> Result<Self, CmgError> {
-        meter.allocation(
-            "coarse graph diagonal",
-            crate::storage::bytes::<f64>(vertex_count)?,
-        )?;
-        let mut diagonal = crate::storage::try_capacity(vertex_count, "coarse graph diagonal")?;
-        for _ in 0..vertex_count {
-            meter.work("coarse graph diagonal initialization", 8)?;
-            diagonal.push(0.0);
-        }
+        let mut diagonal = if M::POLLS {
+            meter.allocation(
+                "coarse graph diagonal",
+                crate::storage::bytes::<f64>(vertex_count)?,
+            )?;
+            let mut diagonal = crate::storage::try_capacity(vertex_count, "coarse graph diagonal")?;
+            for _ in 0..vertex_count {
+                meter.work("coarse graph diagonal initialization", 8)?;
+                diagonal.push(0.0);
+            }
+            diagonal
+        } else {
+            crate::storage::try_filled(vertex_count, 0.0, "coarse graph diagonal")?
+        };
         let mut read_index = 0;
         let mut write_index = 0;
         while read_index < raw.len() {
@@ -299,6 +338,16 @@ impl Laplacian {
             let key = raw[read_index].key;
             let u = raw[read_index].compact_u();
             let v = raw[read_index].compact_v();
+            if !weights_are_sorted {
+                let mut group_end = read_index + 1;
+                while group_end < raw.len() && raw[group_end].key == key {
+                    group_end += 1;
+                }
+                if group_end - read_index > 1 {
+                    raw[read_index..group_end]
+                        .sort_unstable_by(|left, right| left.weight.total_cmp(&right.weight));
+                }
+            }
             let mut sum = 0.0;
             let mut correction = 0.0;
             while read_index < raw.len() && raw[read_index].key == key {
@@ -311,15 +360,21 @@ impl Laplacian {
             write_index += 1;
         }
         raw.truncate(write_index);
+        // Filtered and merged banks may retain spare capacity. Do not keep it
+        // in every hierarchy level.
         if raw.capacity() != raw.len() {
             meter.allocation(
                 "coarse edge compaction",
                 crate::storage::bytes::<Edge>(raw.len())?,
             )?;
             let mut compact = crate::storage::try_capacity(raw.len(), "coarse edge compaction")?;
-            for &edge in &raw {
-                meter.work("coarse edge compaction copy", 8)?;
-                compact.push(edge);
+            if M::POLLS {
+                for &edge in &raw {
+                    meter.work("coarse edge compaction copy", 8)?;
+                    compact.push(edge);
+                }
+            } else {
+                compact.extend_from_slice(&raw);
             }
             raw = compact;
         }
@@ -348,147 +403,6 @@ impl Laplacian {
             vertex_count,
             edges,
             diagonal,
-            matrix_nnz,
-            operator_norm_bound,
-            lineage: Arc::new(()),
-            prepared_topology_lineage: None,
-            prepared_components: None,
-        })
-    }
-
-    pub(crate) fn from_compact_edges_admitted(
-        vertex_count: usize,
-        mut raw: Vec<Edge>,
-    ) -> Result<Self, CmgError> {
-        sort_compact_edge_endpoints(&mut raw);
-        Self::from_sorted_raw_edges_with_mode::<true>(vertex_count, raw, false)
-    }
-
-    #[cfg(feature = "parallel")]
-    pub(crate) fn from_compact_edges_with_executor(
-        vertex_count: usize,
-        mut raw: Vec<Edge>,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
-            executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
-        } else {
-            sort_compact_edge_endpoints(&mut raw);
-            return Self::from_endpoint_sorted_raw_edges(vertex_count, raw);
-        }
-        Self::from_sorted_raw_edges(vertex_count, raw)
-    }
-
-    #[cfg(feature = "parallel")]
-    pub(crate) fn from_compact_edges_with_executor_admitted(
-        vertex_count: usize,
-        mut raw: Vec<Edge>,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        if raw.len() >= PARALLEL_SETUP_MIN_ITEMS && executor.should_parallel(raw.len()) {
-            // Rayon's unstable sort is in-place. Its scheduling/runtime storage
-            // is explicitly outside the CMG-owned construction budget.
-            executor.install(|| raw.par_sort_unstable_by(compare_raw_edges));
-            Self::from_sorted_raw_edges_with_mode::<true>(vertex_count, raw, true)
-        } else {
-            Self::from_compact_edges_admitted(vertex_count, raw)
-        }
-    }
-
-    fn from_endpoint_sorted_raw_edges(
-        vertex_count: usize,
-        raw: Vec<Edge>,
-    ) -> Result<Self, CmgError> {
-        Self::from_sorted_raw_edges_with_mode::<false>(vertex_count, raw, false)
-    }
-
-    fn from_sorted_raw_edges(vertex_count: usize, raw: Vec<Edge>) -> Result<Self, CmgError> {
-        Self::from_sorted_raw_edges_with_mode::<false>(vertex_count, raw, true)
-    }
-
-    fn from_sorted_raw_edges_with_mode<const ADMITTED: bool>(
-        vertex_count: usize,
-        mut raw: Vec<Edge>,
-        weights_are_sorted: bool,
-    ) -> Result<Self, CmgError> {
-        // Equal endpoint pairs are contiguous after sorting. Merge them into
-        // the front of the compact input buffer so graph construction does not
-        // allocate a separate full-capacity canonical vector. Accumulate the
-        // diagonal in the same canonical edge order while each merged edge is
-        // already hot, avoiding a second full edge pass.
-        let mut diagonal = if ADMITTED {
-            crate::storage::try_filled(vertex_count, 0.0, "coarse graph diagonal")?
-        } else {
-            vec![0.0; vertex_count]
-        };
-        let mut write_index = 0;
-        if weights_are_sorted {
-            let mut read_index = 0;
-            while read_index < raw.len() {
-                let key = raw[read_index].key;
-                let u = raw[read_index].compact_u();
-                let v = raw[read_index].compact_v();
-                let mut sum = 0.0;
-                let mut correction = 0.0;
-                while read_index < raw.len() && raw[read_index].key == key {
-                    compensated_add(&mut sum, &mut correction, raw[read_index].weight);
-                    read_index += 1;
-                }
-                write_merged_edge(&mut raw, &mut diagonal, write_index, u, v, sum + correction)?;
-                write_index += 1;
-            }
-        } else {
-            let mut group_start = 0;
-            while group_start < raw.len() {
-                let key = raw[group_start].key;
-                let u = raw[group_start].compact_u();
-                let v = raw[group_start].compact_v();
-                let mut group_end = group_start + 1;
-                while group_end < raw.len() && raw[group_end].key == key {
-                    group_end += 1;
-                }
-                if group_end - group_start > 1 {
-                    raw[group_start..group_end]
-                        .sort_unstable_by(|left, right| left.weight.total_cmp(&right.weight));
-                }
-                let mut sum = 0.0;
-                let mut correction = 0.0;
-                for edge in &raw[group_start..group_end] {
-                    compensated_add(&mut sum, &mut correction, edge.weight);
-                }
-                write_merged_edge(&mut raw, &mut diagonal, write_index, u, v, sum + correction)?;
-                write_index += 1;
-                group_start = group_end;
-            }
-        }
-        raw.truncate(write_index);
-        // Filtered coarse-edge iterators have a zero lower size hint, so their
-        // vectors may grow beyond the final length. Do not retain that spare
-        // capacity in every hierarchy level.
-        if raw.capacity() != raw.len() {
-            if ADMITTED {
-                let mut compact =
-                    crate::storage::try_capacity(raw.len(), "coarse edge compaction")?;
-                compact.extend_from_slice(&raw);
-                raw = compact;
-            } else {
-                raw.shrink_to_fit();
-            }
-        }
-
-        let mut diagonal_nnz = 0_usize;
-        let mut maximum_degree = 0.0_f64;
-        for &degree in &diagonal {
-            diagonal_nnz += usize::from(degree != 0.0);
-            maximum_degree = maximum_degree.max(degree);
-        }
-        let matrix_nnz = diagonal_nnz + 2 * raw.len();
-        let operator_norm_bound = 2.0 * maximum_degree;
-
-        Ok(Self {
-            vertex_count,
-            edges: Arc::new(raw),
-            diagonal: Arc::new(diagonal),
             matrix_nnz,
             operator_norm_bound,
             lineage: Arc::new(()),
@@ -526,23 +440,14 @@ impl Laplacian {
     }
 
     /// Remove only zero-degree rows, preserving canonical edge and addition order.
+    ///
+    /// A monotone relabeling cannot change canonical ordering or introduce
+    /// duplicates. If all removed rows form a suffix, even the endpoint indices
+    /// are unchanged and the canonical edge storage is shared.
     #[cfg(feature = "experimental-components")]
-    pub(crate) fn without_isolated_vertices(&self) -> Option<(Vec<usize>, Self)> {
-        self.without_isolated_vertices_impl::<false>()
-            .expect("unbudgeted isolate allocation")
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn without_isolated_vertices_admitted(
+    pub(crate) fn without_isolated_vertices<M: Meter>(
         &self,
-    ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
-        self.without_isolated_vertices_impl::<true>()
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn without_isolated_vertices_controlled(
-        &self,
-        meter: &mut crate::cancel::CancelMeter<'_>,
+        meter: &mut M,
     ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
         let mut has_isolate = false;
         for &degree in self.diagonal.iter() {
@@ -583,6 +488,7 @@ impl Laplacian {
                 crate::storage::try_capacity(self.edge_count(), "isolate compact edges")?;
             for &edge in self.edges.iter() {
                 meter.work("isolate edge mapping", 32)?;
+                debug_assert!(map[edge.u()] < map[edge.v()]);
                 edges.push(Edge::from_compact_parts(
                     map[edge.u()] as u32,
                     map[edge.v()] as u32,
@@ -618,69 +524,6 @@ impl Laplacian {
                 vertex_count: dimension,
                 edges,
                 diagonal,
-                matrix_nnz: self.matrix_nnz,
-                operator_norm_bound: self.operator_norm_bound,
-                lineage: Arc::new(()),
-                prepared_topology_lineage: None,
-                prepared_components: None,
-            },
-        )))
-    }
-
-    #[cfg(feature = "experimental-components")]
-    fn without_isolated_vertices_impl<const ADMITTED: bool>(
-        &self,
-    ) -> Result<Option<(Vec<usize>, Self)>, CmgError> {
-        if self.diagonal.iter().all(|&degree| degree > 0.0) {
-            return Ok(None);
-        }
-        let mut map = if ADMITTED {
-            crate::storage::try_filled(self.vertex_count, usize::MAX, "isolate vertex map")?
-        } else {
-            vec![usize::MAX; self.vertex_count]
-        };
-        let mut dimension = 0;
-        let mut endpoints_unchanged = true;
-        for (vertex, &degree) in self.diagonal.iter().enumerate() {
-            if degree > 0.0 {
-                map[vertex] = dimension;
-                endpoints_unchanged &= vertex == dimension;
-                dimension += 1;
-            }
-        }
-        // A monotone relabeling cannot change canonical ordering or introduce
-        // duplicates. If all removed rows form a suffix, even the endpoint
-        // indices are unchanged and the canonical edge storage can be shared.
-        let edges = if endpoints_unchanged {
-            Arc::clone(&self.edges)
-        } else {
-            let mapped = self.edges.iter().map(|edge| {
-                debug_assert!(map[edge.u()] < map[edge.v()]);
-                debug_assert!(map[edge.v()] < dimension);
-                Edge::from_compact_parts(map[edge.u()] as u32, map[edge.v()] as u32, edge.weight())
-            });
-            let edges = if ADMITTED {
-                let mut edges =
-                    crate::storage::try_capacity(self.edge_count(), "isolate compact edges")?;
-                edges.extend(mapped);
-                edges
-            } else {
-                mapped.collect()
-            };
-            Arc::new(edges)
-        };
-        let mut diagonal = if ADMITTED {
-            crate::storage::try_capacity(dimension, "isolate compact diagonal")?
-        } else {
-            Vec::with_capacity(dimension)
-        };
-        diagonal.extend(self.diagonal.iter().copied().filter(|&degree| degree > 0.0));
-        Ok(Some((
-            map,
-            Self {
-                vertex_count: dimension,
-                edges,
-                diagonal: Arc::new(diagonal),
                 matrix_nnz: self.matrix_nnz,
                 operator_norm_bound: self.operator_norm_bound,
                 lineage: Arc::new(()),
@@ -780,13 +623,44 @@ impl Laplacian {
                 output.len(),
             ));
         }
-        output.fill(0.0);
-        for edge in self.edges.iter() {
-            let difference = edge.weight * (input[edge.u()] - input[edge.v()]);
-            output[edge.u()] += difference;
-            output[edge.v()] -= difference;
-        }
-        Ok(())
+        self.matvec_lanes(
+            input,
+            output,
+            crate::preconditioner::One,
+            &mut crate::cancel::Unmetered,
+        )
+    }
+
+    /// The one edge-list (scatter) kernel for vertex-major lanes: every lane
+    /// accumulates edge differences in canonical edge order from zero. Edges
+    /// are counted in bounded chunks when the meter polls.
+    pub(crate) fn matvec_lanes<W: crate::preconditioner::Width, M: crate::cancel::Meter>(
+        &self,
+        input: &[f64],
+        output: &mut [f64],
+        width: W,
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        let columns = width.get();
+        crate::cancel::zero(meter, "Laplacian matvec", output)?;
+        crate::cancel::chunked(
+            meter,
+            "Laplacian matvec",
+            self.edges.len(),
+            columns,
+            |range| {
+                for edge in &self.edges[range] {
+                    let u = edge.u() * columns;
+                    let v = edge.v() * columns;
+                    for lane in 0..columns {
+                        let difference = edge.weight * (input[u + lane] - input[v + lane]);
+                        output[u + lane] += difference;
+                        output[v + lane] -= difference;
+                    }
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Compute and return `L * input`.
@@ -827,53 +701,62 @@ impl Laplacian {
     }
 }
 
-fn collect_validated_edges<I>(vertex_count: usize, edges: I) -> Result<Vec<Edge>, CmgError>
-where
-    I: IntoIterator<Item = (usize, usize, f64)>,
-{
-    let iterator = edges.into_iter();
-    let mut raw = Vec::with_capacity(iterator.size_hint().0);
-    for (left, right, weight) in iterator {
-        if left >= vertex_count {
-            return Err(CmgError::VertexOutOfBounds {
-                vertex: left,
-                vertex_count,
-            });
-        }
-        if right >= vertex_count {
-            return Err(CmgError::VertexOutOfBounds {
-                vertex: right,
-                vertex_count,
-            });
-        }
-        if left > u32::MAX as usize {
-            return Err(CmgError::VertexIndexTooWide {
-                vertex: left,
-                maximum: u32::MAX as usize,
-            });
-        }
-        if right > u32::MAX as usize {
-            return Err(CmgError::VertexIndexTooWide {
-                vertex: right,
-                maximum: u32::MAX as usize,
-            });
-        }
-        if left == right {
-            return Err(CmgError::SelfLoop { vertex: left });
-        }
-        if !weight.is_finite() || weight <= 0.0 {
-            return Err(CmgError::InvalidEdgeWeight {
-                u: left,
-                v: right,
-                weight,
-            });
-        }
-        let (u, v) = if left < right {
-            (left, right)
-        } else {
-            (right, left)
-        };
-        raw.push(Edge::from_compact_parts(u as u32, v as u32, weight));
+/// Validate one input edge and map it to compact canonical endpoints.
+pub(crate) fn map_edge(
+    vertex_count: usize,
+    (left, right, weight): (usize, usize, f64),
+) -> Result<Edge, CmgError> {
+    if left >= vertex_count {
+        return Err(CmgError::VertexOutOfBounds {
+            vertex: left,
+            vertex_count,
+        });
+    }
+    if right >= vertex_count {
+        return Err(CmgError::VertexOutOfBounds {
+            vertex: right,
+            vertex_count,
+        });
+    }
+    if left > u32::MAX as usize {
+        return Err(CmgError::VertexIndexTooWide {
+            vertex: left,
+            maximum: u32::MAX as usize,
+        });
+    }
+    if right > u32::MAX as usize {
+        return Err(CmgError::VertexIndexTooWide {
+            vertex: right,
+            maximum: u32::MAX as usize,
+        });
+    }
+    if left == right {
+        return Err(CmgError::SelfLoop { vertex: left });
+    }
+    if !weight.is_finite() || weight <= 0.0 {
+        return Err(CmgError::InvalidEdgeWeight {
+            u: left,
+            v: right,
+            weight,
+        });
+    }
+    let (u, v) = if left < right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    Ok(Edge::from_compact_parts(u as u32, v as u32, weight))
+}
+
+fn map_edges<M: Meter>(
+    vertex_count: usize,
+    edges: impl ExactSizeIterator<Item = (usize, usize, f64)>,
+    meter: &mut M,
+) -> Result<Vec<Edge>, CmgError> {
+    let mut raw = meter.try_capacity(edges.len(), "input compact edges")?;
+    for edge in edges {
+        meter.work("input edge validation and mapping", 128)?;
+        raw.push(map_edge(vertex_count, edge)?);
     }
     Ok(raw)
 }
@@ -976,7 +859,10 @@ mod tests {
             vec![(2, 5, 0.125), (5, 11, 1e3), (2, 11, 1e-3), (2, 5, 0.5)],
         ] {
             let graph = Laplacian::from_edges(12, edges).unwrap();
-            let (map, compact) = graph.without_isolated_vertices().unwrap();
+            let (map, compact) = graph
+                .without_isolated_vertices(&mut crate::cancel::Unmetered)
+                .unwrap()
+                .unwrap();
             let reference = Laplacian::from_edges(
                 compact.vertex_count(),
                 graph
@@ -1013,7 +899,12 @@ mod tests {
             }
         }
         let connected = Laplacian::from_edges(2, [(0, 1, 1.0)]).unwrap();
-        assert!(connected.without_isolated_vertices().is_none());
+        assert!(
+            connected
+                .without_isolated_vertices(&mut crate::cancel::Unmetered)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1172,7 +1063,8 @@ mod local_duplicate_merge_tests {
             .map(|(u, v, weight)| super::Edge::from_internal_parts(u, v, weight).unwrap())
             .collect::<Vec<_>>();
         sort_compact_edge_endpoints(&mut compact);
-        let local = Laplacian::from_endpoint_sorted_raw_edges(6, compact).unwrap();
+        let local =
+            Laplacian::from_sorted_edges(6, compact, false, &mut crate::cancel::Unmetered).unwrap();
         assert_eq!(local, public);
     }
 }
@@ -1219,9 +1111,19 @@ mod cached_endpoint_key_tests {
 }
 
 #[cfg(test)]
+// Context literals keep `..Default::default()` for their feature-gated fields.
+#[allow(clippy::needless_update)]
 mod controlled_graph_tests {
     use super::*;
     use crate::cancel::{CancelMeter, StopAt};
+
+    fn ctx<'a>(budget: usize, cancel: crate::Cancellation<'a>) -> crate::BuildContext<'a> {
+        crate::BuildContext {
+            cancel: Some(cancel),
+            budget_bytes: Some(budget),
+            ..crate::BuildContext::default()
+        }
+    }
 
     fn raw_edges() -> Vec<Edge> {
         [
@@ -1248,7 +1150,7 @@ mod controlled_graph_tests {
         let expected = Laplacian::from_edges(6, input.iter().copied()).unwrap();
         let count = StopAt::never();
         let query = || count.query();
-        let actual = Laplacian::from_edges_controlled(6, &input, usize::MAX, &query).unwrap();
+        let actual = Laplacian::build(6, &input, ctx(usize::MAX, &query)).unwrap();
         assert_eq!(actual, expected);
         // Small inputs stay below the counted cadence: only allocations poll.
         assert!(count.polls() > 0);
@@ -1256,31 +1158,21 @@ mod controlled_graph_tests {
             let cancel = StopAt::at(Some(stop));
             let query = || cancel.query();
             assert!(matches!(
-                Laplacian::from_edges_controlled(6, &input, usize::MAX, &query),
+                Laplacian::build(6, &input, ctx(usize::MAX, &query)),
                 Err(CmgError::Cancelled { .. })
             ));
             assert_eq!(cancel.polls(), stop + 1);
         }
         let count = StopAt::never();
         let query = || count.query();
-        let metered = Laplacian::from_edges_metered(
-            6,
-            &input,
-            usize::MAX,
-            &mut CancelMeter::every_operation(&query),
-        )
-        .unwrap();
+        let metered =
+            Laplacian::build_serial(6, &input, &mut CancelMeter::every_operation(&query)).unwrap();
         assert_eq!(metered, expected);
         for stop in 0..count.polls() {
             let cancel = StopAt::at(Some(stop));
             let query = || cancel.query();
             assert!(matches!(
-                Laplacian::from_edges_metered(
-                    6,
-                    &input,
-                    usize::MAX,
-                    &mut CancelMeter::every_operation(&query)
-                ),
+                Laplacian::build_serial(6, &input, &mut CancelMeter::every_operation(&query)),
                 Err(CmgError::Cancelled { .. })
             ));
             assert_eq!(cancel.polls(), stop + 1);
@@ -1300,15 +1192,14 @@ mod controlled_graph_tests {
             (2, vec![(0, 1, f64::NAN)]),
         ] {
             let expected = Laplacian::from_edges(count, input.iter().copied()).unwrap_err();
-            let actual =
-                Laplacian::from_edges_controlled(count, &input, usize::MAX, &never).unwrap_err();
+            let actual = Laplacian::build(count, &input, ctx(usize::MAX, &never)).unwrap_err();
             // Debug comparison handles the NaN carried in the weight error.
             assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
         }
         // Memory refusal precedes the first allocation and therefore every poll.
         let unreachable = || -> bool { panic!("memory refusal must precede any poll") };
         assert!(matches!(
-            Laplacian::from_edges_controlled(2, &[(0, 1, 1.0)], 0, &unreachable),
+            Laplacian::build(2, &[(0, 1, 1.0)], ctx(0, &unreachable)),
             Err(CmgError::MemoryBudgetExceeded { .. })
         ));
     }
@@ -1320,7 +1211,7 @@ mod controlled_graph_tests {
         let never = || false;
         for input in [[(wide, 0, 1.0)], [(0, wide, 1.0)]] {
             assert_eq!(
-                Laplacian::from_edges_controlled(wide + 1, &input, usize::MAX, &never).unwrap_err(),
+                Laplacian::build(wide + 1, &input, ctx(usize::MAX, &never)).unwrap_err(),
                 CmgError::VertexIndexTooWide {
                     vertex: wide,
                     maximum: u32::MAX as usize
@@ -1331,15 +1222,12 @@ mod controlled_graph_tests {
 
     #[test]
     fn controlled_graph_preserves_bits_and_cancels_at_every_poll() {
-        let expected = Laplacian::from_compact_edges_admitted(6, raw_edges()).unwrap();
+        let expected = Laplacian::canonical(6, raw_edges(), &mut crate::cancel::Unmetered).unwrap();
         let count = StopAt::never();
         let query = || count.query();
-        let actual = Laplacian::from_compact_edges_controlled(
-            6,
-            raw_edges(),
-            &mut CancelMeter::every_operation(&query),
-        )
-        .unwrap();
+        let actual =
+            Laplacian::canonical(6, raw_edges(), &mut CancelMeter::every_operation(&query))
+                .unwrap();
         assert_eq!(actual, expected);
         assert_eq!(
             actual
@@ -1357,11 +1245,7 @@ mod controlled_graph_tests {
             let cancel = StopAt::at(Some(stop));
             let query = || cancel.query();
             assert!(matches!(
-                Laplacian::from_compact_edges_controlled(
-                    6,
-                    raw_edges(),
-                    &mut CancelMeter::every_operation(&query),
-                ),
+                Laplacian::canonical(6, raw_edges(), &mut CancelMeter::every_operation(&query),),
                 Err(CmgError::Cancelled { .. })
             ));
             assert_eq!(cancel.polls(), stop + 1);

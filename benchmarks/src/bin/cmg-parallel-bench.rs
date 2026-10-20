@@ -1,6 +1,6 @@
 use cmg::{
     CmgOptions, CmgPreconditioner, CsrLaplacian, Laplacian, ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgResult, PcgWorkspace, solve_pcg_batch, solve_pcg_batch_with_executor,
+    PcgOptions, PcgResult, PcgWorkspace, solve_pcg_batch, solve_pcg_batch_concurrent,
 };
 use std::env;
 use std::error::Error;
@@ -61,8 +61,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let graph = Laplacian::from_edges(config.vertices, raw_edges.iter().copied())?;
-    let parallel_graph =
-        Laplacian::from_edges_with_executor(config.vertices, raw_edges.iter().copied(), &executor)?;
+    let parallel_graph = Laplacian::from_edges_with(
+        config.vertices,
+        raw_edges.iter().copied(),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )?;
     if graph != parallel_graph {
         return Err(
             io::Error::other("parallel graph construction changed the canonical graph").into(),
@@ -90,8 +96,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let preconditioner = CmgPreconditioner::build(&graph, cmg_options)?;
-    let parallel_preconditioner =
-        CmgPreconditioner::build_with_executor(&graph, cmg_options, &executor)?;
+    let parallel_preconditioner = CmgPreconditioner::build_with(
+        &graph,
+        cmg::BuildOptions::from(cmg_options),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )?;
     if preconditioner != parallel_preconditioner {
         return Err(io::Error::other("parallel setup changed the CMG preconditioner").into());
     }
@@ -114,15 +126,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if workspace_bytes != PcgWorkspace::new(&parallel_preconditioner).byte_len() {
         return Err(io::Error::other("parallel setup changed workspace storage").into());
     }
-    let batch_concurrency = executor.batch_concurrency(workspace_bytes, right_hand_sides.len())?;
+    let batch_concurrency = executor
+        .team()
+        .batch_concurrency(workspace_bytes, right_hand_sides.len())?;
 
     let serial_warmup = solve_pcg_batch(&graph, &preconditioner, &right_hand_sides, pcg_options)?;
-    let parallel_warmup = solve_pcg_batch_with_executor(
+    let parallel_warmup = solve_pcg_batch_concurrent(
         &graph,
         &parallel_preconditioner,
         &right_hand_sides,
         pcg_options,
-        &executor,
+        executor.team(),
     )?;
     validate_solve_agreement(&serial_warmup, &parallel_warmup)?;
     black_box(&serial_warmup);
@@ -177,7 +191,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut serial_output = vec![0.0; graph.vertex_count()];
     let mut parallel_output = vec![0.0; graph.vertex_count()];
     csr.matvec_into(&kernel_input, &mut serial_output)?;
-    csr.matvec_into_parallel(&kernel_input, &mut parallel_output, &executor)?;
+    csr.matvec_into_with_team(&kernel_input, &mut parallel_output, executor.team())?;
     if serial_output != parallel_output {
         return Err(io::Error::other("parallel CSR matvec changed row arithmetic").into());
     }
@@ -318,8 +332,14 @@ fn time_parallel_graph_build(
     executor: &ParallelExecutor,
 ) -> Result<u128, cmg::CmgError> {
     let start = Instant::now();
-    let graph =
-        Laplacian::from_edges_with_executor(vertex_count, raw_edges.iter().copied(), executor)?;
+    let graph = Laplacian::from_edges_with(
+        vertex_count,
+        raw_edges.iter().copied(),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )?;
     black_box(&graph);
     Ok(start.elapsed().as_nanos())
 }
@@ -337,7 +357,14 @@ fn time_parallel_setup(
     executor: &ParallelExecutor,
 ) -> Result<u128, cmg::CmgError> {
     let start = Instant::now();
-    let preconditioner = CmgPreconditioner::build_with_executor(graph, options, executor)?;
+    let preconditioner = CmgPreconditioner::build_with(
+        graph,
+        cmg::BuildOptions::from(options),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )?;
     black_box(&preconditioner);
     Ok(start.elapsed().as_nanos())
 }
@@ -362,8 +389,13 @@ fn time_parallel_batch(
     executor: &ParallelExecutor,
 ) -> Result<(u128, Vec<PcgResult>), cmg::CmgError> {
     let start = Instant::now();
-    let results =
-        solve_pcg_batch_with_executor(graph, preconditioner, right_hand_sides, options, executor)?;
+    let results = solve_pcg_batch_concurrent(
+        graph,
+        preconditioner,
+        right_hand_sides,
+        options,
+        executor.team(),
+    )?;
     let elapsed = start.elapsed().as_nanos();
     black_box(&results);
     Ok((elapsed, results))
@@ -392,7 +424,7 @@ fn time_parallel_csr(
 ) -> Result<u128, cmg::CmgError> {
     let start = Instant::now();
     for _ in 0..loops {
-        graph.matvec_into_parallel(input, output, executor)?;
+        graph.matvec_into_with_team(input, output, executor.team())?;
         black_box(&*output);
     }
     Ok(start.elapsed().as_nanos() / loops as u128)

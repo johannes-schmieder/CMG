@@ -1,9 +1,24 @@
 //! Construction and diagnostics for the stationary CMG hierarchy.
 
-#[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
+use crate::cancel::{Meter, Unmetered};
+use crate::execution::Team;
 use crate::forest::build_forest_aggregation_labels;
+use crate::preconditioner::Width;
 use crate::{Aggregation, CmgError, CmgOptions, Laplacian};
+
+/// Level-loop choices that do not change arithmetic beyond the declared
+/// component options.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct LevelPolicy {
+    /// Retire isolated coarse vertices after contraction.
+    #[cfg(feature = "experimental-components")]
+    pub(crate) prune_coarse_isolates: bool,
+    /// Count retired isolates in vertex-based stopping decisions.
+    #[cfg(feature = "experimental-components")]
+    pub(crate) preserve_unpruned_stopping: bool,
+    /// Reserve `max_levels` level descriptors up front (admitted builds).
+    pub(crate) reserve_levels: bool,
+}
 use std::time::Instant;
 
 crate::storage::storage_fields!(CmgHierarchy, levels, report);
@@ -94,65 +109,49 @@ pub struct HierarchyLevel {
 }
 
 impl HierarchyLevel {
-    pub(crate) fn restrict_batch_residual(
+    /// Restrict `rhs - product` lanes through this level's transfer.
+    pub(crate) fn restrict_residual_lanes<W: Width, M: Meter>(
         &self,
         rhs: &[f64],
-        matrix: &[f64],
+        product: &[f64],
         coarse: &mut [f64],
-        columns: usize,
+        width: W,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        coarse.fill(0.0);
-        let mut restrict = |fine: usize, target: usize| {
-            for lane in 0..columns {
-                coarse[target * columns + lane] +=
-                    rhs[fine * columns + lane] - matrix[fine * columns + lane];
-            }
-        };
         match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "batch level has no transfer",
+            context: "nonterminal level has no transfer",
         })? {
             LevelTransfer::Full(aggregation) => {
-                for fine in 0..aggregation.fine_dimension() {
-                    restrict(fine, aggregation.label_at(fine));
-                }
+                aggregation.restrict_residual_lanes(rhs, product, coarse, width, meter)
             }
             #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => {
-                for &(fine, coarse) in transfer.entries() {
-                    restrict(fine as usize, coarse as usize);
-                }
+                transfer.restrict_residual_lanes(rhs, product, coarse, width, meter)
             }
         }
-        Ok(())
     }
 
-    pub(crate) fn prolong_batch_add(
+    /// Add prolonged coarse lanes through this level's transfer; a full
+    /// aggregation uses `team` above its parallel threshold.
+    pub(crate) fn prolong_add_lanes<W: Width, M: Meter>(
         &self,
         coarse: &[f64],
         fine: &mut [f64],
-        columns: usize,
+        width: W,
+        team: Option<Team<'_>>,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        let mut prolong = |source: usize, target: usize| {
-            for lane in 0..columns {
-                fine[target * columns + lane] += coarse[source * columns + lane];
-            }
-        };
         match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "batch level has no transfer",
+            context: "nonterminal level has no transfer",
         })? {
             LevelTransfer::Full(aggregation) => {
-                for row in 0..aggregation.fine_dimension() {
-                    prolong(aggregation.label_at(row), row);
-                }
+                aggregation.prolong_add_lanes(coarse, fine, width, team, meter)
             }
             #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => {
-                for &(fine, coarse) in transfer.entries() {
-                    prolong(coarse as usize, fine as usize);
-                }
+                transfer.prolong_add_lanes(coarse, fine, width, meter)
             }
         }
-        Ok(())
     }
 
     /// Return the graph at this level.
@@ -196,72 +195,6 @@ impl HierarchyLevel {
             #[cfg(feature = "experimental-components")]
             Some(LevelTransfer::Pruned(transfer)) => transfer.retained_bytes(),
             None => 0,
-        }
-    }
-
-    #[cfg(not(feature = "experimental-components"))]
-    #[inline]
-    pub(crate) fn restrict_into(&self, fine: &[f64], coarse: &mut [f64]) -> Result<(), CmgError> {
-        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no transfer",
-        })? {
-            LevelTransfer::Full(aggregation) => aggregation.restrict_into(fine, coarse),
-            #[cfg(feature = "experimental-components")]
-            LevelTransfer::Pruned(transfer) => transfer.restrict_into(fine, coarse),
-        }
-    }
-
-    #[cfg(feature = "experimental-components")]
-    #[inline]
-    pub(crate) fn restrict_residual_into(
-        &self,
-        rhs: &[f64],
-        matrix_value: &[f64],
-        coarse: &mut [f64],
-    ) -> Result<(), CmgError> {
-        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no transfer",
-        })? {
-            LevelTransfer::Full(aggregation) => {
-                aggregation.restrict_residual_into(rhs, matrix_value, coarse)
-            }
-            LevelTransfer::Pruned(transfer) => {
-                transfer.restrict_residual_into(rhs, matrix_value, coarse)
-            }
-        }
-    }
-
-    #[inline]
-    pub(crate) fn prolong_add_into(
-        &self,
-        coarse: &[f64],
-        fine: &mut [f64],
-    ) -> Result<(), CmgError> {
-        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no transfer",
-        })? {
-            LevelTransfer::Full(aggregation) => aggregation.prolong_add_into(coarse, fine),
-            #[cfg(feature = "experimental-components")]
-            LevelTransfer::Pruned(transfer) => transfer.prolong_add_into(coarse, fine),
-        }
-    }
-
-    #[cfg(feature = "parallel")]
-    #[inline]
-    pub(crate) fn prolong_add_into_with_executor(
-        &self,
-        coarse: &[f64],
-        fine: &mut [f64],
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
-            context: "nonterminal level has no transfer",
-        })? {
-            LevelTransfer::Full(aggregation) => {
-                aggregation.prolong_add_into_with_executor(coarse, fine, executor)
-            }
-            #[cfg(feature = "experimental-components")]
-            LevelTransfer::Pruned(transfer) => transfer.prolong_add_into(coarse, fine),
         }
     }
 
@@ -343,70 +276,25 @@ pub struct CmgHierarchy {
 }
 
 impl CmgHierarchy {
-    /// Conservative new requested layouts for explicitly serial hierarchy
-    /// construction, including all retained levels and the largest temporary
-    /// stage. Supports ordinary and pruned component policies. Borrowed graph,
-    /// allocator overhead, runtime, factors and later lazy accessors excluded.
-    /// Arc control blocks follow the reviewed layout model, not a stable ABI.
-    pub fn serial_construction_allocation_bound(
+    /// Conservative new requested layouts for hierarchy construction,
+    /// including all retained levels and the largest temporary stage, for
+    /// ordinary and pruned component policies. The parallel contraction kernel
+    /// adds one fixed slot bank. Borrowed graph, allocator overhead, runtime,
+    /// factors and later lazy accessors are excluded. Arc control blocks follow
+    /// the reviewed layout model, not a stable ABI.
+    pub fn construction_allocation_bound(
         vertices: usize,
         edges: usize,
         options: CmgOptions,
+        parallel: bool,
     ) -> Result<usize, CmgError> {
         let (retained, scratch) = Self::serial_allocation_parts(vertices, edges, options)?;
-        crate::storage::add(retained, scratch)
-    }
-
-    /// New CMG-owned requested layouts for the admitted executor-aware path.
-    /// Includes fixed mapping/gather banks; EXCLUDES Rayon runtime, the borrowed
-    /// executor/graph, allocator/OS storage, factors and later lazy accessors.
-    /// This is not strict combined construction/runtime admission.
-    #[cfg(feature = "parallel")]
-    pub fn executor_construction_cmg_allocation_bound(
-        vertices: usize,
-        edges: usize,
-        options: CmgOptions,
-    ) -> Result<usize, CmgError> {
-        crate::storage::add(
-            Self::serial_construction_allocation_bound(vertices, edges, options)?,
-            crate::storage::bytes::<Option<crate::Edge>>(edges)?,
-        )
-    }
-
-    /// Admit CMG-owned layouts only, retaining the existing parallel thresholds.
-    /// The supplied Rayon runtime remains uncovered and must be allowed by the
-    /// caller's separate policy. No pool is created by this method.
-    #[cfg(feature = "parallel")]
-    pub fn build_with_executor_and_cmg_budget(
-        graph: &Laplacian,
-        options: CmgOptions,
-        executor: &ParallelExecutor,
-        cmg_budget_bytes: usize,
-    ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::executor_construction_cmg_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-            )?,
-            cmg_budget_bytes,
-        )?;
-        Self::build_executor_admitted::<false, false>(graph, options, executor)
-    }
-
-    #[cfg(feature = "parallel")]
-    pub(crate) fn build_executor_admitted<const PRUNE: bool, const PRESERVE: bool>(
-        graph: &Laplacian,
-        options: CmgOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        Self::build_with_kernels_impl::<false, PRUNE, PRESERVE, true, _, _>(
-            graph,
-            options,
-            crate::forest::build_forest_aggregation_labels_admitted,
-            |aggregation, current| aggregation.contract_with_executor_admitted(current, executor),
-        )
-        .map(|(hierarchy, _)| hierarchy)
+        let bound = crate::storage::add(retained, scratch)?;
+        if parallel {
+            crate::storage::add(bound, crate::storage::bytes::<Option<crate::Edge>>(edges)?)
+        } else {
+            Ok(bound)
+        }
     }
 
     pub(crate) fn serial_allocation_parts(
@@ -460,56 +348,6 @@ impl CmgHierarchy {
         ))
     }
 
-    /// Admit an explicitly serial build before allocating any new owner. Vec
-    /// banks are fallible; stable Rust's small Arc allocations remain infallible.
-    /// This does not dispatch or create workers and does not replace an
-    /// executor-aware build implicitly.
-    pub fn build_serial_with_budget(
-        graph: &Laplacian,
-        options: CmgOptions,
-        budget_bytes: usize,
-    ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::serial_construction_allocation_bound(
-                graph.vertex_count(),
-                graph.edge_count(),
-                options,
-            )?,
-            budget_bytes,
-        )?;
-        Self::build_with_kernels_impl::<false, false, false, true, _, _>(
-            graph,
-            options,
-            crate::forest::build_forest_aggregation_labels_admitted,
-            |aggregation, current| aggregation.contract_admitted(current),
-        )
-        .map(|(hierarchy, _)| hierarchy)
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn build_pruned_serial_admitted(
-        graph: &Laplacian,
-        options: CmgOptions,
-        preserve: bool,
-    ) -> Result<Self, CmgError> {
-        if preserve {
-            Self::build_with_kernels_impl::<false, true, true, true, _, _>(
-                graph,
-                options,
-                crate::forest::build_forest_aggregation_labels_admitted,
-                |aggregation, current| aggregation.contract_admitted(current),
-            )
-            .map(|(hierarchy, _)| hierarchy)
-        } else {
-            Self::build_with_kernels_impl::<false, true, false, true, _, _>(
-                graph,
-                options,
-                crate::forest::build_forest_aggregation_labels_admitted,
-                |aggregation, current| aggregation.contract_admitted(current),
-            )
-            .map(|(hierarchy, _)| hierarchy)
-        }
-    }
     /// Return principal retained heap bytes for every graph, diagonal smoother,
     /// aggregation, and hierarchy report. Allocator bookkeeping is excluded.
     #[must_use]
@@ -531,147 +369,71 @@ impl CmgHierarchy {
 
     /// Build a hierarchy from a weighted graph Laplacian.
     pub fn build(graph: &Laplacian, options: CmgOptions) -> Result<Self, CmgError> {
-        Self::build_with_kernels::<false, _, _>(
+        Self::build_metered::<_, false>(
             graph,
             options,
-            build_forest_aggregation_labels,
-            |aggregation, current| aggregation.contract(current),
-        )
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn build_pruned(
-        graph: &Laplacian,
-        options: CmgOptions,
-        preserve_stopping: bool,
-    ) -> Result<Self, CmgError> {
-        if preserve_stopping {
-            return Self::build_with_kernels_impl::<false, true, true, false, _, _>(
-                graph,
-                options,
-                build_forest_aggregation_labels,
-                |aggregation, current| aggregation.contract(current),
-            )
-            .map(|(hierarchy, _)| hierarchy);
-        }
-        Self::build_with_kernels_impl::<false, true, false, false, _, _>(
-            graph,
-            options,
-            build_forest_aggregation_labels,
-            |aggregation, current| aggregation.contract(current),
+            LevelPolicy::default(),
+            None,
+            &mut Unmetered,
         )
         .map(|(hierarchy, _)| hierarchy)
     }
 
-    #[cfg(all(feature = "experimental-components", feature = "parallel"))]
-    pub(crate) fn build_pruned_with_executor(
+    /// Build a hierarchy under a construction context with the component
+    /// level policy of `options`. With a budget, [`Self::construction_allocation_bound`]
+    /// (with `parallel` set when a team is supplied) is admitted before the
+    /// first allocation; cancellation and team follow
+    /// [`crate::CmgPreconditioner::build_with`]. Bits never depend on the context.
+    pub fn build_with(
         graph: &Laplacian,
-        options: CmgOptions,
-        preserve_stopping: bool,
-        executor: &ParallelExecutor,
+        options: crate::BuildOptions,
+        context: crate::BuildContext<'_>,
     ) -> Result<Self, CmgError> {
-        if preserve_stopping {
-            Self::build_with_kernels_impl::<false, true, true, false, _, _>(
-                graph,
-                options,
-                build_forest_aggregation_labels,
-                |aggregation, current| aggregation.contract_with_executor(current, executor),
-            )
-            .map(|(hierarchy, _)| hierarchy)
-        } else {
-            Self::build_with_kernels_impl::<false, true, false, false, _, _>(
-                graph,
-                options,
-                build_forest_aggregation_labels,
-                |aggregation, current| aggregation.contract_with_executor(current, executor),
-            )
-            .map(|(hierarchy, _)| hierarchy)
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(
+                Self::construction_allocation_bound(
+                    graph.vertex_count(),
+                    graph.edge_count(),
+                    options.hierarchy,
+                    context.team().is_some(),
+                )?,
+                budget,
+            )?;
         }
+        let policy = options.level_policy(context.budget_bytes.is_some());
+        match context.cancel {
+            Some(cancel) => Self::build_metered::<_, false>(
+                graph,
+                options.hierarchy,
+                policy,
+                context.team(),
+                &mut crate::cancel::CancelMeter::new(cancel),
+            ),
+            None => Self::build_metered::<_, false>(
+                graph,
+                options.hierarchy,
+                policy,
+                context.team(),
+                &mut Unmetered,
+            ),
+        }
+        .map(|(hierarchy, _)| hierarchy)
     }
 
-    /// Build a hierarchy with deterministic parallel coarse-graph contraction.
-    ///
-    /// Forest selection and splitting remain serial in this checkpoint. The
-    /// supplied package-owned executor maps and sorts coarse edges while
-    /// preserving the exact serial hierarchy.
-    #[cfg(feature = "parallel")]
-    pub fn build_with_executor(
+    /// The single hierarchy loop: forest grouping, aggregation, stopping
+    /// rules, Galerkin contraction, optional isolate pruning and smoother
+    /// finalization, level by level. A team only selects the deterministic
+    /// parallel contraction kernel; a polling meter only adds bounded polls;
+    /// `PROFILE` only records phase timings. None changes a single bit.
+    pub(crate) fn build_metered<M: Meter, const PROFILE: bool>(
         graph: &Laplacian,
         options: CmgOptions,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        Self::build_with_kernels::<false, _, _>(
-            graph,
-            options,
-            build_forest_aggregation_labels,
-            |aggregation, current| aggregation.contract_with_executor(current, executor),
-        )
-    }
-
-    #[cfg(all(feature = "parallel", feature = "profiling"))]
-    pub(crate) fn build_with_executor_profiled(
-        graph: &Laplacian,
-        options: CmgOptions,
-        executor: &ParallelExecutor,
+        policy: LevelPolicy,
+        team: Option<Team<'_>>,
+        meter: &mut M,
     ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError> {
-        Self::build_with_kernels_profiled(
-            graph,
-            options,
-            build_forest_aggregation_labels,
-            |aggregation, current| aggregation.contract_with_executor(current, executor),
-        )
-    }
-
-    fn build_with_kernels<const PROFILE: bool, Group, Contract>(
-        graph: &Laplacian,
-        options: CmgOptions,
-        group: Group,
-        contract: Contract,
-    ) -> Result<Self, CmgError>
-    where
-        Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
-        Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
-    {
-        Self::build_with_kernels_impl::<PROFILE, false, false, false, _, _>(
-            graph, options, group, contract,
-        )
-        .map(|(hierarchy, _)| hierarchy)
-    }
-
-    #[cfg(feature = "profiling")]
-    fn build_with_kernels_profiled<Group, Contract>(
-        graph: &Laplacian,
-        options: CmgOptions,
-        group: Group,
-        contract: Contract,
-    ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError>
-    where
-        Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
-        Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
-    {
-        Self::build_with_kernels_impl::<true, false, false, false, _, _>(
-            graph, options, group, contract,
-        )
-    }
-
-    fn build_with_kernels_impl<
-        const PROFILE: bool,
-        const PRUNE: bool,
-        const PRESERVE_STOPPING: bool,
-        const ADMITTED: bool,
-        Group,
-        Contract,
-    >(
-        graph: &Laplacian,
-        options: CmgOptions,
-        mut group: Group,
-        mut contract: Contract,
-    ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError>
-    where
-        Group: FnMut(&Laplacian, f64) -> Result<(Vec<usize>, usize), CmgError>,
-        Contract: FnMut(&Aggregation, &Laplacian) -> Result<Laplacian, CmgError>,
-    {
         let mut phase_records = Vec::new();
+        meter.work("hierarchy initialization", 128)?;
         let options = measure_hierarchy_phase::<PROFILE, _>(
             &mut phase_records,
             0,
@@ -686,21 +448,22 @@ impl CmgHierarchy {
             "graph_clone_reference_setup",
             || graph.clone(),
         );
-        let mut levels = if ADMITTED {
-            crate::storage::try_capacity(options.max_levels, "hierarchy levels")?
+        let mut levels = if policy.reserve_levels || M::POLLS {
+            meter.try_capacity(options.max_levels, "hierarchy levels")?
         } else {
             Vec::new()
         };
-        #[cfg(feature = "experimental-components")]
+        // Pruned isolates still count in vertex stopping decisions when
+        // preserving unpruned stopping; otherwise this stays zero.
+        #[cfg_attr(not(feature = "experimental-components"), allow(unused_mut))]
         let mut retired_vertices = 0usize;
         let terminal_reason;
 
         loop {
+            meter.work("hierarchy terminal decision", 128)?;
             let level_index = levels.len();
             let n = current.vertex_count();
-            let decision_n = n;
-            #[cfg(feature = "experimental-components")]
-            let decision_n = decision_n + retired_vertices;
+            let decision_n = n + retired_vertices;
             let direct = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
@@ -713,8 +476,9 @@ impl CmgHierarchy {
                     &mut phase_records,
                     level_index,
                     "inverse_diagonal_and_level_finalization",
-                    || make_level::<ADMITTED>(current, None, 0, Some(terminal_reason)),
+                    || make_level(current, None, 0, Some(terminal_reason), meter),
                 )?;
+                meter.work("hierarchy level publication", 32)?;
                 levels.push(level);
                 break;
             }
@@ -723,24 +487,22 @@ impl CmgHierarchy {
                 &mut phase_records,
                 level_index,
                 "forest_select_split_low_degree_and_label",
-                || group(&current, options.low_effective_degree_threshold),
+                || {
+                    build_forest_aggregation_labels(
+                        &current,
+                        options.low_effective_degree_threshold,
+                        meter,
+                    )
+                },
             )?;
             let aggregation = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
                 "aggregation_construction",
-                || {
-                    if ADMITTED {
-                        Aggregation::from_forest_labels_admitted(labels, aggregate_count)
-                    } else {
-                        Ok(Aggregation::from_forest_labels(labels, aggregate_count))
-                    }
-                },
+                || Aggregation::from_forest_labels(labels, aggregate_count, meter),
             )?;
-            let coarse_count = aggregation.coarse_dimension();
-            let decision_coarse_count = coarse_count;
-            #[cfg(feature = "experimental-components")]
-            let decision_coarse_count = decision_coarse_count + retired_vertices;
+            meter.work("hierarchy stopping rules", 128)?;
+            let decision_coarse_count = aggregation.coarse_dimension() + retired_vertices;
             let terminal = measure_hierarchy_phase::<PROFILE, _>(
                 &mut phase_records,
                 level_index,
@@ -769,8 +531,9 @@ impl CmgHierarchy {
                     &mut phase_records,
                     level_index,
                     "inverse_diagonal_and_level_finalization",
-                    || make_level::<ADMITTED>(current, Some(aggregation), 0, Some(terminal_reason)),
+                    || make_level(current, Some(aggregation), 0, Some(reason), meter),
                 )?;
+                meter.work("hierarchy level publication", 32)?;
                 levels.push(level);
                 break;
             }
@@ -779,148 +542,17 @@ impl CmgHierarchy {
                 &mut phase_records,
                 level_index,
                 "coarse_edge_map_sort_merge_and_graph_finalization",
-                || contract(&aggregation, &current),
+                || aggregation.contract_with(&current, team, meter),
             )?;
             #[cfg(feature = "experimental-components")]
-            let (coarse, pruned_transfer) = if PRUNE {
-                let pruned = if ADMITTED {
-                    crate::component_experiment::prune_admitted(&aggregation, &coarse)?
-                } else {
-                    crate::component_experiment::prune(&aggregation, &coarse)
-                };
-                match pruned {
+            let (coarse, pruned_transfer) = if policy.prune_coarse_isolates {
+                match crate::component_experiment::prune(&aggregation, &coarse, meter)? {
                     Some((transfer, compact)) => {
                         // Isolates contribute zero matrix nonzeros. Keep just
                         // their count for the ordinary vertex stopping checks;
                         // no retired row survives in graph or cycle storage.
-                        if PRESERVE_STOPPING {
-                            retired_vertices += coarse.vertex_count() - compact.vertex_count();
-                        }
-                        (compact, Some(transfer))
-                    }
-                    None => (coarse, None),
-                }
-            } else {
-                (coarse, None)
-            };
-            let repeat = measure_hierarchy_phase::<PROFILE, _>(
-                &mut phase_records,
-                level_index,
-                "repeat_count_initialization",
-                || repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz()),
-            );
-            let level = measure_hierarchy_phase::<PROFILE, _>(
-                &mut phase_records,
-                level_index,
-                "inverse_diagonal_and_level_finalization",
-                || make_level::<ADMITTED>(current, Some(aggregation), repeat, None),
-            )?;
-            #[cfg(feature = "experimental-components")]
-            let level = if let Some(transfer) = pruned_transfer {
-                let mut level = level;
-                level.transfer = Some(LevelTransfer::Pruned(transfer));
-                level
-            } else {
-                level
-            };
-            levels.push(level);
-            current = coarse;
-        }
-
-        let report = measure_hierarchy_phase::<PROFILE, _>(
-            &mut phase_records,
-            levels.len().saturating_sub(1),
-            "hierarchy_report_bookkeeping",
-            || -> Result<HierarchyBuildReport, CmgError> {
-                let mut vertex_counts = if ADMITTED {
-                    crate::storage::try_capacity(levels.len(), "hierarchy vertex report")?
-                } else {
-                    Vec::with_capacity(levels.len())
-                };
-                let mut matrix_nonzeros = if ADMITTED {
-                    crate::storage::try_capacity(levels.len(), "hierarchy nonzero report")?
-                } else {
-                    Vec::with_capacity(levels.len())
-                };
-                vertex_counts.extend(levels.iter().map(|level| level.graph.vertex_count()));
-                matrix_nonzeros.extend(levels.iter().map(|level| level.graph.matrix_nnz()));
-                Ok(HierarchyBuildReport {
-                    terminal_reason,
-                    vertex_counts,
-                    matrix_nonzeros,
-                    cumulative_coarsened_nonzeros: cumulative_nonzeros,
-                })
-            },
-        )?;
-        Ok((Self { levels, report }, phase_records))
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn build_component_controlled(
-        graph: &Laplacian,
-        options: CmgOptions,
-        experiment: crate::ComponentBuildOptions,
-        meter: &mut crate::cancel::CancelMeter<'_>,
-    ) -> Result<Self, CmgError> {
-        meter.work("hierarchy initialization", 128)?;
-        let options = options.validate()?;
-        let initial_nonzeros = graph.matrix_nnz();
-        let mut cumulative_nonzeros = 0usize;
-        let mut current = graph.clone();
-        let mut levels = meter.try_capacity(options.max_levels, "hierarchy levels")?;
-        let mut retired_vertices = 0usize;
-        let terminal_reason;
-        loop {
-            meter.work("hierarchy terminal decision", 128)?;
-            let n = current.vertex_count();
-            let decision_n = n + retired_vertices;
-            if n == 0 || decision_n <= 1 || decision_n < options.direct_threshold {
-                terminal_reason = TerminalReason::Direct;
-                let level = make_level_controlled(current, None, 0, Some(terminal_reason), meter)?;
-                meter.work("hierarchy level publication", 32)?;
-                levels.push(level);
-                break;
-            }
-            let (labels, aggregate_count) =
-                crate::forest::build_forest_aggregation_labels_controlled(
-                    &current,
-                    options.low_effective_degree_threshold,
-                    meter,
-                )?;
-            let aggregation =
-                Aggregation::from_forest_labels_controlled(labels, aggregate_count, meter)?;
-            meter.work("hierarchy stopping rules", 128)?;
-            let decision_coarse_count = aggregation.coarse_dimension() + retired_vertices;
-            let terminal = if decision_coarse_count == 1 {
-                Some(TerminalReason::FullContraction)
-            } else {
-                cumulative_nonzeros = cumulative_nonzeros.saturating_add(current.matrix_nnz());
-                if decision_coarse_count >= decision_n.saturating_sub(1) {
-                    Some(TerminalReason::StagnatedVertexReduction)
-                } else if cumulative_nonzeros as f64
-                    > options.max_hierarchy_nnz_factor * initial_nonzeros as f64
-                {
-                    Some(TerminalReason::StagnatedFill)
-                } else if levels.len() + 1 >= options.max_levels {
-                    Some(TerminalReason::MaximumLevels)
-                } else {
-                    None
-                }
-            };
-            if let Some(reason) = terminal {
-                terminal_reason = reason;
-                let level =
-                    make_level_controlled(current, Some(aggregation), 0, Some(reason), meter)?;
-                meter.work("hierarchy level publication", 32)?;
-                levels.push(level);
-                break;
-            }
-            let coarse = aggregation.contract_controlled(&current, meter)?;
-            let (coarse, pruned_transfer) = if experiment.prune_coarse_isolates {
-                match crate::component_experiment::prune_controlled(&aggregation, &coarse, meter)? {
-                    Some((transfer, compact)) => {
                         meter.work("hierarchy retired vertex count", 32)?;
-                        if experiment.preserve_unpruned_stopping {
+                        if policy.preserve_unpruned_stopping {
                             retired_vertices += coarse.vertex_count() - compact.vertex_count();
                         }
                         (compact, Some(transfer))
@@ -931,32 +563,52 @@ impl CmgHierarchy {
                 (coarse, None)
             };
             meter.work("hierarchy repeat count", 32)?;
-            let repeat = repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz());
-            let mut level = make_level_controlled(current, Some(aggregation), repeat, None, meter)?;
+            let repeat = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "repeat_count_initialization",
+                || repeat_from_nonzeros(current.matrix_nnz(), coarse.matrix_nnz()),
+            );
+            #[allow(unused_mut)]
+            let mut level = measure_hierarchy_phase::<PROFILE, _>(
+                &mut phase_records,
+                level_index,
+                "inverse_diagonal_and_level_finalization",
+                || make_level(current, Some(aggregation), repeat, None, meter),
+            )?;
             meter.work("hierarchy level publication", 64)?;
+            #[cfg(feature = "experimental-components")]
             if let Some(transfer) = pruned_transfer {
                 level.transfer = Some(LevelTransfer::Pruned(transfer));
             }
             levels.push(level);
             current = coarse;
         }
-        let mut vertex_counts = meter.try_capacity(levels.len(), "hierarchy vertex report")?;
-        let mut matrix_nonzeros = meter.try_capacity(levels.len(), "hierarchy nonzero report")?;
-        for level in &levels {
-            meter.work("hierarchy report", 32)?;
-            vertex_counts.push(level.graph.vertex_count());
-            matrix_nonzeros.push(level.graph.matrix_nnz());
-        }
-        meter.work("hierarchy publication", 32)?;
-        Ok(Self {
-            levels,
-            report: HierarchyBuildReport {
-                terminal_reason,
-                vertex_counts,
-                matrix_nonzeros,
-                cumulative_coarsened_nonzeros: cumulative_nonzeros,
+
+        let report = measure_hierarchy_phase::<PROFILE, _>(
+            &mut phase_records,
+            levels.len().saturating_sub(1),
+            "hierarchy_report_bookkeeping",
+            || -> Result<HierarchyBuildReport, CmgError> {
+                let mut vertex_counts =
+                    meter.try_capacity(levels.len(), "hierarchy vertex report")?;
+                let mut matrix_nonzeros =
+                    meter.try_capacity(levels.len(), "hierarchy nonzero report")?;
+                for level in &levels {
+                    meter.work("hierarchy report", 32)?;
+                    vertex_counts.push(level.graph.vertex_count());
+                    matrix_nonzeros.push(level.graph.matrix_nnz());
+                }
+                Ok(HierarchyBuildReport {
+                    terminal_reason,
+                    vertex_counts,
+                    matrix_nonzeros,
+                    cumulative_coarsened_nonzeros: cumulative_nonzeros,
+                })
             },
-        })
+        )?;
+        meter.work("hierarchy publication", 32)?;
+        Ok((Self { levels, report }, phase_records))
     }
 
     /// Return all levels from fine to coarse.
@@ -988,47 +640,12 @@ impl CmgHierarchy {
     }
 }
 
-fn make_level<const ADMITTED: bool>(
+fn make_level<M: Meter>(
     graph: Laplacian,
     aggregation: Option<Aggregation>,
     repeat: usize,
     terminal_reason: Option<TerminalReason>,
-) -> Result<HierarchyLevel, CmgError> {
-    let values = graph
-        .diagonal()
-        .iter()
-        .map(|degree| if *degree > 0.0 { 0.5 / *degree } else { 0.0 });
-    let inverse_diagonal = if ADMITTED {
-        let mut values_bank =
-            crate::storage::try_capacity(graph.vertex_count(), "hierarchy inverse diagonal")?;
-        values_bank.extend(values);
-        values_bank
-    } else {
-        values.collect()
-    };
-    Ok(HierarchyLevel {
-        graph,
-        inverse_diagonal,
-        transfer: aggregation.map(LevelTransfer::Full),
-        repeat,
-        terminal_reason,
-    })
-}
-
-fn repeat_from_nonzeros(fine_nonzeros: usize, coarse_nonzeros: usize) -> usize {
-    if coarse_nonzeros == 0 {
-        return 1;
-    }
-    (fine_nonzeros / coarse_nonzeros).saturating_sub(1).max(1)
-}
-
-#[cfg(feature = "experimental-components")]
-fn make_level_controlled(
-    graph: Laplacian,
-    aggregation: Option<Aggregation>,
-    repeat: usize,
-    terminal_reason: Option<TerminalReason>,
-    meter: &mut crate::cancel::CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<HierarchyLevel, CmgError> {
     let mut inverse_diagonal =
         meter.try_capacity(graph.vertex_count(), "hierarchy inverse diagonal")?;
@@ -1044,4 +661,11 @@ fn make_level_controlled(
         repeat,
         terminal_reason,
     })
+}
+
+fn repeat_from_nonzeros(fine_nonzeros: usize, coarse_nonzeros: usize) -> usize {
+    if coarse_nonzeros == 0 {
+        return 1;
+    }
+    (fine_nonzeros / coarse_nonzeros).saturating_sub(1).max(1)
 }

@@ -1,9 +1,7 @@
 //! Heavy-edge forests and the CMG forest-partitioning heuristics.
 
-use crate::storage::{try_capacity, try_filled};
+use crate::cancel::{Meter, Unmetered};
 use crate::{CmgError, Laplacian};
-#[cfg(feature = "parallel")]
-use crate::{CsrLaplacian, ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
 
 /// The complete diagnostic result of one CMG Steiner-group construction.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,68 +61,65 @@ pub fn build_forest_grouping(
     low_effective_degree_threshold: f64,
 ) -> Result<ForestGrouping, CmgError> {
     validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
-    let (heavy_parent, selected_weight) = maximum_weight_forest(graph);
-    finish_forest_grouping(
+    let meter = &mut Unmetered;
+    let (heavy_parent, selected_weight) = heavy_forest(graph, meter)?;
+    let split_parent = split_forest(&heavy_parent)?;
+    let mut final_parent = split_parent.clone();
+    low_effective_degree_correction(
         graph,
         low_effective_degree_threshold,
+        &selected_weight,
+        &mut final_parent,
+        meter,
+    )?;
+    drop(selected_weight);
+    let (labels, sizes) = forest_components(&final_parent)?;
+    Ok(ForestGrouping {
         heavy_parent,
-        selected_weight,
-    )
+        split_parent,
+        final_parent,
+        labels,
+        sizes,
+    })
 }
 
-/// Construct only the aggregation data needed by hierarchy construction.
-pub(crate) fn build_forest_aggregation_labels(
-    graph: &Laplacian,
-    low_effective_degree_threshold: f64,
-) -> Result<(Vec<usize>, usize), CmgError> {
-    validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
-    let (heavy_parent, selected_weight) = maximum_weight_forest(graph);
-    finish_forest_aggregation_labels(
-        graph,
-        low_effective_degree_threshold,
-        heavy_parent,
-        selected_weight,
-    )
-}
-
-/// Fallible, fixed-capacity variant for serial construction admission.
-pub(crate) fn build_forest_aggregation_labels_admitted(
-    graph: &Laplacian,
-    threshold: f64,
-) -> Result<(Vec<usize>, usize), CmgError> {
-    validate_low_effective_degree_threshold(threshold)?;
-    let n = graph.vertex_count();
-    let mut parent = try_capacity(n, "forest heavy parents")?;
-    parent.extend(0..n);
-    let mut weights = try_filled(n, 0.0, "forest selected weights")?;
-    for edge in graph.edges() {
-        consider_parent(edge.u(), edge.v(), edge.weight(), &mut parent, &mut weights);
-        consider_parent(edge.v(), edge.u(), edge.weight(), &mut parent, &mut weights);
-    }
-    let mut split = if n <= u32::MAX as usize {
-        split_forest_impl_with_indegree::<u32, true>(&parent, false)?
-    } else {
-        split_forest_impl_with_indegree::<usize, true>(&parent, false)?
-    };
-    drop(parent);
-    apply_low_effective_degree_correction_impl::<true>(graph, threshold, &weights, &mut split)?;
-    drop(weights);
-    forest_component_labels_impl::<true>(&split)
-}
-
-/// Controlled equivalent of serial admitted forest construction.
+/// Construct only the aggregation labels needed by hierarchy construction.
 ///
-/// All walks, including union-find root discovery and compression, charge work
-/// before bounded progress. Fixed-capacity storage keeps walk pushes fallible at
-/// admission and prevents hidden growth during traversal.
-#[cfg(feature = "experimental-components")]
-pub(crate) fn build_forest_aggregation_labels_controlled(
+/// Every walk, including union-find root discovery and compression, is made
+/// of bounded counted operations. Fixed-capacity storage keeps walk pushes
+/// fallible at provisioning and prevents hidden growth during traversal.
+pub(crate) fn build_forest_aggregation_labels<M: Meter>(
     graph: &Laplacian,
     threshold: f64,
-    meter: &mut crate::cancel::CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<(Vec<usize>, usize), CmgError> {
     meter.work("forest threshold", 16)?;
     validate_low_effective_degree_threshold(threshold)?;
+    let (parent, weights) = heavy_forest(graph, meter)?;
+    let mut split = if parent.len() <= u32::MAX as usize {
+        split_forest_with::<u32, M>(&parent, meter)?
+    } else {
+        split_forest_with::<usize, M>(&parent, meter)?
+    };
+    drop(parent);
+    low_effective_degree_correction(graph, threshold, &weights, &mut split, meter)?;
+    drop(weights);
+    component_labels(&split, meter)
+}
+
+/// Select each vertex's maximum-weight incident edge.
+///
+/// Isolated vertices point to themselves. The selected weight is zero for an
+/// isolated vertex.
+#[must_use]
+pub fn maximum_weight_forest(graph: &Laplacian) -> (Vec<usize>, Vec<f64>) {
+    heavy_forest(graph, &mut Unmetered).expect("heavy forest allocation")
+}
+
+fn heavy_forest<M: Meter>(
+    graph: &Laplacian,
+    meter: &mut M,
+) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
     let n = graph.vertex_count();
     let mut parent = meter.try_capacity(n, "forest heavy parents")?;
     for vertex in 0..n {
@@ -137,26 +132,30 @@ pub(crate) fn build_forest_aggregation_labels_controlled(
         consider_parent(edge.u(), edge.v(), edge.weight(), &mut parent, &mut weights);
         consider_parent(edge.v(), edge.u(), edge.weight(), &mut parent, &mut weights);
     }
-    let mut split = if n <= u32::MAX as usize {
-        split_forest_controlled::<u32>(&parent, meter)?
-    } else {
-        split_forest_controlled::<usize>(&parent, meter)?
-    };
-    drop(parent);
-    apply_low_effective_degree_correction_controlled(
-        graph, threshold, &weights, &mut split, meter,
-    )?;
-    drop(weights);
-    forest_component_labels_controlled(&split, meter)
+    Ok((parent, weights))
 }
 
-#[cfg(feature = "experimental-components")]
-fn apply_low_effective_degree_correction_controlled(
+fn consider_parent(
+    vertex: usize,
+    neighbor: usize,
+    weight: f64,
+    parent: &mut [usize],
+    selected_weight: &mut [f64],
+) {
+    if weight > selected_weight[vertex]
+        || (weight == selected_weight[vertex] && neighbor < parent[vertex])
+    {
+        selected_weight[vertex] = weight;
+        parent[vertex] = neighbor;
+    }
+}
+
+fn low_effective_degree_correction<M: Meter>(
     graph: &Laplacian,
     threshold: f64,
     selected_weight: &[f64],
     parent: &mut [usize],
-    meter: &mut crate::cancel::CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<(), CmgError> {
     let mut has_low_effective_degree = false;
     for (&degree, &weight) in graph.diagonal().iter().zip(selected_weight) {
@@ -193,10 +192,63 @@ fn apply_low_effective_degree_correction_controlled(
     Ok(())
 }
 
-#[cfg(feature = "experimental-components")]
-fn split_forest_controlled<I: ForestIndegree>(
+fn validate_low_effective_degree_threshold(threshold: f64) -> Result<(), CmgError> {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        return Err(CmgError::InvalidOption {
+            name: "low_effective_degree_threshold",
+            value: threshold,
+        });
+    }
+    Ok(())
+}
+
+/// Port the upstream `split_forest_` diameter and conductance cuts.
+pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
+    validate_parent(parent)?;
+    if parent.len() <= u32::MAX as usize {
+        split_forest_with::<u32, _>(parent, &mut Unmetered)
+    } else {
+        split_forest_with::<usize, _>(parent, &mut Unmetered)
+    }
+}
+
+trait ForestIndegree: Copy {
+    const ZERO: Self;
+
+    fn is_zero(self) -> bool;
+    fn increment(&mut self);
+    fn decrement(&mut self);
+}
+
+macro_rules! impl_forest_indegree {
+    ($type:ty) => {
+        impl ForestIndegree for $type {
+            const ZERO: Self = 0;
+
+            #[inline]
+            fn is_zero(self) -> bool {
+                self == 0
+            }
+
+            #[inline]
+            fn increment(&mut self) {
+                *self = self.checked_add(1).expect("forest indegree overflow");
+            }
+
+            #[inline]
+            fn decrement(&mut self) {
+                *self = self.checked_sub(1).expect("forest indegree invariant");
+            }
+        }
+    };
+}
+
+impl_forest_indegree!(u32);
+impl_forest_indegree!(usize);
+
+fn split_forest_with<I: ForestIndegree, M: Meter>(
     parent: &[usize],
-    meter: &mut crate::cancel::CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<Vec<usize>, CmgError> {
     let n = parent.len();
     let mut forest = meter.copy_slice(parent, "forest split parents")?;
@@ -325,10 +377,10 @@ fn split_forest_controlled<I: ForestIndegree>(
     Ok(forest)
 }
 
-#[cfg(feature = "experimental-components")]
-fn forest_component_labels_controlled(
+/// Deterministic union-find labels in first-occurrence root order.
+fn component_labels<M: Meter>(
     parent: &[usize],
-    meter: &mut crate::cancel::CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<(Vec<usize>, usize), CmgError> {
     let n = parent.len();
     let mut disjoint_set = meter.try_capacity(n, "forest union find")?;
@@ -338,8 +390,8 @@ fn forest_component_labels_controlled(
     }
     for (vertex, &target) in parent.iter().enumerate() {
         meter.work("forest union find edges", 16)?;
-        let left_root = find_root_controlled(&mut disjoint_set, vertex, meter)?;
-        let right_root = find_root_controlled(&mut disjoint_set, target, meter)?;
+        let left_root = find_root(&mut disjoint_set, vertex, meter)?;
+        let right_root = find_root(&mut disjoint_set, target, meter)?;
         meter.work("forest union find merge", 32)?;
         if left_root != right_root {
             let (root, child) = if left_root < right_root {
@@ -352,7 +404,7 @@ fn forest_component_labels_controlled(
     }
     for vertex in 0..n {
         meter.work("forest union find flatten", 16)?;
-        disjoint_set[vertex] = find_root_controlled(&mut disjoint_set, vertex, meter)?;
+        disjoint_set[vertex] = find_root(&mut disjoint_set, vertex, meter)?;
     }
     let mut root_to_label = meter.try_filled(n, usize::MAX, "forest root labels")?;
     let mut labels = meter.try_filled(n, 0, "forest labels")?;
@@ -372,11 +424,10 @@ fn forest_component_labels_controlled(
     Ok((labels, aggregate_count))
 }
 
-#[cfg(feature = "experimental-components")]
-fn find_root_controlled(
+fn find_root<M: Meter>(
     parent: &mut [usize],
     vertex: usize,
-    meter: &mut crate::cancel::CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<usize, CmgError> {
     let mut root = vertex;
     loop {
@@ -399,460 +450,12 @@ fn find_root_controlled(
     Ok(root)
 }
 
-/// Construct the same forest grouping while selecting heavy incident edges in parallel.
-///
-/// CSR row ownership makes every vertex selection independent and preserves the
-/// serial maximum-weight and lowest-neighbor tie rule exactly. Forest splitting,
-/// low-effective-degree correction, and component labeling remain deterministic.
-#[cfg(feature = "parallel")]
-pub fn build_forest_grouping_with_executor(
-    graph: &Laplacian,
-    low_effective_degree_threshold: f64,
-    executor: &ParallelExecutor,
-) -> Result<ForestGrouping, CmgError> {
-    validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
-    let (heavy_parent, selected_weight) = maximum_weight_forest_with_executor(graph, executor)?;
-    finish_forest_grouping(
-        graph,
-        low_effective_degree_threshold,
-        heavy_parent,
-        selected_weight,
-    )
-}
-
-fn finish_forest_grouping(
-    graph: &Laplacian,
-    low_effective_degree_threshold: f64,
-    heavy_parent: Vec<usize>,
-    selected_weight: Vec<f64>,
-) -> Result<ForestGrouping, CmgError> {
-    let split_parent = split_forest(&heavy_parent)?;
-    let mut final_parent = split_parent.clone();
-    apply_low_effective_degree_correction(
-        graph,
-        low_effective_degree_threshold,
-        &selected_weight,
-        &mut final_parent,
-    );
-    drop(selected_weight);
-
-    let (labels, sizes) = forest_components(&final_parent)?;
-    Ok(ForestGrouping {
-        heavy_parent,
-        split_parent,
-        final_parent,
-        labels,
-        sizes,
-    })
-}
-
-fn finish_forest_aggregation_labels(
-    graph: &Laplacian,
-    low_effective_degree_threshold: f64,
-    heavy_parent: Vec<usize>,
-    selected_weight: Vec<f64>,
-) -> Result<(Vec<usize>, usize), CmgError> {
-    let mut final_parent = split_forest_trusted(&heavy_parent)?;
-    drop(heavy_parent);
-    apply_low_effective_degree_correction(
-        graph,
-        low_effective_degree_threshold,
-        &selected_weight,
-        &mut final_parent,
-    );
-    drop(selected_weight);
-    Ok(forest_component_labels_trusted(&final_parent))
-}
-
-fn apply_low_effective_degree_correction(
-    graph: &Laplacian,
-    low_effective_degree_threshold: f64,
-    selected_weight: &[f64],
-    parent: &mut [usize],
-) {
-    apply_low_effective_degree_correction_impl::<false>(
-        graph,
-        low_effective_degree_threshold,
-        selected_weight,
-        parent,
-    )
-    .expect("unbudgeted forest allocation");
-}
-
-fn apply_low_effective_degree_correction_impl<const ADMITTED: bool>(
-    graph: &Laplacian,
-    low_effective_degree_threshold: f64,
-    selected_weight: &[f64],
-    parent: &mut [usize],
-) -> Result<(), CmgError> {
-    let has_low_effective_degree =
-        graph
-            .diagonal()
-            .iter()
-            .zip(selected_weight)
-            .any(|(degree, weight)| {
-                *degree > 0.0 && *weight / *degree < low_effective_degree_threshold
-            });
-    if !has_low_effective_degree {
-        return Ok(());
-    }
-
-    let mut selected_incident_weight = if ADMITTED {
-        try_filled(graph.vertex_count(), 0.0, "forest incident weights")?
-    } else {
-        vec![0.0; graph.vertex_count()]
-    };
-    for (vertex, &target) in parent.iter().enumerate() {
-        if target != vertex {
-            let weight = selected_weight[vertex];
-            selected_incident_weight[vertex] += weight;
-            selected_incident_weight[target] += weight;
-        }
-    }
-    for (vertex, (&degree, &tree_weight)) in graph
-        .diagonal()
-        .iter()
-        .zip(&selected_incident_weight)
-        .enumerate()
-    {
-        if degree > 0.0 && tree_weight / degree < low_effective_degree_threshold {
-            parent[vertex] = vertex;
-        }
-    }
-    Ok(())
-}
-
-fn validate_low_effective_degree_threshold(threshold: f64) -> Result<(), CmgError> {
-    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
-        return Err(CmgError::InvalidOption {
-            name: "low_effective_degree_threshold",
-            value: threshold,
-        });
-    }
-    Ok(())
-}
-
-/// Select each vertex's maximum-weight incident edge.
-///
-/// Isolated vertices point to themselves. The selected weight is zero for an
-/// isolated vertex.
-#[must_use]
-pub fn maximum_weight_forest(graph: &Laplacian) -> (Vec<usize>, Vec<f64>) {
-    let n = graph.vertex_count();
-    let mut parent: Vec<usize> = (0..n).collect();
-    let mut selected_weight = vec![0.0; n];
-
-    for edge in graph.edges() {
-        consider_parent(
-            edge.u(),
-            edge.v(),
-            edge.weight(),
-            &mut parent,
-            &mut selected_weight,
-        );
-        consider_parent(
-            edge.v(),
-            edge.u(),
-            edge.weight(),
-            &mut parent,
-            &mut selected_weight,
-        );
-    }
-    (parent, selected_weight)
-}
-
-/// Select every vertex's maximum-weight incident edge using the supplied executor.
-///
-/// Small graphs use the original compact edge-list scan. Larger graphs freeze a
-/// temporary deterministic CSR representation and assign complete rows to workers.
-#[cfg(feature = "parallel")]
-pub fn maximum_weight_forest_with_executor(
-    graph: &Laplacian,
-    executor: &ParallelExecutor,
-) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
-    let directed_entries = graph.edge_count().saturating_mul(2);
-    let density_floor = graph.vertex_count().saturating_mul(3);
-    if directed_entries < PARALLEL_SETUP_MIN_ITEMS
-        || directed_entries <= density_floor
-        || !executor.should_parallel(directed_entries)
-    {
-        return Ok(maximum_weight_forest(graph));
-    }
-    let csr = CsrLaplacian::from_laplacian(graph)?;
-    Ok(csr.maximum_weight_neighbors_with_executor(executor))
-}
-
-fn consider_parent(
-    vertex: usize,
-    neighbor: usize,
-    weight: f64,
-    parent: &mut [usize],
-    selected_weight: &mut [f64],
-) {
-    if weight > selected_weight[vertex]
-        || (weight == selected_weight[vertex] && neighbor < parent[vertex])
-    {
-        selected_weight[vertex] = weight;
-        parent[vertex] = neighbor;
-    }
-}
-
-/// Port the upstream `split_forest_` diameter and conductance cuts.
-pub fn split_forest(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
-    split_forest_impl(parent, true)
-}
-
-fn split_forest_trusted(parent: &[usize]) -> Result<Vec<usize>, CmgError> {
-    split_forest_impl(parent, false)
-}
-
-trait ForestIndegree: Copy {
-    const ZERO: Self;
-
-    fn is_zero(self) -> bool;
-    fn increment(&mut self);
-    fn decrement(&mut self);
-}
-
-macro_rules! impl_forest_indegree {
-    ($type:ty) => {
-        impl ForestIndegree for $type {
-            const ZERO: Self = 0;
-
-            #[inline]
-            fn is_zero(self) -> bool {
-                self == 0
-            }
-
-            #[inline]
-            fn increment(&mut self) {
-                *self = self.checked_add(1).expect("forest indegree overflow");
-            }
-
-            #[inline]
-            fn decrement(&mut self) {
-                *self = self.checked_sub(1).expect("forest indegree invariant");
-            }
-        }
-    };
-}
-
-impl_forest_indegree!(u32);
-impl_forest_indegree!(usize);
-
-fn split_forest_impl(parent: &[usize], validate: bool) -> Result<Vec<usize>, CmgError> {
-    if parent.len() <= u32::MAX as usize {
-        split_forest_impl_with_indegree::<u32, false>(parent, validate)
-    } else {
-        split_forest_impl_with_indegree::<usize, false>(parent, validate)
-    }
-}
-
-fn split_forest_impl_with_indegree<I: ForestIndegree, const ADMITTED: bool>(
-    parent: &[usize],
-    validate: bool,
-) -> Result<Vec<usize>, CmgError> {
-    if validate {
-        validate_parent(parent)?;
-    }
-    let n = parent.len();
-    let (mut forest, mut ancestors, mut indegree, mut visited) = if ADMITTED {
-        let mut forest = try_capacity(n, "forest split parents")?;
-        forest.extend_from_slice(parent);
-        (
-            forest,
-            try_filled(n, 0_i64, "forest ancestors")?,
-            try_filled(n, I::ZERO, "forest indegrees")?,
-            try_filled(n, false, "forest visited")?,
-        )
-    } else {
-        (
-            parent.to_vec(),
-            vec![0_i64; n],
-            vec![I::ZERO; n],
-            vec![false; n],
-        )
-    };
-
-    for &target in &forest {
-        indegree[target].increment();
-    }
-
-    let mut walk = if ADMITTED {
-        try_capacity(n, "forest walk")?
-    } else {
-        Vec::new()
-    };
-    let mut new_ancestors = if ADMITTED {
-        try_capacity(n, "forest walk ancestors")?
-    } else {
-        Vec::new()
-    };
-
-    for start in 0..n {
-        let mut current = start;
-        let mut continue_walk = true;
-        while continue_walk && indegree[current].is_zero() && !visited[current] {
-            continue_walk = false;
-            let mut ancestors_in_path = 0_i64;
-            walk.clear();
-            walk.push(current);
-            new_ancestors.clear();
-            new_ancestors.push(0_i64);
-            let mut k = 0_usize;
-
-            while k <= 5 || visited[current] {
-                current = forest[current];
-                let terminated = current == walk[k] || (k > 0 && current == walk[k - 1]);
-                if terminated {
-                    break;
-                }
-                k += 1;
-                walk.push(current);
-                ancestors_in_path += i64::from(u8::from(!visited[current]));
-                new_ancestors.push(ancestors_in_path);
-            }
-
-            if k > 5 {
-                let middle = k / 2;
-                forest[walk[middle]] = walk[middle];
-                let next = walk[middle + 1];
-                indegree[next].decrement();
-                let removed = ancestors[walk[middle]];
-                for &vertex in &walk[(middle + 1)..=k] {
-                    ancestors[vertex] -= removed;
-                }
-                for index in 0..=middle {
-                    let vertex = walk[index];
-                    visited[vertex] = true;
-                    ancestors[vertex] += new_ancestors[index];
-                }
-                current = next;
-                continue_walk = true;
-            }
-
-            if !continue_walk {
-                for index in 0..=k {
-                    let vertex = walk[index];
-                    ancestors[vertex] += new_ancestors[index];
-                    visited[vertex] = true;
-                }
-            }
-        }
-    }
-
-    for start in 0..n {
-        let mut current = start;
-        'new_front: while indegree[current].is_zero() {
-            let mut previous = current;
-            loop {
-                let next = forest[current];
-                if next == current || next == previous {
-                    break 'new_front;
-                }
-                if ancestors[current] > 2 && ancestors[next] - ancestors[current] > 2 {
-                    forest[current] = current;
-                    indegree[next].decrement();
-                    let removed_ancestors = ancestors[current];
-
-                    let mut adjustment_previous = current;
-                    let mut adjustment_current = next;
-                    loop {
-                        ancestors[adjustment_current] -= removed_ancestors;
-                        let adjustment_next = forest[adjustment_current];
-                        if adjustment_next == adjustment_current
-                            || adjustment_next == adjustment_previous
-                        {
-                            break;
-                        }
-                        adjustment_previous = adjustment_current;
-                        adjustment_current = adjustment_next;
-                    }
-
-                    current = next;
-                    continue 'new_front;
-                }
-                previous = current;
-                current = next;
-            }
-        }
-    }
-
-    Ok(forest)
-}
-
-fn forest_component_labels_trusted(parent: &[usize]) -> (Vec<usize>, usize) {
-    forest_component_labels_impl::<false>(parent).expect("unbudgeted forest allocation")
-}
-
-fn forest_component_labels_impl<const ADMITTED: bool>(
-    parent: &[usize],
-) -> Result<(Vec<usize>, usize), CmgError> {
-    let n = parent.len();
-    let mut disjoint_set: Vec<usize> = if ADMITTED {
-        let mut values = try_capacity(n, "forest union find")?;
-        values.extend(0..n);
-        values
-    } else {
-        (0..n).collect()
-    };
-    for (vertex, &target) in parent.iter().enumerate() {
-        union_min_root(&mut disjoint_set, vertex, target);
-    }
-    for vertex in 0..n {
-        disjoint_set[vertex] = find_root(&mut disjoint_set, vertex);
-    }
-
-    let mut root_to_label = if ADMITTED {
-        try_filled(n, usize::MAX, "forest root labels")?
-    } else {
-        vec![usize::MAX; n]
-    };
-    let mut labels = if ADMITTED {
-        try_filled(n, 0, "forest labels")?
-    } else {
-        vec![0; n]
-    };
-    let mut aggregate_count = 0usize;
-    for (vertex, &root) in disjoint_set.iter().enumerate() {
-        let label = if root_to_label[root] == usize::MAX {
-            let next = aggregate_count;
-            aggregate_count += 1;
-            root_to_label[root] = next;
-            next
-        } else {
-            root_to_label[root]
-        };
-        labels[vertex] = label;
-    }
-    Ok((labels, aggregate_count))
-}
-
 /// Compute deterministic connected components of a functional forest.
 pub fn forest_components(parent: &[usize]) -> Result<(Vec<usize>, Vec<usize>), CmgError> {
     validate_parent(parent)?;
-    let n = parent.len();
-    let mut disjoint_set: Vec<usize> = (0..n).collect();
-    for (vertex, &target) in parent.iter().enumerate() {
-        union_min_root(&mut disjoint_set, vertex, target);
-    }
-    for vertex in 0..n {
-        disjoint_set[vertex] = find_root(&mut disjoint_set, vertex);
-    }
-
-    let mut root_to_label = vec![usize::MAX; n];
-    let mut labels = vec![0; n];
-    let mut sizes = Vec::new();
-    for (vertex, &root) in disjoint_set.iter().enumerate() {
-        let label = if root_to_label[root] == usize::MAX {
-            let next = sizes.len();
-            root_to_label[root] = next;
-            sizes.push(0);
-            next
-        } else {
-            root_to_label[root]
-        };
-        labels[vertex] = label;
+    let (labels, count) = component_labels(parent, &mut Unmetered)?;
+    let mut sizes = crate::storage::try_filled(count, 0, "forest component sizes")?;
+    for &label in &labels {
         sizes[label] += 1;
     }
     Ok((labels, sizes))
@@ -871,139 +474,10 @@ fn validate_parent(parent: &[usize]) -> Result<(), CmgError> {
     Ok(())
 }
 
-fn find_root(parent: &mut [usize], vertex: usize) -> usize {
-    let mut root = vertex;
-    while parent[root] != root {
-        root = parent[root];
-    }
-    let mut current = vertex;
-    while parent[current] != current {
-        let next = parent[current];
-        parent[current] = root;
-        current = next;
-    }
-    root
-}
-
-fn union_min_root(parent: &mut [usize], left: usize, right: usize) {
-    let left_root = find_root(parent, left);
-    let right_root = find_root(parent, right);
-    if left_root == right_root {
-        return;
-    }
-    let (root, child) = if left_root < right_root {
-        (left_root, right_root)
-    } else {
-        (right_root, left_root)
-    };
-    parent[child] = root;
-}
-
 #[cfg(test)]
-mod lean_hierarchy_forest_tests {
-    use super::{build_forest_aggregation_labels, build_forest_grouping};
-    use crate::Laplacian;
-
-    #[test]
-    fn lean_labels_match_complete_diagnostics() {
-        let graph = Laplacian::from_edges(
-            8,
-            [
-                (0, 1, 3.0),
-                (1, 2, 2.0),
-                (2, 3, 1.0),
-                (3, 4, 4.0),
-                (4, 5, 1.5),
-                (5, 6, 2.5),
-                (6, 7, 0.75),
-                (0, 7, 0.5),
-            ],
-        )
-        .unwrap();
-        let complete = build_forest_grouping(&graph, 0.125).unwrap();
-        let (labels, aggregate_count) = build_forest_aggregation_labels(&graph, 0.125).unwrap();
-        assert_eq!(labels, complete.labels());
-        assert_eq!(aggregate_count, complete.aggregate_count());
-    }
-}
-
-#[cfg(test)]
-mod trusted_internal_forest_tests {
-    use super::{
-        forest_component_labels_trusted, forest_components, split_forest, split_forest_trusted,
-    };
-
-    #[test]
-    fn trusted_internal_paths_match_checked_public_paths() {
-        let parent = vec![1, 2, 2, 4, 3, 6, 6, 8, 9, 9, 11, 10];
-        let checked_split = split_forest(&parent).unwrap();
-        let trusted_split = split_forest_trusted(&parent).unwrap();
-        assert_eq!(trusted_split, checked_split);
-
-        let (trusted_labels, aggregate_count) = forest_component_labels_trusted(&checked_split);
-        let (checked_labels, sizes) = forest_components(&checked_split).unwrap();
-        assert_eq!(trusted_labels, checked_labels);
-        assert_eq!(aggregate_count, sizes.len());
-    }
-
-    #[test]
-    fn public_split_still_rejects_out_of_range_parent() {
-        assert!(split_forest(&[0, 2]).is_err());
-    }
-}
-
-#[cfg(test)]
-mod compact_forest_indegree_tests {
-    use super::split_forest;
-
-    #[test]
-    fn compact_indegree_path_preserves_split_result() {
-        let parent = vec![1, 2, 3, 4, 5, 6, 7, 7, 9, 10, 11, 11];
-        let result = split_forest(&parent).unwrap();
-        assert_eq!(result.len(), parent.len());
-        assert!(result.iter().enumerate().all(|(vertex, target)| {
-            *target < result.len() && (*target == vertex || parent[vertex] == *target)
-        }));
-    }
-}
-
-#[cfg(test)]
-mod branch_free_conductance_tests {
-    use super::split_forest;
-
-    #[test]
-    fn conductance_refactor_preserves_representative_parent_vectors() {
-        for parent in [
-            vec![1, 2, 3, 4, 5, 6, 7, 7],
-            vec![1, 2, 3, 4, 4, 6, 7, 7],
-            vec![1, 1, 3, 3, 5, 6, 6, 7],
-        ] {
-            let split = split_forest(&parent).unwrap();
-            assert_eq!(split.len(), parent.len());
-            assert!(split.iter().all(|target| *target < split.len()));
-        }
-    }
-}
-
-#[cfg(test)]
-mod branchless_ancestor_recording_tests {
-    #[test]
-    fn boolean_increment_matches_branching_definition() {
-        for visited in [false, true] {
-            let branchless = i64::from(u8::from(!visited));
-            let branching = if visited { 0 } else { 1 };
-            assert_eq!(branchless, branching);
-        }
-    }
-}
-
-#[cfg(all(test, feature = "experimental-components"))]
-mod controlled_forest_tests {
-    use super::{
-        build_forest_aggregation_labels_admitted, build_forest_aggregation_labels_controlled,
-    };
+mod tests {
+    use super::*;
     use crate::cancel::{CancelMeter, StopAt};
-    use crate::{CmgError, Laplacian};
 
     fn fixtures() -> Vec<Laplacian> {
         let path = (0..39).map(|vertex| (vertex, vertex + 1, (vertex + 1) as f64));
@@ -1033,11 +507,45 @@ mod controlled_forest_tests {
         ]
     }
 
+    #[test]
+    fn hierarchy_labels_match_complete_diagnostics() {
+        for graph in fixtures() {
+            for threshold in [0.0, 0.125, 0.9, 1.0] {
+                let complete = build_forest_grouping(&graph, threshold).unwrap();
+                let (labels, count) =
+                    build_forest_aggregation_labels(&graph, threshold, &mut Unmetered).unwrap();
+                assert_eq!(labels, complete.labels());
+                assert_eq!(count, complete.aggregate_count());
+                let split = split_forest(complete.heavy_parent()).unwrap();
+                assert_eq!(split, complete.split_parent());
+                let (forest_labels, sizes) = forest_components(complete.final_parent()).unwrap();
+                assert_eq!(forest_labels, labels);
+                assert_eq!(sizes.len(), count);
+            }
+        }
+    }
+
+    #[test]
+    fn public_split_rejects_out_of_range_parents_and_keeps_valid_targets() {
+        assert!(split_forest(&[0, 2]).is_err());
+        for parent in [
+            vec![1, 2, 3, 4, 5, 6, 7, 7],
+            vec![1, 2, 3, 4, 4, 6, 7, 7],
+            vec![1, 1, 3, 3, 5, 6, 6, 7],
+            vec![1, 2, 3, 4, 5, 6, 7, 7, 9, 10, 11, 11],
+        ] {
+            let split = split_forest(&parent).unwrap();
+            assert!(split.iter().enumerate().all(|(vertex, &target)| {
+                target < split.len() && (target == vertex || parent[vertex] == target)
+            }));
+        }
+    }
+
     fn counting_run(graph: &Laplacian, threshold: f64) -> usize {
-        let expected = build_forest_aggregation_labels_admitted(graph, threshold).unwrap();
+        let expected = build_forest_aggregation_labels(graph, threshold, &mut Unmetered).unwrap();
         let count = StopAt::never();
         let query = || count.query();
-        let actual = build_forest_aggregation_labels_controlled(
+        let actual = build_forest_aggregation_labels(
             graph,
             threshold,
             &mut CancelMeter::every_operation(&query),
@@ -1048,7 +556,7 @@ mod controlled_forest_tests {
     }
 
     #[test]
-    fn controlled_labels_match_admitted_and_polls_repeat_exactly() {
+    fn metered_labels_match_unmetered_and_polls_repeat_exactly() {
         for graph in fixtures() {
             for threshold in [0.0, 0.125, 0.9, 1.0] {
                 let first = counting_run(&graph, threshold);
@@ -1077,7 +585,7 @@ mod controlled_forest_tests {
         for stop in 0..counting_run(&graph, 0.9) {
             let cancel = StopAt::at(Some(stop));
             let query = || cancel.query();
-            let error = build_forest_aggregation_labels_controlled(
+            let error = build_forest_aggregation_labels(
                 &graph,
                 0.9,
                 &mut CancelMeter::every_operation(&query),

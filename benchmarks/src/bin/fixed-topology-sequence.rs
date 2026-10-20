@@ -1,10 +1,7 @@
 use cmg::{
     CmgError, CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor,
     ParallelOptions, PcgBatchMut, PcgBatchRef, PcgBatchWorkspace, PcgDiagnostics, PcgOptions,
-    PreparedLaplacianTopology, RepeatedPcgMemoryReport, profile_pcg_batch_into_with_workspace,
-    profile_pcg_with_plan, solve_pcg_batch, solve_pcg_batch_into_with_executor,
-    solve_pcg_batch_into_with_plan_and_workspace, solve_pcg_batch_into_with_workspace,
-    solve_pcg_batch_with_retained_preconditioner_into_with_workspace,
+    PreparedLaplacianTopology, RepeatedPcgMemoryReport, solve_pcg_batch,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
@@ -361,7 +358,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Result<_, _>>()?;
     let plans: Vec<_> = preconditioners
         .iter()
-        .map(|preconditioner| ParallelCmgPlan::build(preconditioner, &executor))
+        .map(|preconditioner| ParallelCmgPlan::build(preconditioner, executor.team()))
         .collect::<Result<_, _>>()?;
     let all_targets: Vec<_> = (0..graphs.len())
         .map(|frame| targets(fixture.vertices, config.rhs_count, frame))
@@ -421,13 +418,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ((fresh_setup_ns, fresh_setup_failures), (plan_setup_ns, plan_setup_failures)) =
             measure_pair(2, config.repetitions, |fresh| {
                 if fresh {
-                    black_box(CmgPreconditioner::build_with_executor(
+                    black_box(CmgPreconditioner::build_with(
                         graph,
-                        CmgOptions::default(),
-                        &executor,
+                        cmg::BuildOptions::from(CmgOptions::default()),
+                        cmg::BuildContext {
+                            team: Some(executor.team()),
+                            ..cmg::BuildContext::default()
+                        },
                     )?);
                 } else {
-                    black_box(ParallelCmgPlan::build(&preconditioners[frame], &executor)?);
+                    black_box(ParallelCmgPlan::build(
+                        &preconditioners[frame],
+                        executor.team(),
+                    )?);
                 }
                 Ok(())
             });
@@ -453,7 +456,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?);
                     Ok(())
                 } else {
-                    solve_pcg_batch_into_with_workspace(
+                    cmg::solve_pcg_batch_into(
                         graph,
                         &preconditioners[frame],
                         rhs_view(),
@@ -465,14 +468,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )?,
                         &mut last_diagnostics,
                         options,
-                        &mut caller_workspace,
+                        core::slice::from_mut(&mut caller_workspace),
+                        cmg::SolveContext::default(),
                     )
                 }
             });
         let ((executor_ns, executor_failures), (planned_ns, planned_failures)) =
             measure_pair(2, config.repetitions, |across_rhs| {
                 if across_rhs {
-                    solve_pcg_batch_into_with_executor(
+                    cmg::solve_pcg_batch_into(
                         graph,
                         &preconditioners[frame],
                         rhs_view(),
@@ -485,13 +489,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut last_diagnostics,
                         options,
                         &mut executor_workspaces,
-                        &executor,
+                        cmg::SolveContext {
+                            team: Some(executor.team()),
+                            concurrent_right_hand_sides: true,
+                            ..cmg::SolveContext::default()
+                        },
                     )
                 } else {
-                    solve_pcg_batch_into_with_plan_and_workspace(
+                    cmg::solve_pcg_batch_into(
                         graph,
                         &preconditioners[frame],
-                        &plans[frame],
                         rhs_view(),
                         None,
                         PcgBatchMut::contiguous(
@@ -501,8 +508,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )?,
                         &mut last_diagnostics,
                         options,
-                        &mut planned_workspace,
-                        &executor,
+                        core::slice::from_mut(&mut planned_workspace),
+                        cmg::SolveContext {
+                            plan: Some(&plans[frame]),
+                            team: Some(executor.team()),
+                            ..cmg::SolveContext::default()
+                        },
                     )
                 }
             });
@@ -515,7 +526,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (retained_zero_ns, retained_zero_failures),
         ) = measure_pair(2, config.repetitions, |previous_frame| {
             if previous_frame {
-                solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
+                cmg::solve_pcg_batch_into(
                     graph,
                     &preconditioners[previous],
                     rhs_view(),
@@ -523,10 +534,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
                     &mut last_diagnostics,
                     options,
-                    &mut previous_workspace,
+                    core::slice::from_mut(&mut previous_workspace),
+                    cmg::SolveContext {
+                        retained_preconditioner: true,
+                        ..cmg::SolveContext::default()
+                    },
                 )
             } else {
-                solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
+                cmg::solve_pcg_batch_into(
                     graph,
                     &preconditioners[0],
                     rhs_view(),
@@ -534,7 +549,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
                     &mut last_diagnostics,
                     options,
-                    &mut frame_zero_workspace,
+                    core::slice::from_mut(&mut frame_zero_workspace),
+                    cmg::SolveContext {
+                        retained_preconditioner: true,
+                        ..cmg::SolveContext::default()
+                    },
                 )
             }
         });
@@ -547,7 +566,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         let ((warm_zero_ns, warm_zero_failures), (warm_ns, warm_failures)) =
             measure_pair(2, config.repetitions, |zero_start| {
-                solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
+                cmg::solve_pcg_batch_into(
                     graph,
                     &preconditioners[previous],
                     rhs_view(),
@@ -555,12 +574,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
                     &mut last_diagnostics,
                     options,
-                    &mut previous_workspace,
+                    core::slice::from_mut(&mut previous_workspace),
+                    cmg::SolveContext {
+                        retained_preconditioner: true,
+                        ..cmg::SolveContext::default()
+                    },
                 )
             });
 
         last_diagnostics.fill(PcgDiagnostics::default());
-        let caller_diagnostic_result = solve_pcg_batch_into_with_workspace(
+        let caller_diagnostic_result = cmg::solve_pcg_batch_into(
             graph,
             &preconditioners[frame],
             rhs_view(),
@@ -568,7 +591,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
             &mut last_diagnostics,
             options,
-            &mut caller_workspace,
+            core::slice::from_mut(&mut caller_workspace),
+            cmg::SolveContext::default(),
         );
         write_diagnostic_record(
             &mut receipt,
@@ -579,7 +603,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         last_diagnostics.fill(PcgDiagnostics::default());
-        let executor_diagnostic_result = solve_pcg_batch_into_with_executor(
+        let executor_diagnostic_result = cmg::solve_pcg_batch_into(
             graph,
             &preconditioners[frame],
             rhs_view(),
@@ -588,7 +612,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut last_diagnostics,
             options,
             &mut executor_workspaces,
-            &executor,
+            cmg::SolveContext {
+                team: Some(executor.team()),
+                concurrent_right_hand_sides: true,
+                ..cmg::SolveContext::default()
+            },
         );
         write_diagnostic_record(
             &mut receipt,
@@ -599,17 +627,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         last_diagnostics.fill(PcgDiagnostics::default());
-        let planned_diagnostic_result = solve_pcg_batch_into_with_plan_and_workspace(
+        let planned_diagnostic_result = cmg::solve_pcg_batch_into(
             graph,
             &preconditioners[frame],
-            &plans[frame],
             rhs_view(),
             None,
             PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
             &mut last_diagnostics,
             options,
-            &mut planned_workspace,
-            &executor,
+            core::slice::from_mut(&mut planned_workspace),
+            cmg::SolveContext {
+                plan: Some(&plans[frame]),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
         );
         write_diagnostic_record(
             &mut receipt,
@@ -620,17 +651,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         last_diagnostics.fill(PcgDiagnostics::default());
-        let retained_previous_diagnostic_result =
-            solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
-                graph,
-                &preconditioners[previous],
-                rhs_view(),
-                None,
-                PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
-                &mut last_diagnostics,
-                options,
-                &mut previous_workspace,
-            );
+        let retained_previous_diagnostic_result = cmg::solve_pcg_batch_into(
+            graph,
+            &preconditioners[previous],
+            rhs_view(),
+            None,
+            PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
+            &mut last_diagnostics,
+            options,
+            core::slice::from_mut(&mut previous_workspace),
+            cmg::SolveContext {
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
+        );
         write_diagnostic_record(
             &mut receipt,
             frame,
@@ -640,17 +674,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         last_diagnostics.fill(PcgDiagnostics::default());
-        let retained_zero_diagnostic_result =
-            solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
-                graph,
-                &preconditioners[0],
-                rhs_view(),
-                None,
-                PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
-                &mut last_diagnostics,
-                options,
-                &mut frame_zero_workspace,
-            );
+        let retained_zero_diagnostic_result = cmg::solve_pcg_batch_into(
+            graph,
+            &preconditioners[0],
+            rhs_view(),
+            None,
+            PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
+            &mut last_diagnostics,
+            options,
+            core::slice::from_mut(&mut frame_zero_workspace),
+            cmg::SolveContext {
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
+        );
         write_diagnostic_record(
             &mut receipt,
             frame,
@@ -660,17 +697,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         last_diagnostics.fill(PcgDiagnostics::default());
-        let warm_diagnostic_result =
-            solve_pcg_batch_with_retained_preconditioner_into_with_workspace(
-                graph,
-                &preconditioners[previous],
-                rhs_view(),
-                Some(guess),
-                PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
-                &mut last_diagnostics,
-                options,
-                &mut previous_workspace,
-            );
+        let warm_diagnostic_result = cmg::solve_pcg_batch_into(
+            graph,
+            &preconditioners[previous],
+            rhs_view(),
+            Some(guess),
+            PcgBatchMut::contiguous(&mut last_output, config.rhs_count, fixture.vertices)?,
+            &mut last_diagnostics,
+            options,
+            core::slice::from_mut(&mut previous_workspace),
+            cmg::SolveContext {
+                retained_preconditioner: true,
+                ..cmg::SolveContext::default()
+            },
+        );
         write_diagnostic_record(
             &mut receipt,
             frame,
@@ -713,7 +753,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut audit_workspace = PcgBatchWorkspace::new(&preconditioners[last])?;
     reset_allocation_counters();
     TRACKING.store(true, Ordering::SeqCst);
-    solve_pcg_batch_into_with_workspace(
+    cmg::solve_pcg_batch_into(
         graph,
         &preconditioners[last],
         PcgBatchRef::contiguous(packed_rhs, config.rhs_count, fixture.vertices)?,
@@ -721,7 +761,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PcgBatchMut::contiguous(&mut audit_output, config.rhs_count, fixture.vertices)?,
         &mut audit_diagnostics,
         options,
-        &mut audit_workspace,
+        core::slice::from_mut(&mut audit_workspace),
+        cmg::SolveContext::default(),
     )?;
     TRACKING.store(false, Ordering::SeqCst);
     let caller_allocations = ALLOCATION_COUNT.load(Ordering::Relaxed);
@@ -773,22 +814,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         topology.assemble_with_workspace(&fixture.frames[last], &mut assembly_workspace)
     });
     black_box(prepared_profile_graph?);
-    let (profiled_preconditioner, setup_profile) =
-        CmgPreconditioner::build_with_executor_profiled(graph, CmgOptions::default(), &executor)?;
+    let (profiled_preconditioner, setup_profile) = CmgPreconditioner::build_with_profiled(
+        graph,
+        cmg::BuildOptions::from(CmgOptions::default()),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )?;
     let (profiled_plan, plan_profile) =
-        ParallelCmgPlan::build_profiled(&profiled_preconditioner, &executor)?;
-    let profiled_pcg = profile_pcg_with_plan(
+        ParallelCmgPlan::build_profiled(&profiled_preconditioner, executor.team())?;
+    let profiled_pcg = cmg::profile_pcg(
         graph,
         &profiled_preconditioner,
-        &profiled_plan,
         &all_rhs[last][0],
         options,
-        &executor,
+        cmg::SolveContext {
+            plan: Some(&profiled_plan),
+            team: Some(executor.team()),
+            ..cmg::SolveContext::default()
+        },
     )?;
     let mut production_profile_reference = vec![0.0; packed_rhs.len()];
     let mut production_profile_diagnostics = vec![PcgDiagnostics::default(); config.rhs_count];
     let mut production_profile_workspace = PcgBatchWorkspace::new(&profiled_preconditioner)?;
-    solve_pcg_batch_into_with_workspace(
+    cmg::solve_pcg_batch_into(
         graph,
         &profiled_preconditioner,
         PcgBatchRef::contiguous(packed_rhs, config.rhs_count, fixture.vertices)?,
@@ -800,12 +850,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?,
         &mut production_profile_diagnostics,
         options,
-        &mut production_profile_workspace,
+        core::slice::from_mut(&mut production_profile_workspace),
+        cmg::SolveContext::default(),
     )?;
     let mut profile_output = vec![0.0; packed_rhs.len()];
     let mut profile_diagnostics = vec![PcgDiagnostics::default(); config.rhs_count];
     let mut profile_workspace = PcgBatchWorkspace::new(&profiled_preconditioner)?;
-    let batch_profile = profile_pcg_batch_into_with_workspace(
+    let batch_profile = cmg::profile_pcg_batch_into(
         graph,
         &profiled_preconditioner,
         PcgBatchRef::contiguous(packed_rhs, config.rhs_count, fixture.vertices)?,
@@ -814,6 +865,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut profile_diagnostics,
         options,
         &mut profile_workspace,
+        cmg::SolveContext::default(),
     )?;
     assert_eq!(profile_diagnostics, production_profile_diagnostics);
     assert!(

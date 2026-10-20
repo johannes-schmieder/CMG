@@ -1,9 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use cmg::{
-    CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace, solve_pcg_with_workspace,
-};
+use cmg::{CmgOptions, CmgPreconditioner, Laplacian, PcgOptions, PcgWorkspace};
 
 struct BenchGraph {
     graph: Laplacian,
@@ -102,12 +100,13 @@ fn main() {
     let options = PcgOptions::default();
 
     black_box(
-        solve_pcg_with_workspace(
+        cmg::solve_pcg_with(
             &bench_graph.graph,
             &preconditioner,
             black_box(&rhs),
             options,
             &mut workspace,
+            cmg::SolveContext::default(),
         )
         .expect("warm-up solve should converge"),
     );
@@ -118,12 +117,13 @@ fn main() {
     let mut residual_norm = 0.0;
     for _ in 0..repetitions {
         let start = Instant::now();
-        let result = solve_pcg_with_workspace(
+        let result = cmg::solve_pcg_with(
             &bench_graph.graph,
             &preconditioner,
             black_box(&rhs),
             options,
             &mut workspace,
+            cmg::SolveContext::default(),
         )
         .expect("benchmark solve should converge");
         elapsed_ns.push(start.elapsed().as_nanos());

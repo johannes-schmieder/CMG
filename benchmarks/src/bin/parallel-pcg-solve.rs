@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use cmg::{
     CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgWorkspace, solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
+    PcgOptions, PcgWorkspace,
 };
 
 struct BenchGraph {
@@ -131,29 +131,33 @@ fn main() {
     })
     .expect("parallel executor should build");
     let plan_start = Instant::now();
-    let plan =
-        ParallelCmgPlan::build(&preconditioner, &executor).expect("parallel CMG plan should build");
+    let plan = ParallelCmgPlan::build(&preconditioner, executor.team())
+        .expect("parallel CMG plan should build");
     let plan_build_ns = plan_start.elapsed().as_nanos();
     let options = PcgOptions::default();
     let mut serial_workspace = PcgWorkspace::new(&preconditioner);
     let mut parallel_workspace = PcgWorkspace::new(&preconditioner);
 
-    let serial_warm = solve_pcg_with_workspace(
+    let serial_warm = cmg::solve_pcg_with(
         &bench_graph.graph,
         &preconditioner,
         &rhs,
         options,
         &mut serial_workspace,
+        cmg::SolveContext::default(),
     )
     .expect("serial warm-up should converge");
-    let parallel_warm = solve_pcg_with_plan_and_workspace(
+    let parallel_warm = cmg::solve_pcg_with(
         &bench_graph.graph,
         &preconditioner,
-        &plan,
         &rhs,
         options,
         &mut parallel_workspace,
-        &executor,
+        cmg::SolveContext {
+            plan: Some(&plan),
+            team: Some(executor.team()),
+            ..cmg::SolveContext::default()
+        },
     )
     .expect("planned warm-up should converge");
     assert_eq!(serial_warm.iterations(), parallel_warm.iterations());
@@ -170,52 +174,60 @@ fn main() {
     for repetition in 0..repetitions {
         if repetition % 2 == 0 {
             let start = Instant::now();
-            serial_result = solve_pcg_with_workspace(
+            serial_result = cmg::solve_pcg_with(
                 &bench_graph.graph,
                 &preconditioner,
                 black_box(&rhs),
                 options,
                 &mut serial_workspace,
+                cmg::SolveContext::default(),
             )
             .expect("serial solve should converge");
             serial_times.push(start.elapsed().as_nanos());
             black_box(&serial_result);
 
             let start = Instant::now();
-            parallel_result = solve_pcg_with_plan_and_workspace(
+            parallel_result = cmg::solve_pcg_with(
                 &bench_graph.graph,
                 &preconditioner,
-                &plan,
                 black_box(&rhs),
                 options,
                 &mut parallel_workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .expect("parallel solve should converge");
             parallel_times.push(start.elapsed().as_nanos());
             black_box(&parallel_result);
         } else {
             let start = Instant::now();
-            parallel_result = solve_pcg_with_plan_and_workspace(
+            parallel_result = cmg::solve_pcg_with(
                 &bench_graph.graph,
                 &preconditioner,
-                &plan,
                 black_box(&rhs),
                 options,
                 &mut parallel_workspace,
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .expect("parallel solve should converge");
             parallel_times.push(start.elapsed().as_nanos());
             black_box(&parallel_result);
 
             let start = Instant::now();
-            serial_result = solve_pcg_with_workspace(
+            serial_result = cmg::solve_pcg_with(
                 &bench_graph.graph,
                 &preconditioner,
                 black_box(&rhs),
                 options,
                 &mut serial_workspace,
+                cmg::SolveContext::default(),
             )
             .expect("serial solve should converge");
             serial_times.push(start.elapsed().as_nanos());

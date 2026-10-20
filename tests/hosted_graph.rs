@@ -1,6 +1,9 @@
 #![cfg(feature = "parallel")]
 
-use cmg::{Cancellation, CmgError, CmgOptions, CmgPreconditioner, HostExecutor, Laplacian};
+use cmg::{
+    BuildContext, Cancellation, CmgError, CmgOptions, CmgPreconditioner, Laplacian,
+    ParallelOptions, Team,
+};
 use std::sync::{
     Barrier,
     atomic::{AtomicUsize, Ordering},
@@ -30,12 +33,16 @@ fn hosted(
     cancel: Cancellation<'_>,
 ) -> Result<Laplacian, CmgError> {
     pool.install(|| {
-        HostExecutor::new(pool, ceiling)
-            .unwrap()
-            .with_installed(|team| {
-                Laplacian::from_edges_hosted_controlled(514, edges, memory, &team, cancel)
-            })
-            .unwrap()
+        let team = Team::new(pool, ceiling, ParallelOptions::default()).unwrap();
+        Laplacian::build(
+            514,
+            edges,
+            BuildContext {
+                team: Some(team),
+                cancel: Some(cancel),
+                budget_bytes: Some(memory),
+            },
+        )
     })
 }
 
@@ -91,7 +98,16 @@ fn threshold_and_large_uneven_graph_preserve_bits_hierarchy_cycle_and_poll_sched
     let never = || false;
     for len in [THRESHOLD - 1, THRESHOLD, THRESHOLD + 17] {
         let edges = input(len);
-        let serial = Laplacian::from_edges_controlled(514, &edges, usize::MAX, &never).unwrap();
+        let serial = Laplacian::build(
+            514,
+            &edges,
+            cmg::BuildContext {
+                cancel: Some(&never),
+                budget_bytes: Some(usize::MAX),
+                ..cmg::BuildContext::default()
+            },
+        )
+        .unwrap();
         let options = CmgOptions {
             direct_threshold: 8,
             ..Default::default()
@@ -155,7 +171,15 @@ fn memory_refusal_precedes_polls_and_cancellation_stops_every_phase() {
         other => panic!("expected scratch refusal: {other:?}"),
     };
     // The existing serial bound is exactly the hosted bound.
-    let serial_required = match Laplacian::from_edges_controlled(514, &edges, 0, &unreachable) {
+    let serial_required = match Laplacian::build(
+        514,
+        &edges,
+        cmg::BuildContext {
+            cancel: Some(&unreachable),
+            budget_bytes: Some(0),
+            ..cmg::BuildContext::default()
+        },
+    ) {
         Err(CmgError::MemoryBudgetExceeded { required_bytes, .. }) => required_bytes,
         _ => panic!("expected serial bound"),
     };
@@ -204,7 +228,16 @@ fn invalid_edge_errors_match_serial_order_across_workers() {
         let mut edges = input(THRESHOLD + 17);
         edges[97] = bad;
         edges[60_000] = (2, 2, 0.0);
-        let serial = Laplacian::from_edges_controlled(514, &edges, usize::MAX, &never).unwrap_err();
+        let serial = Laplacian::build(
+            514,
+            &edges,
+            cmg::BuildContext {
+                cancel: Some(&never),
+                budget_bytes: Some(usize::MAX),
+                ..cmg::BuildContext::default()
+            },
+        )
+        .unwrap_err();
         for ceiling in [1, 2, 4] {
             assert_eq!(
                 hosted(&pool, ceiling, &edges, usize::MAX, &never).unwrap_err(),

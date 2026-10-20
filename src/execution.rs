@@ -205,20 +205,16 @@ impl core::fmt::Debug for ParallelExecutor {
 
 #[cfg(feature = "parallel")]
 impl ParallelExecutor {
-    /// Install a scoped stage coordinator on this owned pool.
-    ///
-    /// The same admitted-stage dispatcher is available on borrowed host pools.
-    /// Unlike a borrowed host coordinator, this closure crosses into the pool
-    /// and therefore must be `Send`. No execution view can escape its callback.
-    /// The callback must complete all work synchronously or within joined
-    /// scopes; launching detached Rayon tasks is outside this API's contract.
-    pub fn with_installed<R: Send>(
-        &self,
-        operation: impl for<'scope> FnOnce(crate::InstalledTeam<'scope>) -> R + Send,
-    ) -> Result<R, CmgError> {
-        let pool = self.pool.as_ref().expect("live CMG executor");
-        let host = crate::HostExecutor::new(pool, self.threads)?;
-        self.install(|| host.with_installed(operation))
+    /// Lend this pool as a borrowed team using every worker.
+    #[must_use]
+    pub fn team(&self) -> Team<'_> {
+        Team {
+            pool: self.pool.as_ref().expect("live CMG executor"),
+            options: ParallelOptions {
+                threads: self.threads,
+                ..self.options
+            },
+        }
     }
 
     /// Rayon/crossbeam runtime heap currently has no source-proven finite
@@ -328,6 +324,77 @@ impl ParallelExecutor {
     pub const fn options(&self) -> ParallelOptions {
         self.options
     }
+}
+
+/// Without the parallel feature no team can exist; kernels keep one signature.
+#[cfg(not(feature = "parallel"))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Team<'a> {
+    #[allow(dead_code)]
+    Never(core::convert::Infallible, core::marker::PhantomData<&'a ()>),
+}
+
+/// A borrowed Rayon pool, a positive worker ceiling and the execution policy.
+///
+/// A team creates no pool and owns nothing. [`ParallelExecutor::team`] lends a
+/// CMG-owned pool; a host lends its own already admitted pool with
+/// [`Team::new`], so CMG work runs on the host's workers instead of a nested
+/// pool. Kernels install on the borrowed pool, which runs inline when the
+/// caller already executes on it. Parallel eligibility depends on the worker
+/// ceiling and options exactly as for an owned executor of that size.
+#[cfg(feature = "parallel")]
+#[derive(Clone, Copy)]
+pub struct Team<'a> {
+    pool: &'a rayon::ThreadPool,
+    /// Validated options whose `threads` is the worker ceiling.
+    options: ParallelOptions,
+}
+
+#[cfg(feature = "parallel")]
+impl core::fmt::Debug for Team<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Team")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "parallel")]
+impl<'a> Team<'a> {
+    /// Borrow an existing pool with a worker ceiling in `1..=` its size.
+    /// `options.threads` is replaced by the ceiling.
+    pub fn new(
+        pool: &'a rayon::ThreadPool,
+        workers: usize,
+        options: ParallelOptions,
+    ) -> Result<Self, CmgError> {
+        let options = options.validate()?;
+        if workers == 0 || workers > pool.current_num_threads() {
+            return Err(CmgError::InvalidHierarchy {
+                context: "team worker ceiling is outside the borrowed pool",
+            });
+        }
+        Ok(Self {
+            pool,
+            options: ParallelOptions {
+                threads: workers,
+                ..options
+            },
+        })
+    }
+
+    /// Maximum concurrently executing lanes of any stage.
+    #[must_use]
+    pub const fn worker_ceiling(&self) -> usize {
+        self.options.threads
+    }
+
+    /// The execution shape: options whose `threads` is the worker ceiling.
+    #[must_use]
+    pub const fn options(&self) -> ParallelOptions {
+        self.options
+    }
 
     /// Return the maximum number of simultaneous workspaces allowed for a
     /// batch of the supplied size.
@@ -336,11 +403,40 @@ impl ParallelExecutor {
         workspace_bytes: usize,
         batch_len: usize,
     ) -> Result<usize, CmgError> {
+        self.options.batch_concurrency(workspace_bytes, batch_len)
+    }
+
+    pub(crate) fn install<Operation, Output>(&self, operation: Operation) -> Output
+    where
+        Operation: FnOnce() -> Output + Send,
+        Output: Send,
+    {
+        self.pool.install(operation)
+    }
+
+    pub(crate) fn should_parallel(&self, length: usize) -> bool {
+        self.options.should_parallel(length)
+    }
+
+    pub(crate) fn work_chunk_len(&self, length: usize) -> usize {
+        self.options.work_chunk_len(length)
+    }
+}
+
+/// Execution-shape rules on options whose `threads` is a resolved worker
+/// ceiling (a team's options): eligibility depends on this shape only.
+#[cfg(feature = "parallel")]
+impl ParallelOptions {
+    pub(crate) fn batch_concurrency(
+        self,
+        workspace_bytes: usize,
+        batch_len: usize,
+    ) -> Result<usize, CmgError> {
         if batch_len == 0 {
             return Ok(0);
         }
         let thread_limit = self.threads.min(batch_len).max(1);
-        let Some(budget) = self.options.workspace_memory_budget_bytes else {
+        let Some(budget) = self.workspace_memory_budget_bytes else {
             return Ok(thread_limit);
         };
         if workspace_bytes > budget {
@@ -355,26 +451,21 @@ impl ParallelExecutor {
         Ok(thread_limit.min(budget / workspace_bytes).max(1))
     }
 
-    pub(crate) fn install<Operation, Output>(&self, operation: Operation) -> Output
-    where
-        Operation: FnOnce() -> Output + Send,
-        Output: Send,
-    {
-        self.pool
-            .as_ref()
-            .expect("live CMG executor")
-            .install(operation)
+    pub(crate) fn should_parallel(self, length: usize) -> bool {
+        self.threads > 1 && length >= self.min_parallel_len
     }
 
-    pub(crate) fn should_parallel(&self, length: usize) -> bool {
-        self.threads > 1 && length >= self.options.min_parallel_len
-    }
-
-    pub(crate) fn work_chunk_len(&self, length: usize) -> usize {
+    pub(crate) fn work_chunk_len(self, length: usize) -> usize {
         let target_chunks = self.threads.saturating_mul(8).max(1);
         let quotient = length / target_chunks;
         let remainder = usize::from(length % target_chunks != 0);
         quotient.saturating_add(remainder).max(1)
+    }
+
+    /// Minimum length of a fixed-chunk team reduction.
+    pub(crate) fn reduction_floor(self) -> usize {
+        self.min_parallel_len
+            .max(self.reduction_chunk_size.saturating_mul(8))
     }
 }
 
@@ -533,7 +624,7 @@ mod lifetime_tests {
         for threads in [1, 4, 1, 8, 2, 4, 1] {
             let completed = Arc::new(AtomicUsize::new(0));
             let executor = observed(threads, None, Arc::clone(&completed)).unwrap();
-            assert_eq!(executor.install(rayon::current_num_threads), threads);
+            assert_eq!(executor.team().install(rayon::current_num_threads), threads);
             assert_eq!(executor.workers.handles.len(), threads);
             // Final ownership stays outside the pool. All entries are its real
             // workers; the completion counter runs in their TLS destructors.
@@ -586,27 +677,25 @@ mod lifetime_tests {
             let worker_owner = Arc::clone(&executor);
             let (release, released) = std::sync::mpsc::channel();
             let (finished, finish) = std::sync::mpsc::channel();
-            executor
-                .with_installed(move |_| {
-                    // Intentionally violate the synchronous callback contract
-                    // to verify defensive final-owner retirement containment.
-                    rayon::spawn(move || {
-                        released
-                            .recv_timeout(std::time::Duration::from_secs(5))
-                            .unwrap();
-                        assert!(
-                            worker_owner
-                                .pool
-                                .as_ref()
-                                .unwrap()
-                                .current_thread_index()
-                                .is_some()
-                        );
-                        drop(worker_owner);
-                        finished.send(()).unwrap();
-                    });
-                })
-                .unwrap();
+            executor.team().install(move || {
+                // Intentionally violate the synchronous callback contract
+                // to verify defensive final-owner retirement containment.
+                rayon::spawn(move || {
+                    released
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    assert!(
+                        worker_owner
+                            .pool
+                            .as_ref()
+                            .unwrap()
+                            .current_thread_index()
+                            .is_some()
+                    );
+                    drop(worker_owner);
+                    finished.send(()).unwrap();
+                });
+            });
             drop(executor);
             release.send(()).unwrap();
             finish
@@ -641,7 +730,7 @@ mod lifetime_tests {
             let completed = Arc::clone(&completed);
             move || {
                 let executor = observed(4, None, completed).unwrap();
-                executor.install(|| panic!("scoped kernel panic"));
+                executor.team().install(|| panic!("scoped kernel panic"));
             }
         });
         assert!(result.is_err());

@@ -1,29 +1,26 @@
-# Cancellable serial construction
+# Cancellable construction, application and PCG
 
-## Shared host execution foundation
+## Host execution
 
-With `parallel`, `HostExecutor::new(&pool, worker_ceiling)` borrows an already
-admitted Rayon pool without creating workers or retaining an owner. Its
-`with_installed` callback runs directly on the coordinator only when that exact
-pool is installed. The callback may borrow non-Send coordinator state; nothing
-is sent to workers except the cancellation query and the stage kernel. The
-callback-scoped `InstalledTeam` cannot escape or enter a hierarchy/workspace.
-The existing owned `ParallelExecutor` remains available and has the same scoped
-stage interface; its coordinator crosses into its pool and must be Send.
+With `parallel`, `Team::new(&pool, worker_ceiling, ParallelOptions)` borrows an
+already admitted Rayon pool without creating workers or retaining an owner;
+`ParallelExecutor::team()` lends a standalone owned pool the same way. A team
+is `Copy`, never stored in a hierarchy or workspace, and every parallel kernel
+dispatches on its pool, from the coordinator or from a foreign pool alike.
+`ParallelPcgSolver` and `ParallelCmgPlan` record the team's shape (worker
+ceiling and thresholds) and reject a differently shaped team; CMG never
+creates a pool during construction, application or a solve.
 
-Coordinator callbacks must finish synchronously or join all scoped work;
-detached Rayon tasks are outside the supported interface contract. External
-owned-executor destruction still joins every worker and its TLS destructors.
-If a misbehaving detached callback retains the final executor owner on its own
+Owned-executor destruction joins every worker and its TLS destructors. If a
+misbehaving detached callback retains the final executor owner on its own
 worker, defensive destruction signals termination and detaches the handles to
-avoid self/peer-join deadlock. Only that unsupported path retires workers
-asynchronously after its remaining work finishes; it has no immediate join
+avoid self/peer-join deadlock; that unsupported path has no immediate join
 guarantee and is not an additional asynchronous execution API.
 
 `ControlledStage::admit` validates fixed chunk dimensions. It is
 allocation-free, performs no scan and charges nothing. The resulting
-`AdmittedStage` is consumed once. Chunk boundaries depend only on the slice
-length and the chunk length, never on the number of workers.
+`AdmittedStage` is consumed once by `run(team, ..)`. Chunk boundaries depend
+only on the slice length and the chunk length, never on the number of workers.
 
 The caller must admit and prepare all output and kernel scratch storage before
 dispatch, including its coexistence with all live parent objects. `run` splits
@@ -41,47 +38,61 @@ cancellation signal before every chunk, and the coordinator queries it again
 after the join. Cancellation dominates numerical errors after joining and is
 reported as `CmgError::Cancelled`. Partial output remains private and must be
 discarded after failure. Serial fallback is chosen before numerical execution.
-This API adds no graph, hierarchy, sampler or batch optimization and makes no
-performance claim.
 
 The package declares an empty root Cargo workspace so a standalone CMG
 development checkout nested inside an embedding workspace remains independent.
 This does not alter dependency features or the runtime.
 
-## Serial numerical construction
+## One construction pipeline
 
-The optional component builder provides
-`CmgPreconditioner::build_component_experiment_serial_controlled` under
-`experimental-components`. It has the same graph, hierarchy stopping rules,
-component options, terminal factor arithmetic, and scalar cycle as
-`build_component_experiment_serial_with_budget`. Existing entrypoints retain
-their implementations. The controlled path replaces opaque setup traversals
-with fallible bounded traversals and replaces sorting with deterministic
-heapsort. Edge ordering remains endpoint pair then total-ordered weight;
-terminal permutation keys include the original vertex as the final tie-break.
-Thus sorting changes record movement without changing arithmetic order. The
+`Laplacian::build`/`from_edges_with`, `CmgHierarchy::build_with`,
+`CmgPreconditioner::build_with` and `GroundedLdl::factor_with` each take a
+`BuildContext { team, cancel, budget_bytes }`. The pipeline is the same for
+every context: graph canonicalization, the hierarchy loop (forest grouping,
+aggregation, stopping rules, contraction, optional isolate pruning),
+finalization (finest components, coarse centering plans, terminal factor and
+repeat adjustment). A team only selects the existing deterministic parallel
+kernels above their fixed thresholds (initial sorting and contraction); a
+budget only admits `construction_allocation_bound` before the first allocation
+and makes every bank fallible; a cancellation query only replaces opaque
+traversals with fallible bounded ones and sorting with deterministic heapsort.
+Edge ordering remains endpoint pair then total-ordered weight; terminal
+permutation keys include the original vertex as the final tie-break. Thus
+hierarchies, factors, repeats and cycle bits never depend on the context. The
 terminal factor is chosen by the hierarchy options (`direct_threshold` and the
 stopping rules) and memory admission only; no work allowance redirects it.
 
-`Laplacian::from_edges_controlled` also bounds input validation, canonical edge
-sorting, compensated duplicate aggregation, and graph metadata construction.
-Its input is a borrowed slice, avoiding arbitrary user iterator work inside a
-bounded construction operation. The public preconditioner builder borrows an
-already constructed graph; callers must include their own input preparation in
-their resource protocol or use this graph constructor. Scalar application
-storage is prepared with `try_workspace_controlled` after admitting
-`workspace_allocation_bytes_controlled`. They share their implementation with
-`try_workspace` and `workspace_allocation_bytes`, producing the same layout,
-zeroed contents, byte count and error classification; only the cancellation
-polls are added. Every level, centering-plan and component-bank loop and every
-initialization of a bank (in counted chunks of 128 values) contribute to the
-cadence below, every allocation is preceded by a poll, and both queries poll
-once more before returning.
+With a cancellation query, `Laplacian::build` also bounds input validation,
+canonical edge sorting, compensated duplicate aggregation, and graph metadata
+construction. Its input is a borrowed slice, avoiding arbitrary user iterator
+work inside a bounded construction operation; callers must include their own
+input preparation in their resource protocol. Scalar application storage is
+prepared with `try_workspace_controlled` after admitting
+`workspace_allocation_bytes_controlled`, and interleaved storage with
+`CmgBatchWorkspace::try_new_controlled`. They share their implementations with
+`try_workspace`, `workspace_allocation_bytes` and `CmgBatchWorkspace::try_new`,
+producing the same layout, zeroed contents, byte count and error
+classification; only the cancellation polls are added. Every level,
+centering-plan and component-bank loop and every value initialized contributes
+to the cadence below, every allocation is preceded by a poll, and the queries
+poll once more before returning.
+
+## Application and PCG
+
+`ApplyContext { plan, team, cancel }` and `SolveContext { plan, team,
+concurrent_right_hand_sides, retained_preconditioner, cancel }` drive the one
+cycle recursion and the one PCG recurrence. With a cancellation query every
+edge, row, transfer entry, centering value and factor entry visited counts
+toward the same fixed cadence, carried across row, level and iteration
+boundaries; each PCG iteration polls once more. Parallel lanes poll between
+bounded sub-ranges of 4,096 items and stop early; all lanes join before
+`CmgError::Cancelled` is returned. Outputs are then unspecified, workspaces
+stay reusable, and no context changes a result bit.
 
 ## Cancellation contract
 
-Each controlled entrypoint takes a `Cancellation`: a caller-owned, cheap,
-allocation-free and sticky query. Kernels count conservative primitive units
+Each entry point accepts an optional `Cancellation` in its context: a
+caller-owned, cheap, allocation-free and sticky query. Kernels count conservative primitive units
 (arithmetic, record visits, comparisons and moves) in bounded operations of 1
 through 1024 units. Inner tree/root walks, forest splitting, edge merging,
 dense/sparse factor updates, sorting comparisons and swaps, and storage
@@ -100,10 +111,9 @@ is returned and the query is not consulted again. Memory admission uses
 `MemoryBudgetExceeded` and is checked before the first allocation; allocator
 failure uses `AllocationFailed`. Internal invalid state remains an error.
 
-The query runs on the constructing thread (and, in hosted stages, on workers
+The query runs on the constructing thread (and, in parallel stages, on workers
 between chunks). It may block, for example to park a construction, and then
-return either value. Neither serial construction nor scalar application creates
-a pool or installs a Rayon executor. Allocator, deallocator, query, page-fault,
+return either value. No construction, application or solve creates a pool. Allocator, deallocator, query, page-fault,
 join and operating-system latency are excluded from the bounded work between
 polls. In particular this is not a hard real-time cancellation guarantee or a
 bound on cleanup latency. Small Arc allocations retain stable Rust's existing
@@ -157,16 +167,18 @@ application and centering retain the existing numerical certification rules.
 RHS-dependent hierarchy changes, adaptive repeat counts, a non-transpose
 transfer, or arbitrary indefinite/non-Laplacian inputs are outside this argument.
 
-`apply_compatible_into` applies that existing scalar fixed cycle with a prepared
-workspace. Its caller must supply a compatible RHS. Controlled construction
-adds no adaptive selection during application. The application kernel has no
-cancellation hook yet; the caller polls between applications.
+`apply_compatible_into_with` applies that fixed cycle with a prepared workspace
+and an `ApplyContext`. Its caller must supply a compatible RHS. Construction
+adds no adaptive selection during application; a cancellation query in the
+context only adds the bounded polls described above.
 
 ## Validation
 
 The controlled unit and integration tests compare complete hierarchy/factor
-structures, floating-point factor and cycle bits, and repeat counts with the
-existing admitted serial builder. Fixtures include empty, isolated, connected,
+structures, floating-point factor and cycle bits, and repeat counts of the
+cancellable and ordinary contexts of the one builder; `tests/frozen_bits.rs`
+compares every consolidated construction, cycle and solve path at one and four
+workers with digests frozen from the pre-consolidation implementations. Fixtures include empty, isolated, connected,
 disconnected, sparse and dense graphs, nontrivial scales, and all component
 option combinations. Unit tests poll after every bounded operation and cancel
 at each poll of small graph, forest, contraction, pruning, component, factor

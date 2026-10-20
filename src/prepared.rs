@@ -172,9 +172,10 @@ impl PreparedLaplacianTopology {
             group_offsets.push(cursor);
         }
 
-        let components = Arc::new(Components::try_from_endpoints(
+        let components = Arc::new(Components::from_endpoints(
             vertex_count,
             canonical_keys.iter().map(|&key| (key_u(key), key_v(key))),
+            &mut crate::cancel::Unmetered,
         )?);
 
         Ok(Self {

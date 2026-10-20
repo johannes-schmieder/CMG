@@ -1,8 +1,12 @@
 //! Deterministic restriction, prolongation, and Galerkin graph contraction.
 
-use crate::{CmgError, Edge, Laplacian};
+use crate::cancel::{Meter, Unmetered};
 #[cfg(feature = "parallel")]
-use crate::{ParallelExecutor, execution::PARALLEL_SETUP_MIN_ITEMS};
+use crate::execution::PARALLEL_SETUP_MIN_ITEMS;
+use crate::execution::Team;
+use crate::preconditioner::Width;
+use crate::storage::StoredIndex;
+use crate::{CmgError, Edge, Laplacian};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::sync::OnceLock;
@@ -90,39 +94,14 @@ impl Aggregation {
                 });
             }
         }
-        Ok(Self::from_validated_parts(labels, aggregate_count))
+        Self::from_forest_labels(labels, aggregate_count, &mut Unmetered)
     }
 
-    pub(crate) fn from_forest_labels(labels: Vec<usize>, aggregate_count: usize) -> Self {
-        debug_assert!(labels.iter().all(|&label| label < aggregate_count));
-        Self::from_validated_parts(labels, aggregate_count)
-    }
-
-    pub(crate) fn from_forest_labels_admitted(
+    /// Compact (or native-width) labels from validated forest labels.
+    pub(crate) fn from_forest_labels<M: Meter>(
         labels: Vec<usize>,
         aggregate_count: usize,
-    ) -> Result<Self, CmgError> {
-        let labels = if aggregate_count <= (u32::MAX as usize).saturating_add(1) {
-            let mut compact =
-                crate::storage::try_capacity(labels.len(), "aggregation compact labels")?;
-            compact.extend(labels.iter().map(|&label| label as u32));
-            LabelStorage::Compact(compact)
-        } else {
-            LabelStorage::Native(labels)
-        };
-        Ok(Self {
-            labels,
-            native_labels: OnceLock::new(),
-            aggregate_count,
-            sizes: OnceLock::new(),
-        })
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn from_forest_labels_controlled(
-        labels: Vec<usize>,
-        aggregate_count: usize,
-        meter: &mut crate::cancel::CancelMeter<'_>,
+        meter: &mut M,
     ) -> Result<Self, CmgError> {
         let labels = if aggregate_count <= (u32::MAX as usize).saturating_add(1) {
             meter.allocation(
@@ -131,10 +110,14 @@ impl Aggregation {
             )?;
             let mut compact =
                 crate::storage::try_capacity(labels.len(), "aggregation compact labels")?;
-            for &label in &labels {
-                meter.work("aggregation compact label copy", 16)?;
-                debug_assert!(label < aggregate_count);
-                compact.push(label as u32);
+            if M::POLLS {
+                for &label in &labels {
+                    meter.work("aggregation compact label copy", 16)?;
+                    debug_assert!(label < aggregate_count);
+                    compact.push(label as u32);
+                }
+            } else {
+                compact.extend(labels.iter().map(|&label| label as u32));
             }
             LabelStorage::Compact(compact)
         } else {
@@ -146,21 +129,6 @@ impl Aggregation {
             aggregate_count,
             sizes: OnceLock::new(),
         })
-    }
-
-    fn from_validated_parts(labels: Vec<usize>, aggregate_count: usize) -> Self {
-        let compact_limit = (u32::MAX as usize).saturating_add(1);
-        let labels = if aggregate_count <= compact_limit {
-            LabelStorage::Compact(labels.into_iter().map(|label| label as u32).collect())
-        } else {
-            LabelStorage::Native(labels)
-        };
-        Self {
-            labels,
-            native_labels: OnceLock::new(),
-            aggregate_count,
-            sizes: OnceLock::new(),
-        }
     }
 
     /// Return the fine-to-coarse labels.
@@ -264,44 +232,42 @@ impl Aggregation {
         Ok(())
     }
 
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn restrict_residual_into(
+    /// Restrict `rhs - product` for vertex-major lanes: each lane subtracts per
+    /// fine vertex and adds into its aggregate in ascending fine order.
+    pub(crate) fn restrict_residual_lanes<W: Width, M: Meter>(
         &self,
         rhs: &[f64],
-        matrix_value: &[f64],
+        product: &[f64],
         coarse: &mut [f64],
+        width: W,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
+        let columns = width.get();
+        let fine = self.fine_dimension() * columns;
         for (context, actual) in [
             ("Aggregation residual rhs", rhs.len()),
-            ("Aggregation residual matvec", matrix_value.len()),
+            ("Aggregation residual matvec", product.len()),
         ] {
-            if actual != self.fine_dimension() {
-                return Err(CmgError::dimension(context, self.fine_dimension(), actual));
+            if actual != fine {
+                return Err(CmgError::dimension(context, fine, actual));
             }
         }
-        if coarse.len() != self.coarse_dimension() {
+        if coarse.len() != self.coarse_dimension() * columns {
             return Err(CmgError::dimension(
                 "Aggregation residual coarse",
-                self.coarse_dimension(),
+                self.coarse_dimension() * columns,
                 coarse.len(),
             ));
         }
-        coarse.fill(0.0);
-        // Keep each subtraction and the ascending fine-vertex addition order.
-        // The completed matvec is read-only; smoothing still has its own barrier.
+        crate::cancel::zero(meter, "CMG restriction", coarse)?;
         match &self.labels {
             LabelStorage::Compact(labels) => {
-                for ((&b, &ax), &label) in rhs.iter().zip(matrix_value).zip(labels) {
-                    coarse[label as usize] += b - ax;
-                }
+                restrict_lanes(labels, rhs, product, coarse, columns, meter)
             }
             LabelStorage::Native(labels) => {
-                for ((&b, &ax), &label) in rhs.iter().zip(matrix_value).zip(labels) {
-                    coarse[label] += b - ax;
-                }
+                restrict_lanes(labels, rhs, product, coarse, columns, meter)
             }
         }
-        Ok(())
     }
 
     /// Prolong by copying each coarse value to its fine aggregate members.
@@ -347,76 +313,75 @@ impl Aggregation {
         Ok(())
     }
 
-    #[cfg(feature = "parallel")]
-    pub(crate) fn prolong_add_into_with_executor(
+    /// Add the prolonged coarse lanes to every fine member; fine rows run on
+    /// the team above its parallel threshold.
+    pub(crate) fn prolong_add_lanes<W: Width, M: Meter>(
         &self,
         coarse: &[f64],
         fine: &mut [f64],
-        executor: &ParallelExecutor,
+        width: W,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        validate_prolong_dimensions(self, coarse, fine)?;
-        if !executor.should_parallel(fine.len()) {
-            return self.prolong_add_into(coarse, fine);
+        let columns = width.get();
+        if coarse.len() != self.coarse_dimension() * columns {
+            return Err(CmgError::dimension(
+                "Aggregation::prolong coarse",
+                self.coarse_dimension() * columns,
+                coarse.len(),
+            ));
         }
-        executor.install(|| match &self.labels {
-            LabelStorage::Compact(labels) => fine
-                .par_iter_mut()
-                .zip(labels.par_iter())
-                .for_each(|(value, &label)| *value += coarse[label as usize]),
-            LabelStorage::Native(labels) => fine
-                .par_iter_mut()
-                .zip(labels.par_iter())
-                .for_each(|(value, &label)| *value += coarse[label]),
-        });
-        Ok(())
+        if fine.len() != self.fine_dimension() * columns {
+            return Err(CmgError::dimension(
+                "Aggregation::prolong fine",
+                self.fine_dimension() * columns,
+                fine.len(),
+            ));
+        }
+        match &self.labels {
+            LabelStorage::Compact(labels) => {
+                prolong_lanes(labels, coarse, fine, columns, team, meter)
+            }
+            LabelStorage::Native(labels) => {
+                prolong_lanes(labels, coarse, fine, columns, team, meter)
+            }
+        }
     }
 
     /// Form the exact graph Laplacian `R L R^T`.
     pub fn contract(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
-        self.contract_impl::<false>(graph)
+        self.contract_with(graph, None, &mut Unmetered)
     }
 
-    pub(crate) fn contract_admitted(&self, graph: &Laplacian) -> Result<Laplacian, CmgError> {
-        self.contract_impl::<true>(graph)
-    }
-
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn contract_controlled(
+    /// The single contraction kernel. With a team whose policy enables parallel
+    /// work on at least 65,536 edges, edges are mapped into fixed slots and
+    /// sorted in place on the team's pool; otherwise mapping is a counted serial
+    /// scan. Both preserve input order before the identical canonical sort, so
+    /// the coarse graph is bit-for-bit the same.
+    pub(crate) fn contract_with<M: Meter>(
         &self,
         graph: &Laplacian,
-        meter: &mut crate::cancel::CancelMeter<'_>,
+        #[allow(unused_variables)] team: Option<Team<'_>>,
+        meter: &mut M,
     ) -> Result<Laplacian, CmgError> {
         self.validate_contract_graph(graph)?;
+        #[cfg(feature = "parallel")]
+        if let Some(team) = team.filter(|team| {
+            graph.edge_count() >= PARALLEL_SETUP_MIN_ITEMS
+                && team.should_parallel(graph.edge_count())
+        }) {
+            return self.contract_parallel(graph, team, meter);
+        }
         meter.allocation(
             "contracted edges",
             crate::storage::bytes::<Edge>(graph.edge_count())?,
         )?;
         let mut coarse_edges =
             crate::storage::try_capacity(graph.edge_count(), "contracted edges")?;
-        for edge in graph.edges() {
-            meter.work("contracted edge mapping", 64)?;
-            let left = self.label_at(edge.u());
-            let right = self.label_at(edge.v());
-            if left != right {
-                coarse_edges.push(Edge::from_internal_parts(left, right, edge.weight())?);
-            }
-        }
-        Laplacian::from_compact_edges_controlled(self.coarse_dimension(), coarse_edges, meter)
-    }
-
-    fn contract_impl<const ADMITTED: bool>(
-        &self,
-        graph: &Laplacian,
-    ) -> Result<Laplacian, CmgError> {
-        self.validate_contract_graph(graph)?;
-        let mut coarse_edges = if ADMITTED {
-            crate::storage::try_capacity(graph.edge_count(), "contracted edges")?
-        } else {
-            Vec::with_capacity(graph.edge_count())
-        };
         match &self.labels {
             LabelStorage::Compact(labels) => {
                 for edge in graph.edges() {
+                    meter.work("contracted edge mapping", 64)?;
                     let left = labels[edge.u()] as usize;
                     let right = labels[edge.v()] as usize;
                     if left != right {
@@ -426,6 +391,7 @@ impl Aggregation {
             }
             LabelStorage::Native(labels) => {
                 for edge in graph.edges() {
+                    meter.work("contracted edge mapping", 64)?;
                     let left = labels[edge.u()];
                     let right = labels[edge.v()];
                     if left != right {
@@ -434,76 +400,33 @@ impl Aggregation {
                 }
             }
         }
-        if ADMITTED {
-            Laplacian::from_compact_edges_admitted(self.coarse_dimension(), coarse_edges)
-        } else {
-            Laplacian::from_compact_edges(self.coarse_dimension(), coarse_edges)
-        }
+        Laplacian::canonical(self.coarse_dimension(), coarse_edges, meter)
     }
 
-    /// Form `R L R^T` using deterministic parallel edge mapping and sorting.
-    ///
-    /// The resulting graph is bit-for-bit identical to [`Self::contract`].
-    /// Small edge sets follow the serial path selected by the executor.
+    /// Fixed slot and edge banks belong to the admitted parallel bound. Workers
+    /// only write disjoint slots; no worker-side growing collection or CMG
+    /// allocation is needed.
     #[cfg(feature = "parallel")]
-    pub fn contract_with_executor(
+    fn contract_parallel<M: Meter>(
         &self,
         graph: &Laplacian,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
+        meter: &mut M,
     ) -> Result<Laplacian, CmgError> {
-        self.validate_contract_graph(graph)?;
-        if graph.edge_count() < PARALLEL_SETUP_MIN_ITEMS
-            || !executor.should_parallel(graph.edge_count())
-        {
-            return self.contract(graph);
-        }
-        let coarse_edges: Result<Vec<Edge>, CmgError> = executor.install(|| match &self.labels {
-            LabelStorage::Compact(labels) => graph
-                .edges()
-                .par_iter()
-                .filter_map(|edge| {
-                    let left = labels[edge.u()] as usize;
-                    let right = labels[edge.v()] as usize;
-                    (left != right).then(|| Edge::from_internal_parts(left, right, edge.weight()))
-                })
-                .collect(),
-            LabelStorage::Native(labels) => graph
-                .edges()
-                .par_iter()
-                .filter_map(|edge| {
-                    let left = labels[edge.u()];
-                    let right = labels[edge.v()];
-                    (left != right).then(|| Edge::from_internal_parts(left, right, edge.weight()))
-                })
-                .collect(),
-        });
-        Laplacian::from_compact_edges_with_executor(
-            self.coarse_dimension(),
-            coarse_edges?,
-            executor,
-        )
-    }
-
-    /// Fixed CMG-owned banks; the caller has already admitted the whole build.
-    /// Both banks are provisioned before dispatch. Workers only write disjoint
-    /// slots; no worker-side growing collection or CMG allocation is needed.
-    #[cfg(feature = "parallel")]
-    pub(crate) fn contract_with_executor_admitted(
-        &self,
-        graph: &Laplacian,
-        executor: &ParallelExecutor,
-    ) -> Result<Laplacian, CmgError> {
-        self.validate_contract_graph(graph)?;
-        if graph.edge_count() < PARALLEL_SETUP_MIN_ITEMS
-            || !executor.should_parallel(graph.edge_count())
-        {
-            return self.contract_admitted(graph);
-        }
+        meter.allocation(
+            "parallel contracted edge slots",
+            crate::storage::bytes::<Option<Edge>>(graph.edge_count())?,
+        )?;
         let mut mapped =
             crate::storage::try_filled(graph.edge_count(), None, "parallel contracted edge slots")?;
+        meter.allocation(
+            "parallel contracted edges",
+            crate::storage::bytes::<Edge>(graph.edge_count())?,
+        )?;
         let mut coarse_edges =
             crate::storage::try_capacity(graph.edge_count(), "parallel contracted edges")?;
-        executor.install(|| {
+        meter.checkpoint("parallel contracted edge mapping")?;
+        team.install(|| {
             mapped
                 .par_iter_mut()
                 .zip(graph.edges().par_iter())
@@ -520,16 +443,12 @@ impl Aggregation {
                     Ok::<_, CmgError>(())
                 })
         })?;
-        // Preserve input order before the unchanged endpoint/weight sorts.
-        // At most m items are appended to capacity m; this cannot grow.
+        // Preserve input order before the unchanged canonical sort. At most m
+        // items are appended to capacity m; this cannot grow.
         for edge in mapped.into_iter().flatten() {
             coarse_edges.push(edge);
         }
-        Laplacian::from_compact_edges_with_executor_admitted(
-            self.coarse_dimension(),
-            coarse_edges,
-            executor,
-        )
+        Laplacian::canonical_parallel(self.coarse_dimension(), coarse_edges, team, meter)
     }
 
     fn validate_contract_graph(&self, graph: &Laplacian) -> Result<(), CmgError> {
@@ -542,6 +461,56 @@ impl Aggregation {
         }
         Ok(())
     }
+}
+
+#[inline(always)]
+fn restrict_lanes<L: StoredIndex, M: Meter>(
+    labels: &[L],
+    rhs: &[f64],
+    product: &[f64],
+    coarse: &mut [f64],
+    columns: usize,
+    meter: &mut M,
+) -> Result<(), CmgError> {
+    // Keep each subtraction and the ascending fine-vertex addition order.
+    crate::cancel::chunked(meter, "CMG restriction", labels.len(), columns, |range| {
+        for fine in range {
+            let target = labels[fine].index() * columns;
+            for lane in 0..columns {
+                coarse[target + lane] +=
+                    rhs[fine * columns + lane] - product[fine * columns + lane];
+            }
+        }
+        Ok(())
+    })
+}
+
+#[inline(always)]
+fn prolong_lanes<L: StoredIndex, M: Meter>(
+    labels: &[L],
+    coarse: &[f64],
+    fine: &mut [f64],
+    columns: usize,
+    #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
+    meter: &mut M,
+) -> Result<(), CmgError> {
+    let operation = |row: usize, values: &mut [f64]| {
+        let source = labels[row].index() * columns;
+        for (lane, value) in values.iter_mut().enumerate() {
+            *value += coarse[source + lane];
+        }
+    };
+    #[cfg(feature = "parallel")]
+    if let Some(team) = team.filter(|team| team.should_parallel(fine.len())) {
+        crate::preconditioner::rows_parallel(team, meter.query(), fine, columns, operation);
+        return meter.joined("CMG prolongation");
+    }
+    crate::cancel::chunked(meter, "CMG prolongation", labels.len(), columns, |range| {
+        for row in range {
+            operation(row, &mut fine[row * columns..(row + 1) * columns]);
+        }
+        Ok(())
+    })
 }
 
 fn validate_prolong_dimensions(
@@ -604,9 +573,10 @@ mod compact_aggregation_label_tests {
     }
 }
 
-#[cfg(all(test, feature = "experimental-components"))]
+#[cfg(test)]
 mod residual_restriction_tests {
     use super::*;
+    use crate::preconditioner::One;
 
     #[test]
     fn fused_restriction_keeps_cancellation_order_and_checks_dimensions() {
@@ -622,7 +592,7 @@ mod residual_restriction_tests {
             let expected = aggregation.restrict(&residual).unwrap();
             let mut actual = vec![f64::NAN; 3];
             aggregation
-                .restrict_residual_into(&rhs, &ax, &mut actual)
+                .restrict_residual_lanes(&rhs, &ax, &mut actual, One, &mut Unmetered)
                 .unwrap();
             assert_eq!(
                 actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
@@ -631,19 +601,21 @@ mod residual_restriction_tests {
             for (b, a) in [(&rhs[..7], &ax[..]), (&rhs[..], &ax[..7])] {
                 assert!(
                     aggregation
-                        .restrict_residual_into(b, a, &mut actual)
+                        .restrict_residual_lanes(b, a, &mut actual, One, &mut Unmetered)
                         .is_err()
                 );
                 assert_eq!(actual, expected);
             }
             assert!(
                 aggregation
-                    .restrict_residual_into(&rhs, &ax, &mut [99.0; 2])
+                    .restrict_residual_lanes(&rhs, &ax, &mut [99.0; 2], One, &mut Unmetered)
                     .is_err()
             );
         }
         let empty = Aggregation::new(Vec::new(), 0).unwrap();
-        empty.restrict_residual_into(&[], &[], &mut []).unwrap();
+        empty
+            .restrict_residual_lanes(&[], &[], &mut [], One, &mut Unmetered)
+            .unwrap();
     }
 }
 
@@ -669,9 +641,9 @@ mod controlled_aggregation_tests {
         )
         .unwrap();
         let original = graph.clone();
-        let expected = Aggregation::from_forest_labels_admitted(labels.clone(), 5).unwrap();
+        let expected = Aggregation::from_forest_labels(labels.clone(), 5, &mut Unmetered).unwrap();
         let never = || false;
-        let actual = Aggregation::from_forest_labels_controlled(
+        let actual = Aggregation::from_forest_labels(
             labels.clone(),
             5,
             &mut CancelMeter::every_operation(&never),
@@ -681,25 +653,21 @@ mod controlled_aggregation_tests {
         let count = StopAt::never();
         let query = || count.query();
         let coarse = actual
-            .contract_controlled(&graph, &mut CancelMeter::every_operation(&query))
+            .contract_with(&graph, None, &mut CancelMeter::every_operation(&query))
             .unwrap();
-        assert_eq!(coarse, expected.contract_admitted(&graph).unwrap());
+        assert_eq!(coarse, expected.contract(&graph).unwrap());
         for stop in 0..count.polls() {
             let cancel = StopAt::at(Some(stop));
             let query = || cancel.query();
             assert!(matches!(
-                actual.contract_controlled(&graph, &mut CancelMeter::every_operation(&query)),
+                actual.contract_with(&graph, None, &mut CancelMeter::every_operation(&query)),
                 Err(CmgError::Cancelled { .. })
             ));
             assert_eq!(cancel.polls(), stop + 1);
         }
         let always = || true;
         assert!(matches!(
-            Aggregation::from_forest_labels_controlled(
-                labels,
-                5,
-                &mut CancelMeter::every_operation(&always)
-            ),
+            Aggregation::from_forest_labels(labels, 5, &mut CancelMeter::every_operation(&always)),
             Err(CmgError::Cancelled { .. })
         ));
         assert_eq!(graph, original);

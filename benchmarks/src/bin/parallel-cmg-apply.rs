@@ -131,8 +131,8 @@ fn main() {
         ..ParallelOptions::default()
     })
     .expect("parallel executor should build");
-    let plan =
-        ParallelCmgPlan::build(&preconditioner, &executor).expect("parallel CMG plan should build");
+    let plan = ParallelCmgPlan::build(&preconditioner, executor.team())
+        .expect("parallel CMG plan should build");
 
     let mut serial_workspace = preconditioner.workspace();
     let mut parallel_workspace = preconditioner.workspace();
@@ -142,14 +142,18 @@ fn main() {
     preconditioner
         .apply_compatible_into(&rhs, &mut serial_output, &mut serial_workspace)
         .expect("serial warm-up should succeed");
-    plan.apply_compatible_into(
-        &preconditioner,
-        &rhs,
-        &mut parallel_output,
-        &mut parallel_workspace,
-        &executor,
-    )
-    .expect("parallel warm-up should succeed");
+    preconditioner
+        .apply_compatible_into_with(
+            &rhs,
+            &mut parallel_output,
+            &mut parallel_workspace,
+            cmg::ApplyContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                cancel: None,
+            },
+        )
+        .expect("parallel warm-up should succeed");
     let max_difference = max_scaled_difference(&serial_output, &parallel_output);
     assert!(
         max_difference <= 5.0e-10,
@@ -172,28 +176,36 @@ fn main() {
 
             let start = Instant::now();
             for _ in 0..loops {
-                plan.apply_compatible_into(
-                    &preconditioner,
-                    &rhs,
-                    &mut parallel_output,
-                    &mut parallel_workspace,
-                    &executor,
-                )
-                .expect("parallel application should succeed");
+                preconditioner
+                    .apply_compatible_into_with(
+                        &rhs,
+                        &mut parallel_output,
+                        &mut parallel_workspace,
+                        cmg::ApplyContext {
+                            plan: Some(&plan),
+                            team: Some(executor.team()),
+                            cancel: None,
+                        },
+                    )
+                    .expect("parallel application should succeed");
                 black_box(&parallel_output);
             }
             parallel_times.push(start.elapsed().as_nanos() / loops as u128);
         } else {
             let start = Instant::now();
             for _ in 0..loops {
-                plan.apply_compatible_into(
-                    &preconditioner,
-                    &rhs,
-                    &mut parallel_output,
-                    &mut parallel_workspace,
-                    &executor,
-                )
-                .expect("parallel application should succeed");
+                preconditioner
+                    .apply_compatible_into_with(
+                        &rhs,
+                        &mut parallel_output,
+                        &mut parallel_workspace,
+                        cmg::ApplyContext {
+                            plan: Some(&plan),
+                            team: Some(executor.team()),
+                            cancel: None,
+                        },
+                    )
+                    .expect("parallel application should succeed");
                 black_box(&parallel_output);
             }
             parallel_times.push(start.elapsed().as_nanos() / loops as u128);

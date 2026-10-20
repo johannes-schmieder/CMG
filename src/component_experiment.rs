@@ -1,5 +1,7 @@
 //! Opt-in component experiments. Ordinary builders retain the upstream cycle.
 
+use crate::cancel::{Meter, chunked};
+use crate::preconditioner::Width;
 use crate::{Aggregation, CmgError, Laplacian};
 
 crate::storage::storage_fields!(PrunedTransfer, entries);
@@ -78,23 +80,78 @@ impl PrunedTransfer {
         Ok(())
     }
 
-    pub(crate) fn restrict_residual_into(
+    /// Restrict `rhs - product` for vertex-major lanes in increasing fine order,
+    /// ignoring retired rows.
+    pub(crate) fn restrict_residual_lanes<W: Width, M: Meter>(
         &self,
         rhs: &[f64],
-        matrix_value: &[f64],
+        product: &[f64],
         coarse: &mut [f64],
+        width: W,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        self.validate(rhs.len(), coarse.len())?;
-        self.validate(matrix_value.len(), coarse.len())?;
-        coarse.fill(0.0);
-        if self.has_fine_prefix() {
-            for ((&b, &ax), &(_, coarse_index)) in rhs.iter().zip(matrix_value).zip(&self.entries) {
-                coarse[coarse_index as usize] += b - ax;
-            }
-        } else {
-            for &(fine, coarse_index) in &self.entries {
-                coarse[coarse_index as usize] += rhs[fine as usize] - matrix_value[fine as usize];
-            }
+        let columns = width.get();
+        self.validate_lanes(rhs.len(), coarse.len(), columns)?;
+        self.validate_lanes(product.len(), coarse.len(), columns)?;
+        crate::cancel::zero(meter, "CMG pruned restriction", coarse)?;
+        chunked(
+            meter,
+            "CMG pruned restriction",
+            self.entries.len(),
+            columns,
+            |range| {
+                for &(fine, target) in &self.entries[range] {
+                    let (fine, target) = (fine as usize * columns, target as usize * columns);
+                    for lane in 0..columns {
+                        coarse[target + lane] += rhs[fine + lane] - product[fine + lane];
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
+    /// Add the transpose action for vertex-major lanes; retired rows are unchanged.
+    pub(crate) fn prolong_add_lanes<W: Width, M: Meter>(
+        &self,
+        coarse: &[f64],
+        fine: &mut [f64],
+        width: W,
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        let columns = width.get();
+        self.validate_lanes(fine.len(), coarse.len(), columns)?;
+        chunked(
+            meter,
+            "CMG pruned prolongation",
+            self.entries.len(),
+            columns,
+            |range| {
+                for &(target, source) in &self.entries[range] {
+                    let (target, source) = (target as usize * columns, source as usize * columns);
+                    for lane in 0..columns {
+                        fine[target + lane] += coarse[source + lane];
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn validate_lanes(&self, fine: usize, coarse: usize, columns: usize) -> Result<(), CmgError> {
+        if fine != self.fine_dimension * columns {
+            return Err(CmgError::dimension(
+                "PrunedTransfer fine",
+                self.fine_dimension * columns,
+                fine,
+            ));
+        }
+        if coarse != self.coarse_dimension * columns {
+            return Err(CmgError::dimension(
+                "PrunedTransfer coarse",
+                self.coarse_dimension * columns,
+                coarse,
+            ));
         }
         Ok(())
     }
@@ -141,26 +198,13 @@ impl PrunedTransfer {
     }
 }
 
-pub(crate) fn prune(
+/// Retire isolated coarse vertices, returning the compact transfer and graph.
+pub(crate) fn prune<M: Meter>(
     aggregation: &Aggregation,
     coarse: &Laplacian,
-) -> Option<(PrunedTransfer, Laplacian)> {
-    prune_impl::<false>(aggregation, coarse).expect("unbudgeted prune allocation")
-}
-
-pub(crate) fn prune_admitted(
-    aggregation: &Aggregation,
-    coarse: &Laplacian,
+    meter: &mut M,
 ) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
-    prune_impl::<true>(aggregation, coarse)
-}
-
-pub(crate) fn prune_controlled(
-    aggregation: &Aggregation,
-    coarse: &Laplacian,
-    meter: &mut crate::cancel::CancelMeter<'_>,
-) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
-    let Some((map, graph)) = coarse.without_isolated_vertices_controlled(meter)? else {
+    let Some((map, graph)) = coarse.without_isolated_vertices(meter)? else {
         return Ok(None);
     };
     meter.allocation(
@@ -169,6 +213,7 @@ pub(crate) fn prune_controlled(
     )?;
     let mut entries =
         crate::storage::try_capacity(aggregation.fine_dimension(), "pruned transfer entries")?;
+    // The public graph representation already bounds vertex indices to u32.
     for fine in 0..aggregation.fine_dimension() {
         meter.work("pruned transfer mapping", 32)?;
         let label = aggregation.label_at(fine);
@@ -200,54 +245,11 @@ pub(crate) fn prune_controlled(
     )))
 }
 
-fn prune_impl<const ADMITTED: bool>(
-    aggregation: &Aggregation,
-    coarse: &Laplacian,
-) -> Result<Option<(PrunedTransfer, Laplacian)>, CmgError> {
-    let compact = if ADMITTED {
-        coarse.without_isolated_vertices_admitted()?
-    } else {
-        coarse.without_isolated_vertices()
-    };
-    let Some((map, graph)) = compact else {
-        return Ok(None);
-    };
-    let mut entries = if ADMITTED {
-        crate::storage::try_capacity(aggregation.fine_dimension(), "pruned transfer entries")?
-    } else {
-        Vec::new()
-    };
-    // The public graph representation already bounds vertex indices to u32.
-    for fine in 0..aggregation.fine_dimension() {
-        let label = aggregation.label_at(fine);
-        if map[label] != usize::MAX {
-            entries.push((fine as u32, map[label] as u32));
-        }
-    }
-    if ADMITTED {
-        if entries.len() != entries.capacity() {
-            let mut compact =
-                crate::storage::try_capacity(entries.len(), "pruned transfer compaction")?;
-            compact.extend_from_slice(&entries);
-            entries = compact;
-        }
-    } else {
-        entries.shrink_to_fit();
-    }
-    Ok(Some((
-        PrunedTransfer {
-            fine_dimension: aggregation.fine_dimension(),
-            coarse_dimension: graph.vertex_count(),
-            represented_coarse_dimension: coarse.vertex_count(),
-            entries,
-        },
-        graph,
-    )))
-}
-
 #[cfg(test)]
 mod residual_restriction_tests {
     use super::*;
+    use crate::cancel::Unmetered;
+    use crate::preconditioner::One;
 
     #[test]
     fn pruned_residual_restriction_preserves_order_and_ignores_retired_rows() {
@@ -269,17 +271,17 @@ mod residual_restriction_tests {
             transfer.restrict_into(&residual, &mut expected).unwrap();
             let mut actual = [f64::NAN; 2];
             transfer
-                .restrict_residual_into(&rhs, &ax, &mut actual)
+                .restrict_residual_lanes(&rhs, &ax, &mut actual, One, &mut Unmetered)
                 .unwrap();
             assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
             assert!(
                 transfer
-                    .restrict_residual_into(&rhs[..7], &ax, &mut actual)
+                    .restrict_residual_lanes(&rhs[..7], &ax, &mut actual, One, &mut Unmetered)
                     .is_err()
             );
             assert!(
                 transfer
-                    .restrict_residual_into(&rhs, &ax[..7], &mut actual)
+                    .restrict_residual_lanes(&rhs, &ax[..7], &mut actual, One, &mut Unmetered)
                     .is_err()
             );
             assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
@@ -293,7 +295,7 @@ mod controlled_prune_tests {
     use crate::cancel::{CancelMeter, StopAt};
 
     #[test]
-    fn controlled_pruning_matches_and_cancels_at_every_poll() {
+    fn metered_pruning_matches_and_cancels_at_every_poll() {
         let aggregation = Aggregation::new(vec![0, 0, 1, 2, 3, 4, 4, 5], 6).unwrap();
         // Exercise interspersed isolates, suffix isolates, no isolates, and all isolates.
         for edges in [
@@ -309,10 +311,10 @@ mod controlled_prune_tests {
             vec![],
         ] {
             let graph = Laplacian::from_edges(6, edges).unwrap();
-            let expected = prune_admitted(&aggregation, &graph).unwrap();
+            let expected = prune(&aggregation, &graph, &mut crate::cancel::Unmetered).unwrap();
             let count = StopAt::never();
             let query = || count.query();
-            let actual = prune_controlled(
+            let actual = prune(
                 &aggregation,
                 &graph,
                 &mut CancelMeter::every_operation(&query),
@@ -323,7 +325,7 @@ mod controlled_prune_tests {
             for stop in 0..count.polls() {
                 let cancel = StopAt::at(Some(stop));
                 let query = || cancel.query();
-                let error = prune_controlled(
+                let error = prune(
                     &aggregation,
                     &graph,
                     &mut CancelMeter::every_operation(&query),

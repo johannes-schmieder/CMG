@@ -1,8 +1,8 @@
 //! Deterministic connected components and Laplacian null-space operations.
 
-#[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
-use crate::cancel::{CancelMeter, try_filled as filled};
+use crate::cancel::{Meter, Unmetered, chunked, try_filled as filled};
+use crate::execution::Team;
+use crate::preconditioner::Width;
 use crate::{CmgError, Laplacian, ValidationOptions};
 
 crate::storage::storage_fields!(
@@ -31,9 +31,6 @@ impl crate::storage::Storage for CenteringLabels {
         }
     }
 }
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ComponentWorkspace {
     sums: Vec<f64>,
@@ -64,11 +61,7 @@ impl ComponentWorkspace {
         }
     }
 
-    pub(crate) fn try_new(
-        count: usize,
-        mut meter: Option<&mut CancelMeter<'_>>,
-    ) -> Result<Self, CmgError> {
-        let meter = &mut meter;
+    pub(crate) fn try_new(count: usize, meter: &mut impl Meter) -> Result<Self, CmgError> {
         Ok(Self {
             sums: filled(meter, count, 0.0, "component workspace sums")?,
             corrections: filled(meter, count, 0.0, "component workspace corrections")?,
@@ -148,11 +141,7 @@ impl CenteringWorkspace {
         }
     }
 
-    fn try_new(
-        component_count: usize,
-        mut meter: Option<&mut CancelMeter<'_>>,
-    ) -> Result<Self, CmgError> {
-        let meter = &mut meter;
+    fn try_new(component_count: usize, meter: &mut impl Meter) -> Result<Self, CmgError> {
         Ok(Self {
             sums: filled(meter, component_count, 0.0, "centering workspace sums")?,
             corrections: filled(
@@ -185,6 +174,11 @@ impl CenteringWorkspace {
     pub(crate) const fn byte_len_for(component_count: usize) -> usize {
         component_count.saturating_mul(3).saturating_mul(8)
     }
+
+    /// Sums, corrections and means for one scalar centering.
+    pub(crate) fn parts(&mut self) -> (&mut [f64], &mut [f64], &mut [f64]) {
+        (&mut self.sums, &mut self.corrections, &mut self.means)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,85 +201,11 @@ impl CenteringPlan {
         self.sizes.len()
     }
 
-    /// Preserve the serial compensated sum order independently in each lane.
-    pub(crate) fn center_batch(
-        &self,
-        values: &mut [f64],
-        columns: usize,
-        sums: &mut [f64],
-        corrections: &mut [f64],
-        means: &mut [f64],
-    ) -> Result<(), CmgError> {
-        sums.fill(0.0);
-        corrections.fill(0.0);
-        for (vertex, row) in values.chunks_exact(columns).enumerate() {
-            let component = match &self.labels {
-                CenteringLabels::Single => 0,
-                CenteringLabels::Compact(labels) => labels[vertex] as usize,
-                CenteringLabels::Native(labels) => labels[vertex],
-            };
-            for (lane, &value) in row.iter().enumerate() {
-                if !value.is_finite() {
-                    return Err(CmgError::NonFiniteMatrixValue {
-                        row: vertex,
-                        column: lane,
-                        value,
-                    });
-                }
-                let slot = component * columns + lane;
-                neumaier_add(&mut sums[slot], &mut corrections[slot], value);
-            }
-        }
-        for (component, &size) in self.sizes.iter().enumerate() {
-            for lane in 0..columns {
-                let slot = component * columns + lane;
-                means[slot] = (sums[slot] + corrections[slot]) / size as f64;
-            }
-        }
-        for (vertex, row) in values.chunks_exact_mut(columns).enumerate() {
-            let component = match &self.labels {
-                CenteringLabels::Single => 0,
-                CenteringLabels::Compact(labels) => labels[vertex] as usize,
-                CenteringLabels::Native(labels) => labels[vertex],
-            };
-            for (lane, value) in row.iter_mut().enumerate() {
-                *value -= means[component * columns + lane];
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn try_from_laplacian(graph: &Laplacian) -> Result<Self, CmgError> {
-        let Components { labels, sizes, .. } = Components::try_from_endpoints(
-            graph.vertex_count(),
-            graph.edges().iter().map(|edge| (edge.u(), edge.v())),
-        )?;
-        #[cfg(feature = "experimental-components")]
-        let labels = labels.into_vec();
-        let vertex_count = labels.len();
-        let component_count = sizes.len();
-        let labels = if component_count <= 1 {
-            CenteringLabels::Single
-        } else if component_count <= u32::MAX as usize {
-            let mut compact =
-                crate::storage::try_capacity(labels.len(), "centering compact labels")?;
-            compact.extend(labels.iter().map(|&label| label as u32));
-            CenteringLabels::Compact(compact)
-        } else {
-            CenteringLabels::Native(labels)
-        };
-        Ok(Self {
-            vertex_count,
-            labels,
-            sizes,
-        })
-    }
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_from_laplacian_controlled(
+    pub(crate) fn from_laplacian<M: Meter>(
         graph: &Laplacian,
-        meter: &mut CancelMeter<'_>,
+        meter: &mut M,
     ) -> Result<Self, CmgError> {
-        let Components { labels, sizes, .. } = Components::try_from_endpoints_controlled(
+        let Components { labels, sizes, .. } = Components::from_endpoints(
             graph.vertex_count(),
             graph.edges().iter().map(|edge| (edge.u(), edge.v())),
             meter,
@@ -298,9 +218,13 @@ impl CenteringPlan {
             CenteringLabels::Single
         } else if component_count <= u32::MAX as usize {
             let mut compact = meter.try_capacity(labels.len(), "centering compact labels")?;
-            for &label in &labels {
-                meter.work("centering compact labels", 8)?;
-                compact.push(label as u32);
+            if M::POLLS {
+                for &label in &labels {
+                    meter.work("centering compact labels", 8)?;
+                    compact.push(label as u32);
+                }
+            } else {
+                compact.extend(labels.iter().map(|&label| label as u32));
             }
             CenteringLabels::Compact(compact)
         } else {
@@ -315,33 +239,13 @@ impl CenteringPlan {
     pub(crate) fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
         CenteringWorkspace::allocation_bytes(self.sizes.len())
     }
-    pub(crate) fn from_laplacian(graph: &Laplacian) -> Self {
-        let Components { labels, sizes, .. } = Components::from_laplacian(graph);
-        #[cfg(feature = "experimental-components")]
-        let labels = labels.into_vec();
-        let vertex_count = labels.len();
-        let component_count = sizes.len();
-        let labels = if component_count <= 1 {
-            CenteringLabels::Single
-        } else if component_count <= u32::MAX as usize {
-            CenteringLabels::Compact(labels.into_iter().map(|label| label as u32).collect())
-        } else {
-            CenteringLabels::Native(labels)
-        };
-        Self {
-            vertex_count,
-            labels,
-            sizes,
-        }
-    }
-
     pub(crate) fn workspace(&self) -> CenteringWorkspace {
         CenteringWorkspace::new(self.sizes.len())
     }
 
     pub(crate) fn try_workspace(
         &self,
-        meter: Option<&mut CancelMeter<'_>>,
+        meter: &mut impl Meter,
     ) -> Result<CenteringWorkspace, CmgError> {
         CenteringWorkspace::try_new(self.sizes.len(), meter)
     }
@@ -373,10 +277,89 @@ impl CenteringPlan {
         )
     }
 
-    pub(crate) fn center_in_place_with_workspace(
+    /// Remove each component's compensated mean from every lane.
+    ///
+    /// Each lane sums its component's values in ascending vertex order with
+    /// Neumaier compensation, divides `sum + correction` by the component size
+    /// and subtracts the mean. A non-finite value is reported before any value
+    /// is changed.
+    pub(crate) fn center_lanes<W: Width, M: Meter>(
         &self,
         values: &mut [f64],
-        workspace: &mut CenteringWorkspace,
+        width: W,
+        sums: &mut [f64],
+        corrections: &mut [f64],
+        means: &mut [f64],
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        let columns = width.get();
+        if values.len() != self.vertex_count * columns {
+            return Err(CmgError::dimension(
+                "CenteringPlan::center_in_place",
+                self.vertex_count * columns,
+                values.len(),
+            ));
+        }
+        let slots = self.sizes.len() * columns;
+        for (context, actual) in [
+            ("CenteringWorkspace sums", sums.len()),
+            ("CenteringWorkspace corrections", corrections.len()),
+            ("CenteringWorkspace means", means.len()),
+        ] {
+            if actual != slots {
+                return Err(CmgError::dimension(context, slots, actual));
+            }
+        }
+        match &self.labels {
+            CenteringLabels::Single => center_labeled(
+                |_| 0,
+                values,
+                columns,
+                &self.sizes,
+                sums,
+                corrections,
+                means,
+                meter,
+            ),
+            CenteringLabels::Compact(labels) => center_labeled(
+                |vertex| labels[vertex] as usize,
+                values,
+                columns,
+                &self.sizes,
+                sums,
+                corrections,
+                means,
+                meter,
+            ),
+            CenteringLabels::Native(labels) => center_labeled(
+                |vertex| labels[vertex],
+                values,
+                columns,
+                &self.sizes,
+                sums,
+                corrections,
+                means,
+                meter,
+            ),
+        }
+    }
+
+    /// Whether a scalar planned cycle centers this level with the team's
+    /// fixed-chunk reduction: one component above the reduction threshold.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn uses_team_centering(&self, length: usize, team: Team<'_>) -> bool {
+        matches!(self.labels, CenteringLabels::Single) && should_parallel_centering(length, team)
+    }
+
+    /// Center one component with fixed-chunk team sums (see
+    /// [`Self::uses_team_centering`]).
+    #[cfg(feature = "parallel")]
+    pub(crate) fn center_single_with_team<M: Meter>(
+        &self,
+        values: &mut [f64],
+        means: &mut [f64],
+        team: Team<'_>,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
         if values.len() != self.vertex_count {
             return Err(CmgError::dimension(
@@ -385,112 +368,75 @@ impl CenteringPlan {
                 values.len(),
             ));
         }
-        workspace.validate(self.sizes.len())?;
-        workspace.sums.fill(0.0);
-        workspace.corrections.fill(0.0);
-
-        match &self.labels {
-            CenteringLabels::Single => {
-                if !self.sizes.is_empty() {
-                    let mut sum = 0.0;
-                    let mut correction = 0.0;
-                    for (vertex, value) in values.iter().enumerate() {
-                        if !value.is_finite() {
-                            return Err(CmgError::NonFiniteMatrixValue {
-                                row: vertex,
-                                column: 0,
-                                value: *value,
-                            });
-                        }
-                        neumaier_add(&mut sum, &mut correction, *value);
-                    }
-                    workspace.sums[0] = sum;
-                    workspace.corrections[0] = correction;
-                }
-            }
-            CenteringLabels::Compact(labels) => {
-                for (vertex, (value, label)) in values.iter().zip(labels).enumerate() {
-                    if !value.is_finite() {
-                        return Err(CmgError::NonFiniteMatrixValue {
-                            row: vertex,
-                            column: 0,
-                            value: *value,
-                        });
-                    }
-                    let label = *label as usize;
-                    neumaier_add(
-                        &mut workspace.sums[label],
-                        &mut workspace.corrections[label],
-                        *value,
-                    );
-                }
-            }
-            CenteringLabels::Native(labels) => {
-                for (vertex, (value, label)) in values.iter().zip(labels).enumerate() {
-                    if !value.is_finite() {
-                        return Err(CmgError::NonFiniteMatrixValue {
-                            row: vertex,
-                            column: 0,
-                            value: *value,
-                        });
-                    }
-                    neumaier_add(
-                        &mut workspace.sums[*label],
-                        &mut workspace.corrections[*label],
-                        *value,
-                    );
-                }
-            }
+        if means.len() != self.sizes.len() {
+            return Err(CmgError::dimension(
+                "CenteringWorkspace means",
+                self.sizes.len(),
+                means.len(),
+            ));
         }
+        center_single_component(values, &self.sizes, means, team, meter)
+    }
+}
 
-        for component in 0..self.sizes.len() {
-            workspace.sums[component] += workspace.corrections[component];
-            workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
-        }
-        match &self.labels {
-            CenteringLabels::Single => {
-                if let Some(mean) = workspace.means.first() {
-                    for value in values {
-                        *value -= *mean;
-                    }
+/// The compensated per-lane centering of [`CenteringPlan::center_lanes`].
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn center_labeled<M: Meter>(
+    label: impl Fn(usize) -> usize,
+    values: &mut [f64],
+    columns: usize,
+    sizes: &[usize],
+    sums: &mut [f64],
+    corrections: &mut [f64],
+    means: &mut [f64],
+    meter: &mut M,
+) -> Result<(), CmgError> {
+    crate::cancel::zero(meter, "CMG centering", sums)?;
+    crate::cancel::zero(meter, "CMG centering", corrections)?;
+    let vertices = values.len() / columns;
+    chunked(meter, "CMG centering sums", vertices, columns, |range| {
+        for vertex in range {
+            let component = label(vertex);
+            for lane in 0..columns {
+                let value = values[vertex * columns + lane];
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: vertex,
+                        column: lane,
+                        value,
+                    });
                 }
-            }
-            CenteringLabels::Compact(labels) => {
-                for (value, label) in values.iter_mut().zip(labels) {
-                    *value -= workspace.means[*label as usize];
-                }
-            }
-            CenteringLabels::Native(labels) => {
-                for (value, label) in values.iter_mut().zip(labels) {
-                    *value -= workspace.means[*label];
-                }
+                let slot = component * columns + lane;
+                neumaier_add(&mut sums[slot], &mut corrections[slot], value);
             }
         }
         Ok(())
-    }
-
-    #[cfg(feature = "parallel")]
-    pub(crate) fn center_in_place_with_workspace_and_executor(
-        &self,
-        values: &mut [f64],
-        workspace: &mut CenteringWorkspace,
-        executor: &ParallelExecutor,
-    ) -> Result<(), CmgError> {
-        if !matches!(self.labels, CenteringLabels::Single)
-            || !should_parallel_centering(values.len(), executor)
-        {
-            return self.center_in_place_with_workspace(values, workspace);
+    })?;
+    chunked(
+        meter,
+        "CMG centering means",
+        sizes.len(),
+        columns,
+        |range| {
+            for component in range {
+                for lane in 0..columns {
+                    let slot = component * columns + lane;
+                    means[slot] = (sums[slot] + corrections[slot]) / sizes[component] as f64;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    chunked(meter, "CMG centering", vertices, columns, |range| {
+        for vertex in range {
+            let component = label(vertex);
+            for lane in 0..columns {
+                values[vertex * columns + lane] -= means[component * columns + lane];
+            }
         }
-        if values.len() != self.vertex_count {
-            return Err(CmgError::dimension(
-                "CenteringPlan::center_in_place",
-                self.vertex_count,
-                values.len(),
-            ));
-        }
-        workspace.validate(self.sizes.len())?;
-        center_single_component(values, &self.sizes, &mut workspace.means, executor)
-    }
+        Ok(())
+    })
 }
 
 /// Connected-component metadata for a weighted graph.
@@ -515,99 +461,20 @@ impl Components {
     /// on edge input order.
     #[must_use]
     pub fn from_laplacian(graph: &Laplacian) -> Self {
-        let vertex_count = graph.vertex_count();
-        let mut parent: Vec<usize> = (0..vertex_count).collect();
-        for edge in graph.edges() {
-            union_min_root(&mut parent, edge.u(), edge.v());
-        }
-        for vertex in 0..vertex_count {
-            let root = find_root(&mut parent, vertex);
-            parent[vertex] = root;
-        }
-
-        let mut root_to_label = vec![usize::MAX; vertex_count];
-        let mut labels = vec![0; vertex_count];
-        let mut sizes = Vec::new();
-        for vertex in 0..vertex_count {
-            let root = parent[vertex];
-            let label = if root_to_label[root] == usize::MAX {
-                let next = sizes.len();
-                root_to_label[root] = next;
-                sizes.push(0);
-                next
-            } else {
-                root_to_label[root]
-            };
-            labels[vertex] = label;
-            sizes[label] += 1;
-        }
-        Self {
-            #[cfg(feature = "experimental-components")]
-            contiguous: labels.is_sorted(),
-            #[cfg(not(feature = "experimental-components"))]
-            labels,
-            #[cfg(feature = "experimental-components")]
-            labels: labels.into_boxed_slice(),
-            sizes,
-        }
+        Self::from_endpoints(
+            graph.vertex_count(),
+            graph.edges().iter().map(|edge| (edge.u(), edge.v())),
+            &mut Unmetered,
+        )
+        .expect("component label allocation")
     }
 
-    pub(crate) fn try_from_endpoints<I>(vertex_count: usize, endpoints: I) -> Result<Self, CmgError>
-    where
-        I: IntoIterator<Item = (usize, usize)>,
-    {
-        let mut parent = Vec::new();
-        parent
-            .try_reserve_exact(vertex_count)
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "prepared component parents",
-            })?;
-        parent.extend(0..vertex_count);
-        for (left, right) in endpoints {
-            union_min_root(&mut parent, left, right);
-        }
-        for vertex in 0..vertex_count {
-            let root = find_root(&mut parent, vertex);
-            parent[vertex] = root;
-        }
-
-        let mut root_to_label =
-            try_filled(vertex_count, usize::MAX, "prepared component root labels")?;
-        let mut labels = try_filled(vertex_count, 0, "prepared component labels")?;
-        let mut component_count = 0;
-        for vertex in 0..vertex_count {
-            let root = parent[vertex];
-            let label = if root_to_label[root] == usize::MAX {
-                let next = component_count;
-                component_count += 1;
-                root_to_label[root] = next;
-                next
-            } else {
-                root_to_label[root]
-            };
-            labels[vertex] = label;
-        }
-        let mut sizes = try_filled(component_count, 0, "prepared component sizes")?;
-        for &label in &labels {
-            sizes[label] += 1;
-        }
-        Ok(Self {
-            #[cfg(feature = "experimental-components")]
-            contiguous: labels.is_sorted(),
-            #[cfg(not(feature = "experimental-components"))]
-            labels,
-            #[cfg(feature = "experimental-components")]
-            labels: labels.into_boxed_slice(),
-            sizes,
-        })
-    }
-
-    /// Discover components with bounded work and allocation checkpoints.
-    #[cfg(feature = "experimental-components")]
-    pub(crate) fn try_from_endpoints_controlled<I>(
+    /// Union-find components in first-vertex label order, with bounded
+    /// counted operations and allocation checkpoints when metered.
+    pub(crate) fn from_endpoints<M: Meter, I>(
         vertex_count: usize,
         endpoints: I,
-        meter: &mut CancelMeter<'_>,
+        meter: &mut M,
     ) -> Result<Self, CmgError>
     where
         I: IntoIterator<Item = (usize, usize)>,
@@ -619,15 +486,15 @@ impl Components {
         }
         for (left, right) in endpoints {
             meter.work("component union", 32)?;
-            let left_root = find_root_controlled(&mut parent, left, meter)?;
-            let right_root = find_root_controlled(&mut parent, right, meter)?;
+            let left_root = find_root(&mut parent, left, meter)?;
+            let right_root = find_root(&mut parent, right, meter)?;
             if left_root != right_root {
                 parent[left_root.max(right_root)] = left_root.min(right_root);
             }
         }
         for vertex in 0..vertex_count {
             meter.work("component compress", 8)?;
-            parent[vertex] = find_root_controlled(&mut parent, vertex, meter)?;
+            parent[vertex] = find_root(&mut parent, vertex, meter)?;
         }
         let mut root_to_label =
             meter.try_filled(vertex_count, usize::MAX, "component root labels")?;
@@ -661,9 +528,10 @@ impl Components {
             sorted
         };
         // An exact-capacity conversion does not allocate or traverse the bank.
-        // Refuse excess allocator capacity rather than hide a shrink/reallocation.
+        // A polling meter refuses excess allocator capacity rather than hide a
+        // shrink/reallocation.
         #[cfg(feature = "experimental-components")]
-        if labels.capacity() != labels.len() {
+        if M::POLLS && labels.capacity() != labels.len() {
             return Err(CmgError::AllocationFailed {
                 context: "component boxed labels capacity",
             });
@@ -677,6 +545,14 @@ impl Components {
             labels: labels.into_boxed_slice(),
             sizes,
         })
+    }
+
+    #[cfg(all(test, feature = "experimental-components"))]
+    pub(crate) fn try_from_endpoints(
+        vertex_count: usize,
+        endpoints: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Result<Self, CmgError> {
+        Self::from_endpoints(vertex_count, endpoints, &mut Unmetered)
     }
 
     /// Return the number of connected components.
@@ -703,7 +579,7 @@ impl Components {
 
     pub(crate) fn try_workspace(
         &self,
-        meter: Option<&mut CancelMeter<'_>>,
+        meter: &mut impl Meter,
     ) -> Result<ComponentWorkspace, CmgError> {
         ComponentWorkspace::try_new(self.count(), meter)
     }
@@ -735,6 +611,7 @@ impl Components {
             "Components::sums",
             &mut workspace.sums,
             &mut workspace.corrections,
+            &mut Unmetered,
         )?;
         Ok(workspace.sums)
     }
@@ -742,20 +619,15 @@ impl Components {
     /// Verify that a right-hand side is numerically compatible with every
     /// component null space.
     pub fn validate_rhs(&self, rhs: &[f64], options: ValidationOptions) -> Result<(), CmgError> {
-        let mut workspace = self.workspace();
-        self.validate_rhs_with_workspace(rhs, options, &mut workspace)
-    }
-
-    pub(crate) fn validate_rhs_with_workspace(
-        &self,
-        rhs: &[f64],
-        options: ValidationOptions,
-        workspace: &mut ComponentWorkspace,
-    ) -> Result<(), CmgError> {
         let options = options.validate()?;
-        workspace.validate(self.count())?;
-        self.compatibility_data_into(rhs, "Components::validate_rhs", workspace)?;
-        self.validate_component_sums(&workspace.sums, &workspace.scales, options)
+        let mut workspace = self.workspace();
+        self.compatibility_data_into(
+            rhs,
+            "Components::validate_rhs",
+            &mut workspace,
+            &mut Unmetered,
+        )?;
+        self.validate_component_sums(&workspace.sums, &workspace.scales, options, &mut Unmetered)
     }
 
     /// Project accepted floating-point compatibility defects onto the exact
@@ -773,83 +645,100 @@ impl Components {
         options: ValidationOptions,
     ) -> Result<f64, CmgError> {
         let mut workspace = self.workspace();
-        self.project_rhs_in_place_with_workspace(rhs, options, &mut workspace)
+        self.project_rhs_in_place_with_workspace(rhs, options, &mut workspace, &mut Unmetered)
     }
 
-    pub(crate) fn project_rhs_in_place_with_workspace(
+    pub(crate) fn project_rhs_in_place_with_workspace<M: Meter>(
         &self,
         rhs: &mut [f64],
         options: ValidationOptions,
         workspace: &mut ComponentWorkspace,
+        meter: &mut M,
     ) -> Result<f64, CmgError> {
+        const PHASE: &str = "Components::project_rhs_in_place";
         let options = options.validate()?;
         workspace.validate(self.count())?;
-        self.compatibility_data_into(rhs, "Components::project_rhs_in_place", workspace)?;
-        self.validate_component_sums(&workspace.sums, &workspace.scales, options)?;
+        self.compatibility_data_into(rhs, PHASE, workspace, meter)?;
+        self.validate_component_sums(&workspace.sums, &workspace.scales, options, meter)?;
 
-        for component in 0..self.count() {
-            workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
-        }
-        for (value, label) in rhs.iter_mut().zip(&self.labels) {
-            *value -= workspace.means[*label];
-        }
-
-        self.stable_representatives_into(rhs, &mut workspace.representatives);
-        workspace.projection_corrections.fill(0.0);
-        for _ in 0..2 {
-            self.compensated_sums_into(
-                rhs,
-                "Components::project_rhs_in_place",
-                &mut workspace.sums,
-                &mut workspace.corrections,
-            )?;
-            for component in 0..self.count() {
-                let residual_sum = workspace.sums[component];
-                rhs[workspace.representatives[component]] -= residual_sum;
-                workspace.projection_corrections[component] += residual_sum;
+        let ComponentWorkspace {
+            sums,
+            corrections,
+            means,
+            projection_corrections,
+            representatives,
+            ..
+        } = workspace;
+        chunked(meter, PHASE, self.count(), 1, |range| {
+            for component in range {
+                means[component] = sums[component] / self.sizes[component] as f64;
             }
+            Ok(())
+        })?;
+        chunked(meter, PHASE, rhs.len(), 1, |range| {
+            for vertex in range {
+                rhs[vertex] -= means[self.labels[vertex]];
+            }
+            Ok(())
+        })?;
+
+        self.stable_representatives_into(rhs, representatives, meter)?;
+        crate::cancel::zero(meter, PHASE, projection_corrections)?;
+        for _ in 0..2 {
+            self.compensated_sums_into(rhs, PHASE, sums, corrections, meter)?;
+            chunked(meter, PHASE, self.count(), 1, |range| {
+                for component in range {
+                    let residual_sum = sums[component];
+                    rhs[representatives[component]] -= residual_sum;
+                    projection_corrections[component] += residual_sum;
+                }
+                Ok(())
+            })?;
         }
 
-        let projection_scale = workspace
-            .means
-            .iter()
-            .zip(&workspace.projection_corrections)
-            .flat_map(|(mean, correction)| [mean.abs(), (*mean + *correction).abs()])
-            .fold(0.0, f64::max);
+        let mut projection_scale = 0.0_f64;
+        chunked(meter, PHASE, self.count(), 2, |range| {
+            for component in range {
+                let mean = means[component];
+                projection_scale = projection_scale.max(mean.abs());
+                projection_scale =
+                    projection_scale.max((mean + projection_corrections[component]).abs());
+            }
+            Ok(())
+        })?;
         if projection_scale == 0.0 {
             return Ok(0.0);
         }
-        let projection_squared = workspace
-            .means
-            .iter()
-            .zip(&workspace.projection_corrections)
-            .zip(&self.sizes)
-            .map(|((mean, correction), size)| {
-                let regular = *mean / projection_scale;
-                let representative = (*mean + *correction) / projection_scale;
-                (*size - 1) as f64 * regular * regular + representative * representative
-            })
-            .sum::<f64>();
+        // Continue the standard floating-point sum in component order.
+        let mut projection_squared = core::iter::empty::<f64>().sum::<f64>();
+        chunked(meter, PHASE, self.count(), 2, |range| {
+            for component in range {
+                let mean = means[component];
+                let regular = mean / projection_scale;
+                let representative = (mean + projection_corrections[component]) / projection_scale;
+                projection_squared += (self.sizes[component] - 1) as f64 * regular * regular
+                    + representative * representative;
+            }
+            Ok(())
+        })?;
         Ok(projection_scale * projection_squared.sqrt())
     }
 
     /// Subtract the mean within every component in place.
     pub fn center_in_place(&self, values: &mut [f64]) -> Result<(), CmgError> {
         let mut workspace = self.workspace();
-        self.center_in_place_with_workspace(values, &mut workspace)
+        self.center_in_place_with_workspace(values, &mut workspace, &mut Unmetered)
     }
 
-    pub(crate) fn center_in_place_with_workspace(
+    pub(crate) fn center_in_place_with_workspace<M: Meter>(
         &self,
         values: &mut [f64],
         workspace: &mut ComponentWorkspace,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
+        const PHASE: &str = "Components::center_in_place";
         if values.len() != self.labels.len() {
-            return Err(CmgError::dimension(
-                "Components::center_in_place",
-                self.labels.len(),
-                values.len(),
-            ));
+            return Err(CmgError::dimension(PHASE, self.labels.len(), values.len()));
         }
         workspace.validate(self.count())?;
         #[cfg(feature = "experimental-components")]
@@ -857,56 +746,84 @@ impl Components {
             // Every component occupies one slice in label order. Accumulate in
             // registers and subtract one constant per slice, preserving the
             // existing vertex order within each compensated sum.
+            self.contiguous_means(values, workspace, meter)?;
+            // Complete all finite-value checks before mutating the input, as
+            // the general labeled path does on an error.
             let mut start = 0;
-            for (component, &size) in self.sizes.iter().enumerate() {
-                let end = start + size;
-                let mut sum = 0.0;
-                let mut correction = 0.0;
-                for (offset, &value) in values[start..end].iter().enumerate() {
+            for (&size, &mean) in self.sizes.iter().zip(&workspace.means) {
+                let component = &mut values[start..start + size];
+                chunked(meter, PHASE, size, 1, |range| {
+                    for value in &mut component[range] {
+                        *value -= mean;
+                    }
+                    Ok(())
+                })?;
+                start += size;
+            }
+            return Ok(());
+        }
+        let ComponentWorkspace {
+            sums,
+            corrections,
+            means,
+            ..
+        } = workspace;
+        self.compensated_sums_into(values, PHASE, sums, corrections, meter)?;
+        chunked(meter, PHASE, self.count(), 1, |range| {
+            for component in range {
+                means[component] = sums[component] / self.sizes[component] as f64;
+            }
+            Ok(())
+        })?;
+        if self.count() == 1 {
+            let mean = means[0];
+            chunked(meter, PHASE, values.len(), 1, |range| {
+                for value in &mut values[range] {
+                    *value -= mean;
+                }
+                Ok(())
+            })
+        } else {
+            chunked(meter, PHASE, values.len(), 1, |range| {
+                for vertex in range {
+                    values[vertex] -= means[self.labels[vertex]];
+                }
+                Ok(())
+            })
+        }
+    }
+
+    /// Per-slice compensated sums and means of contiguous components; every
+    /// value is checked before the caller mutates any.
+    #[cfg(feature = "experimental-components")]
+    fn contiguous_means<M: Meter>(
+        &self,
+        values: &[f64],
+        workspace: &mut ComponentWorkspace,
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        let mut start = 0;
+        for (component, &size) in self.sizes.iter().enumerate() {
+            let mut sum = 0.0;
+            let mut correction = 0.0;
+            chunked(meter, "Components::center_in_place", size, 1, |range| {
+                let first = range.start + start;
+                for (offset, &value) in values[first..range.end + start].iter().enumerate() {
                     if !value.is_finite() {
                         return Err(CmgError::NonFiniteMatrixValue {
-                            row: start + offset,
+                            row: first + offset,
                             column: 0,
                             value,
                         });
                     }
                     neumaier_add(&mut sum, &mut correction, value);
                 }
-                workspace.sums[component] = sum + correction;
-                workspace.corrections[component] = correction;
-                workspace.means[component] = workspace.sums[component] / size as f64;
-                start = end;
-            }
-            // Complete all finite-value checks before mutating the input, as
-            // the general labeled path does on an error.
-            let mut remaining = values;
-            for (&size, &mean) in self.sizes.iter().zip(&workspace.means) {
-                let (component, tail) = remaining.split_at_mut(size);
-                for value in component {
-                    *value -= mean;
-                }
-                remaining = tail;
-            }
-            return Ok(());
-        }
-        self.compensated_sums_into(
-            values,
-            "Components::center_in_place",
-            &mut workspace.sums,
-            &mut workspace.corrections,
-        )?;
-        for component in 0..self.count() {
-            workspace.means[component] = workspace.sums[component] / self.sizes[component] as f64;
-        }
-        if self.count() == 1 {
-            let mean = workspace.means[0];
-            for value in values {
-                *value -= mean;
-            }
-        } else {
-            for (value, label) in values.iter_mut().zip(&self.labels) {
-                *value -= workspace.means[*label];
-            }
+                Ok(())
+            })?;
+            workspace.sums[component] = sum + correction;
+            workspace.corrections[component] = correction;
+            workspace.means[component] = workspace.sums[component] / size as f64;
+            start += size;
         }
         Ok(())
     }
@@ -914,18 +831,16 @@ impl Components {
     /// Center a vector and accumulate its dot product with `left` in vertex order.
     /// All input checks finish before the first centered value is written.
     #[cfg(feature = "experimental-components")]
-    pub(crate) fn center_and_dot_with_workspace(
+    pub(crate) fn center_and_dot_with_workspace<M: Meter>(
         &self,
         values: &mut [f64],
         left: &[f64],
         workspace: &mut ComponentWorkspace,
+        meter: &mut M,
     ) -> Result<f64, CmgError> {
+        const PHASE: &str = "Components::center_in_place";
         if values.len() != self.labels.len() {
-            return Err(CmgError::dimension(
-                "Components::center_in_place",
-                self.labels.len(),
-                values.len(),
-            ));
+            return Err(CmgError::dimension(PHASE, self.labels.len(), values.len()));
         }
         if left.len() != values.len() {
             return Err(CmgError::dimension(
@@ -936,102 +851,123 @@ impl Components {
         }
         workspace.validate(self.count())?;
         if self.contiguous {
-            let mut start = 0;
-            for (component, &size) in self.sizes.iter().enumerate() {
-                let end = start + size;
-                let mut sum = 0.0;
-                let mut correction = 0.0;
-                for (offset, &value) in values[start..end].iter().enumerate() {
-                    if !value.is_finite() {
-                        return Err(CmgError::NonFiniteMatrixValue {
-                            row: start + offset,
-                            column: 0,
-                            value,
-                        });
-                    }
-                    neumaier_add(&mut sum, &mut correction, value);
-                }
-                workspace.sums[component] = sum + correction;
-                workspace.corrections[component] = correction;
-                workspace.means[component] = workspace.sums[component] / size as f64;
-                start = end;
-            }
+            self.contiguous_means(values, workspace, meter)?;
         } else {
-            self.compensated_sums_into(
-                values,
-                "Components::center_in_place",
-                &mut workspace.sums,
-                &mut workspace.corrections,
-            )?;
-            for component in 0..self.count() {
-                workspace.means[component] =
-                    workspace.sums[component] / self.sizes[component] as f64;
-            }
+            let ComponentWorkspace {
+                sums,
+                corrections,
+                means,
+                ..
+            } = workspace;
+            self.compensated_sums_into(values, PHASE, sums, corrections, meter)?;
+            chunked(meter, PHASE, self.count(), 1, |range| {
+                for component in range {
+                    means[component] = sums[component] / self.sizes[component] as f64;
+                }
+                Ok(())
+            })?;
         }
 
         let mut sum = 0.0;
         let mut correction = 0.0;
         if self.contiguous {
-            let mut remaining = values;
-            let mut left_remaining = left;
+            let mut start = 0;
             for (&size, &mean) in self.sizes.iter().zip(&workspace.means) {
-                let (component, tail) = remaining.split_at_mut(size);
-                let (left_component, left_tail) = left_remaining.split_at(size);
-                for (value, &left) in component.iter_mut().zip(left_component) {
-                    *value -= mean;
-                    crate::graph::compensated_add(&mut sum, &mut correction, left * *value);
-                }
-                remaining = tail;
-                left_remaining = left_tail;
+                chunked(meter, PHASE, size, 2, |range| {
+                    for vertex in range.start + start..range.end + start {
+                        values[vertex] -= mean;
+                        crate::graph::compensated_add(
+                            &mut sum,
+                            &mut correction,
+                            left[vertex] * values[vertex],
+                        );
+                    }
+                    Ok(())
+                })?;
+                start += size;
             }
         } else {
-            for ((value, &label), &left) in values.iter_mut().zip(&self.labels).zip(left) {
-                *value -= workspace.means[label];
-                crate::graph::compensated_add(&mut sum, &mut correction, left * *value);
-            }
+            let means = &workspace.means;
+            chunked(meter, PHASE, values.len(), 2, |range| {
+                for vertex in range {
+                    values[vertex] -= means[self.labels[vertex]];
+                    crate::graph::compensated_add(
+                        &mut sum,
+                        &mut correction,
+                        left[vertex] * values[vertex],
+                    );
+                }
+                Ok(())
+            })?;
         }
         Ok(sum + correction)
     }
 
-    #[cfg(feature = "parallel")]
-    pub(crate) fn center_in_place_with_workspace_and_executor(
+    /// Center in place, using fixed-chunk team sums for one component above
+    /// the team's reduction threshold and compensated serial sums otherwise.
+    pub(crate) fn center_with_team<M: Meter>(
         &self,
         values: &mut [f64],
         workspace: &mut ComponentWorkspace,
-        executor: &ParallelExecutor,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        if self.count() != 1 || !should_parallel_centering(values.len(), executor) {
-            return self.center_in_place_with_workspace(values, workspace);
-        }
-        if values.len() != self.labels.len() {
-            return Err(CmgError::dimension(
-                "Components::center_in_place",
-                self.labels.len(),
-                values.len(),
-            ));
-        }
-        workspace.validate(self.count())?;
-        center_single_component(values, &self.sizes, &mut workspace.means, executor)
-    }
-
-    fn stable_representatives_into(&self, values: &[f64], representatives: &mut [usize]) {
-        representatives.fill(usize::MAX);
-        for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
-            let current = representatives[*label];
-            if current == usize::MAX
-                || value.abs() < values[current].abs()
-                || (value.abs() == values[current].abs() && vertex < current)
-            {
-                representatives[*label] = vertex;
+        #[cfg(feature = "parallel")]
+        if let Some(team) = team {
+            if self.count() == 1 && should_parallel_centering(values.len(), team) {
+                if values.len() != self.labels.len() {
+                    return Err(CmgError::dimension(
+                        "Components::center_in_place",
+                        self.labels.len(),
+                        values.len(),
+                    ));
+                }
+                workspace.validate(self.count())?;
+                return center_single_component(
+                    values,
+                    &self.sizes,
+                    &mut workspace.means,
+                    team,
+                    meter,
+                );
             }
         }
+        self.center_in_place_with_workspace(values, workspace, meter)
     }
 
-    fn compatibility_data_into(
+    fn stable_representatives_into<M: Meter>(
+        &self,
+        values: &[f64],
+        representatives: &mut [usize],
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        const PHASE: &str = "Components representatives";
+        chunked(meter, PHASE, representatives.len(), 1, |range| {
+            representatives[range].fill(usize::MAX);
+            Ok(())
+        })?;
+        chunked(meter, PHASE, values.len(), 2, |range| {
+            for vertex in range {
+                let value = values[vertex];
+                let label = self.labels[vertex];
+                let current = representatives[label];
+                if current == usize::MAX
+                    || value.abs() < values[current].abs()
+                    || (value.abs() == values[current].abs() && vertex < current)
+                {
+                    representatives[label] = vertex;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn compatibility_data_into<M: Meter>(
         &self,
         values: &[f64],
         context: &'static str,
         workspace: &mut ComponentWorkspace,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
         if values.len() != self.labels.len() {
             return Err(CmgError::dimension(
@@ -1040,61 +976,85 @@ impl Components {
                 values.len(),
             ));
         }
-        workspace.sums.fill(0.0);
-        workspace.corrections.fill(0.0);
-        workspace.scales.fill(0.0);
-        workspace.scale_corrections.fill(0.0);
-        for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
-            if !value.is_finite() {
-                return Err(CmgError::NonFiniteMatrixValue {
-                    row: vertex,
-                    column: 0,
-                    value: *value,
-                });
+        let ComponentWorkspace {
+            sums,
+            corrections,
+            scales,
+            scale_corrections,
+            ..
+        } = workspace;
+        for bank in [
+            &mut *sums,
+            &mut *corrections,
+            &mut *scales,
+            &mut *scale_corrections,
+        ] {
+            crate::cancel::zero(meter, context, bank)?;
+        }
+        chunked(meter, context, values.len(), 2, |range| {
+            for vertex in range {
+                let value = values[vertex];
+                let label = self.labels[vertex];
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: vertex,
+                        column: 0,
+                        value,
+                    });
+                }
+                neumaier_add(&mut sums[label], &mut corrections[label], value);
+                neumaier_add(
+                    &mut scales[label],
+                    &mut scale_corrections[label],
+                    value.abs(),
+                );
             }
-            neumaier_add(
-                &mut workspace.sums[*label],
-                &mut workspace.corrections[*label],
-                *value,
-            );
-            neumaier_add(
-                &mut workspace.scales[*label],
-                &mut workspace.scale_corrections[*label],
-                value.abs(),
-            );
-        }
-        for component in 0..self.count() {
-            workspace.sums[component] += workspace.corrections[component];
-            workspace.scales[component] += workspace.scale_corrections[component];
-        }
-        Ok(())
+            Ok(())
+        })?;
+        chunked(meter, context, self.count(), 2, |range| {
+            for component in range {
+                sums[component] += corrections[component];
+                scales[component] += scale_corrections[component];
+            }
+            Ok(())
+        })
     }
 
-    fn validate_component_sums(
+    fn validate_component_sums<M: Meter>(
         &self,
         sums: &[f64],
         scales: &[f64],
         options: ValidationOptions,
+        meter: &mut M,
     ) -> Result<(), CmgError> {
-        for component in 0..self.count() {
-            let tolerance = options.compatibility_tolerance * scales[component].max(1.0);
-            if sums[component].abs() > tolerance {
-                return Err(CmgError::IncompatibleLaplacianRhs {
-                    component,
-                    sum: sums[component],
-                    tolerance,
-                });
-            }
-        }
-        Ok(())
+        chunked(
+            meter,
+            "Components compatibility",
+            self.count(),
+            1,
+            |range| {
+                for component in range {
+                    let tolerance = options.compatibility_tolerance * scales[component].max(1.0);
+                    if sums[component].abs() > tolerance {
+                        return Err(CmgError::IncompatibleLaplacianRhs {
+                            component,
+                            sum: sums[component],
+                            tolerance,
+                        });
+                    }
+                }
+                Ok(())
+            },
+        )
     }
 
-    fn compensated_sums_into(
+    fn compensated_sums_into<M: Meter>(
         &self,
         values: &[f64],
         context: &'static str,
         sums: &mut [f64],
         corrections: &mut [f64],
+        meter: &mut M,
     ) -> Result<(), CmgError> {
         if values.len() != self.labels.len() {
             return Err(CmgError::dimension(
@@ -1113,80 +1073,95 @@ impl Components {
                 corrections.len(),
             ));
         }
-        sums.fill(0.0);
-        corrections.fill(0.0);
+        crate::cancel::zero(meter, context, sums)?;
+        crate::cancel::zero(meter, context, corrections)?;
         if self.count() == 1 {
             let mut sum = 0.0;
             let mut correction = 0.0;
-            for (vertex, value) in values.iter().enumerate() {
-                if !value.is_finite() {
-                    return Err(CmgError::NonFiniteMatrixValue {
-                        row: vertex,
-                        column: 0,
-                        value: *value,
-                    });
+            chunked(meter, context, values.len(), 1, |range| {
+                for vertex in range {
+                    let value = values[vertex];
+                    if !value.is_finite() {
+                        return Err(CmgError::NonFiniteMatrixValue {
+                            row: vertex,
+                            column: 0,
+                            value,
+                        });
+                    }
+                    neumaier_add(&mut sum, &mut correction, value);
                 }
-                neumaier_add(&mut sum, &mut correction, *value);
-            }
+                Ok(())
+            })?;
             sums[0] = sum + correction;
             corrections[0] = correction;
             return Ok(());
         }
-        for (vertex, (value, label)) in values.iter().zip(&self.labels).enumerate() {
-            if !value.is_finite() {
-                return Err(CmgError::NonFiniteMatrixValue {
-                    row: vertex,
-                    column: 0,
-                    value: *value,
-                });
+        chunked(meter, context, values.len(), 1, |range| {
+            for vertex in range {
+                let value = values[vertex];
+                if !value.is_finite() {
+                    return Err(CmgError::NonFiniteMatrixValue {
+                        row: vertex,
+                        column: 0,
+                        value,
+                    });
+                }
+                let label = self.labels[vertex];
+                neumaier_add(&mut sums[label], &mut corrections[label], value);
             }
-            neumaier_add(&mut sums[*label], &mut corrections[*label], *value);
-        }
-        for component in 0..self.count() {
-            sums[component] += corrections[component];
-        }
-        Ok(())
+            Ok(())
+        })?;
+        chunked(meter, context, self.count(), 1, |range| {
+            for component in range {
+                sums[component] += corrections[component];
+            }
+            Ok(())
+        })
     }
 }
 
-fn try_filled<T: Clone>(len: usize, value: T, context: &'static str) -> Result<Vec<T>, CmgError> {
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(len)
-        .map_err(|_| CmgError::AllocationFailed { context })?;
-    values.resize(len, value);
-    Ok(values)
-}
-
 #[cfg(feature = "parallel")]
-fn should_parallel_centering(length: usize, executor: &ParallelExecutor) -> bool {
-    let options = executor.options();
+fn should_parallel_centering(length: usize, team: Team<'_>) -> bool {
+    let options = team.options();
     let parallel_floor = options
         .min_parallel_len
         .max(options.reduction_chunk_size.saturating_mul(8));
-    executor.thread_count() > 1 && length >= parallel_floor
+    team.worker_ceiling() > 1 && length >= parallel_floor
 }
 
+/// One-component centering with fixed-chunk team sums. Lanes poll the meter's
+/// query; the coordinator polls after each join, before values change.
 #[cfg(feature = "parallel")]
-fn center_single_component(
+fn center_single_component<M: Meter>(
     values: &mut [f64],
     sizes: &[usize],
     means: &mut [f64],
-    executor: &ParallelExecutor,
+    team: Team<'_>,
+    meter: &mut M,
 ) -> Result<(), CmgError> {
     let Some(&size) = sizes.first() else {
         return Ok(());
     };
-    let chunk_size = executor.options().reduction_chunk_size;
-    let sum = executor.install(|| fixed_chunk_sum(values, chunk_size))?;
+    let chunk_size = team.options().reduction_chunk_size;
+    let query = meter.query();
+    let sum = team.install(|| fixed_chunk_sum(values, chunk_size, query))?;
+    meter.joined("CMG fixed-chunk centering sums")?;
     let mean = sum / size as f64;
     means[0] = mean;
-    executor.install(|| values.par_iter_mut().for_each(|value| *value -= mean));
-    Ok(())
+    let query = meter.query();
+    crate::preconditioner::rows_parallel(team, query, values, 1, |_, value| value[0] -= mean);
+    meter.joined("CMG fixed-chunk centering")
 }
 
+/// Fixed-chunk compensated sum: chunk partials combined by a balanced join
+/// tree. Leaves check the query every 16 chunks and stop with a neutral sum
+/// once it is true; the joined caller then reports cancellation.
 #[cfg(feature = "parallel")]
-fn fixed_chunk_sum(values: &[f64], chunk_size: usize) -> Result<f64, CmgError> {
+fn fixed_chunk_sum(
+    values: &[f64],
+    chunk_size: usize,
+    query: Option<crate::Cancellation<'_>>,
+) -> Result<f64, CmgError> {
     let chunk_count = values.len().div_ceil(chunk_size);
     if chunk_count == 0 {
         return Ok(0.0);
@@ -1197,8 +1172,12 @@ fn fixed_chunk_sum(values: &[f64], chunk_size: usize) -> Result<f64, CmgError> {
         chunk_size: usize,
         first_chunk: usize,
         last_chunk: usize,
+        query: Option<crate::Cancellation<'_>>,
     ) -> Result<f64, CmgError> {
         if last_chunk - first_chunk == 1 {
+            if first_chunk % 16 == 0 && query.is_some_and(|cancel| cancel()) {
+                return Ok(0.0);
+            }
             let start = first_chunk * chunk_size;
             let end = values.len().min(start + chunk_size);
             let mut sum = 0.0;
@@ -1217,8 +1196,8 @@ fn fixed_chunk_sum(values: &[f64], chunk_size: usize) -> Result<f64, CmgError> {
         }
         let middle = first_chunk + (last_chunk - first_chunk) / 2;
         let (left, right) = rayon::join(
-            || reduce_range(values, chunk_size, first_chunk, middle),
-            || reduce_range(values, chunk_size, middle, last_chunk),
+            || reduce_range(values, chunk_size, first_chunk, middle, query),
+            || reduce_range(values, chunk_size, middle, last_chunk, query),
         );
         let mut sum = left?;
         let mut correction = 0.0;
@@ -1226,7 +1205,7 @@ fn fixed_chunk_sum(values: &[f64], chunk_size: usize) -> Result<f64, CmgError> {
         Ok(sum + correction)
     }
 
-    reduce_range(values, chunk_size, 0, chunk_count)
+    reduce_range(values, chunk_size, 0, chunk_count, query)
 }
 
 fn neumaier_add(sum: &mut f64, correction: &mut f64, value: f64) {
@@ -1239,11 +1218,10 @@ fn neumaier_add(sum: &mut f64, correction: &mut f64, value: f64) {
     *sum = next;
 }
 
-#[cfg(feature = "experimental-components")]
-fn find_root_controlled(
+fn find_root<M: Meter>(
     parent: &mut [usize],
     vertex: usize,
-    meter: &mut CancelMeter<'_>,
+    meter: &mut M,
 ) -> Result<usize, CmgError> {
     let mut root = vertex;
     while parent[root] != root {
@@ -1260,37 +1238,10 @@ fn find_root_controlled(
     Ok(root)
 }
 
-fn find_root(parent: &mut [usize], vertex: usize) -> usize {
-    let mut root = vertex;
-    while parent[root] != root {
-        root = parent[root];
-    }
-    let mut current = vertex;
-    while parent[current] != current {
-        let next = parent[current];
-        parent[current] = root;
-        current = next;
-    }
-    root
-}
-
-fn union_min_root(parent: &mut [usize], left: usize, right: usize) {
-    let left_root = find_root(parent, left);
-    let right_root = find_root(parent, right);
-    if left_root == right_root {
-        return;
-    }
-    let (root, child) = if left_root < right_root {
-        (left_root, right_root)
-    } else {
-        (right_root, left_root)
-    };
-    parent[child] = root;
-}
-
 #[cfg(all(test, feature = "experimental-components"))]
 mod contiguous_tests {
     use super::{Components, Laplacian};
+    use crate::cancel::Unmetered;
 
     fn bits(values: &[f64]) -> Vec<u64> {
         values.iter().map(|value| value.to_bits()).collect()
@@ -1327,10 +1278,14 @@ mod contiguous_tests {
                 workspace.corrections.fill(f64::NAN);
                 workspace.means.fill(f64::NAN);
                 components
-                    .center_in_place_with_workspace(&mut actual, &mut workspace)
+                    .center_in_place_with_workspace(&mut actual, &mut workspace, &mut Unmetered)
                     .unwrap();
                 labeled
-                    .center_in_place_with_workspace(&mut expected, &mut reference_workspace)
+                    .center_in_place_with_workspace(
+                        &mut expected,
+                        &mut reference_workspace,
+                        &mut Unmetered,
+                    )
                     .unwrap();
                 assert_eq!(bits(&actual), bits(&expected));
                 assert_eq!(bits(&workspace.sums), bits(&reference_workspace.sums));
@@ -1359,7 +1314,7 @@ mod contiguous_tests {
             let mut input = vec![1.0, 3.0, 5.0, bad, bad, 0.0];
             let before = bits(&input);
             let error = components
-                .center_in_place_with_workspace(&mut input, &mut workspace)
+                .center_in_place_with_workspace(&mut input, &mut workspace, &mut Unmetered)
                 .unwrap_err();
             match error {
                 crate::CmgError::NonFiniteMatrixValue { row, column, value } => {
@@ -1372,7 +1327,7 @@ mod contiguous_tests {
             input[3] = 7.0;
             input[4] = 0.0;
             components
-                .center_in_place_with_workspace(&mut input, &mut workspace)
+                .center_in_place_with_workspace(&mut input, &mut workspace, &mut Unmetered)
                 .unwrap();
             assert_eq!(input, [-1.0, 1.0, -1.0, 1.0, 0.0, 0.0]);
         }
@@ -1382,6 +1337,7 @@ mod contiguous_tests {
 #[cfg(all(test, feature = "experimental-components"))]
 mod centered_dot_tests {
     use super::{ComponentWorkspace, Components, Laplacian};
+    use crate::cancel::Unmetered;
     use crate::{CmgError, graph::compensated_sum};
 
     fn bits(values: &[f64]) -> Vec<u64> {
@@ -1418,11 +1374,20 @@ mod centered_dot_tests {
                     workspace.corrections.fill(f64::NAN);
                     workspace.means.fill(f64::NAN);
                     components
-                        .center_in_place_with_workspace(&mut expected, &mut reference_workspace)
+                        .center_in_place_with_workspace(
+                            &mut expected,
+                            &mut reference_workspace,
+                            &mut Unmetered,
+                        )
                         .unwrap();
                     let reference = compensated_sum(left.iter().zip(&expected).map(|(a, b)| a * b));
                     let actual_dot = components
-                        .center_and_dot_with_workspace(&mut actual, &left, &mut workspace)
+                        .center_and_dot_with_workspace(
+                            &mut actual,
+                            &left,
+                            &mut workspace,
+                            &mut Unmetered,
+                        )
                         .unwrap();
                     assert_eq!(bits(&actual), bits(&expected));
                     assert_eq!(actual_dot.to_bits(), reference.to_bits());
@@ -1446,7 +1411,12 @@ mod centered_dot_tests {
                 let mut values = [1.0, 3.0, 5.0, bad, bad, 0.0];
                 let before = bits(&values);
                 let error = components
-                    .center_and_dot_with_workspace(&mut values, &[1.0; 6], &mut workspace)
+                    .center_and_dot_with_workspace(
+                        &mut values,
+                        &[1.0; 6],
+                        &mut workspace,
+                        &mut Unmetered,
+                    )
                     .unwrap_err();
                 match error {
                     CmgError::NonFiniteMatrixValue { row, column, value } => {
@@ -1461,7 +1431,12 @@ mod centered_dot_tests {
                 let mut expected = values;
                 components.center_in_place(&mut expected).unwrap();
                 let actual = components
-                    .center_and_dot_with_workspace(&mut values, &[1.0; 6], &mut workspace)
+                    .center_and_dot_with_workspace(
+                        &mut values,
+                        &[1.0; 6],
+                        &mut workspace,
+                        &mut Unmetered,
+                    )
                     .unwrap();
                 assert_eq!(bits(&values), bits(&expected));
                 assert_eq!(actual.to_bits(), compensated_sum(expected).to_bits());
@@ -1469,7 +1444,12 @@ mod centered_dot_tests {
             let mut values = [1.0; 6];
             assert!(
                 components
-                    .center_and_dot_with_workspace(&mut values, &[1.0; 5], &mut workspace)
+                    .center_and_dot_with_workspace(
+                        &mut values,
+                        &[1.0; 5],
+                        &mut workspace,
+                        &mut Unmetered
+                    )
                     .is_err()
             );
             assert_eq!(values, [1.0; 6]);
@@ -1478,7 +1458,8 @@ mod centered_dot_tests {
                     .center_and_dot_with_workspace(
                         &mut values,
                         &[1.0; 6],
-                        &mut ComponentWorkspace::new(0)
+                        &mut ComponentWorkspace::new(0),
+                        &mut Unmetered
                     )
                     .is_err()
             );
@@ -1490,6 +1471,7 @@ mod centered_dot_tests {
 #[cfg(all(test, feature = "parallel"))]
 mod deterministic_parallel_centering_tests {
     use super::Components;
+    use crate::cancel::Unmetered;
     use crate::{CmgError, Laplacian, ParallelExecutor, ParallelOptions};
 
     fn path(vertices: usize) -> Laplacian {
@@ -1523,10 +1505,11 @@ mod deterministic_parallel_centering_tests {
             let mut values = input.clone();
             let mut workspace = components.workspace();
             components
-                .center_in_place_with_workspace_and_executor(
+                .center_with_team(
                     &mut values,
                     &mut workspace,
-                    &executor(threads),
+                    Some(executor(threads).team()),
+                    &mut Unmetered,
                 )
                 .unwrap();
             let bits: Vec<u64> = values.iter().map(|value| value.to_bits()).collect();
@@ -1549,10 +1532,11 @@ mod deterministic_parallel_centering_tests {
             values[130] = f64::NAN;
             let mut workspace = components.workspace();
             let error = components
-                .center_in_place_with_workspace_and_executor(
+                .center_with_team(
                     &mut values,
                     &mut workspace,
-                    &executor(threads),
+                    Some(executor(threads).team()),
+                    &mut Unmetered,
                 )
                 .unwrap_err();
             assert!(matches!(
@@ -1566,7 +1550,7 @@ mod deterministic_parallel_centering_tests {
 #[cfg(all(test, feature = "experimental-components"))]
 mod controlled_component_tests {
     use super::*;
-    use crate::cancel::StopAt;
+    use crate::cancel::{CancelMeter, StopAt};
 
     #[test]
     fn controlled_components_and_centering_match_prepared_paths() {
@@ -1578,7 +1562,7 @@ mod controlled_component_tests {
         ] {
             let never = || false;
             let mut meter = CancelMeter::every_operation(&never);
-            let controlled = Components::try_from_endpoints_controlled(
+            let controlled = Components::from_endpoints(
                 graph.vertex_count(),
                 graph.edges().iter().rev().map(|edge| (edge.u(), edge.v())),
                 &mut meter,
@@ -1590,9 +1574,8 @@ mod controlled_component_tests {
             )
             .unwrap();
             assert_eq!(controlled, expected);
-            let actual_plan =
-                CenteringPlan::try_from_laplacian_controlled(&graph, &mut meter).unwrap();
-            let expected_plan = CenteringPlan::try_from_laplacian(&graph).unwrap();
+            let actual_plan = CenteringPlan::from_laplacian(&graph, &mut meter).unwrap();
+            let expected_plan = CenteringPlan::from_laplacian(&graph, &mut Unmetered).unwrap();
             assert_eq!(actual_plan, expected_plan);
         }
     }
@@ -1606,7 +1589,7 @@ mod controlled_component_tests {
             .collect::<Vec<_>>();
         let count = StopAt::never();
         let query = || count.query();
-        Components::try_from_endpoints_controlled(
+        Components::from_endpoints(
             9,
             endpoints.iter().copied(),
             &mut CancelMeter::every_operation(&query),
@@ -1616,7 +1599,7 @@ mod controlled_component_tests {
         for stop in 0..count.polls() {
             let cancel = StopAt::at(Some(stop));
             let query = || cancel.query();
-            let Err(CmgError::Cancelled { phase }) = Components::try_from_endpoints_controlled(
+            let Err(CmgError::Cancelled { phase }) = Components::from_endpoints(
                 9,
                 endpoints.iter().copied(),
                 &mut CancelMeter::every_operation(&query),

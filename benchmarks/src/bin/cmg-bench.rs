@@ -1,7 +1,4 @@
-use cmg::{
-    CmgOptions, CmgPreconditioner, CsrLaplacian, Laplacian, PcgOptions, PcgWorkspace,
-    solve_pcg_with_workspace,
-};
+use cmg::{CmgOptions, CmgPreconditioner, CsrLaplacian, Laplacian, PcgOptions, PcgWorkspace};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -93,12 +90,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let pcg_options = PcgOptions::default();
     let mut pcg_workspace = PcgWorkspace::new(&preconditioner);
-    let warmup = solve_pcg_with_workspace(
+    let warmup = cmg::solve_pcg_with(
         &graph,
         &preconditioner,
         &right_hand_sides[0],
         pcg_options,
         &mut pcg_workspace,
+        cmg::SolveContext::default(),
     )?;
     black_box(warmup.solution());
 
@@ -110,12 +108,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut iterations = Vec::with_capacity(right_hand_sides.len());
         let mut backward_errors = Vec::with_capacity(right_hand_sides.len());
         for rhs in &right_hand_sides {
-            let result = solve_pcg_with_workspace(
+            let result = cmg::solve_pcg_with(
                 &graph,
                 &preconditioner,
                 rhs,
                 pcg_options,
                 &mut pcg_workspace,
+                cmg::SolveContext::default(),
             )?;
             iterations.push(result.iterations());
             backward_errors.push(result.backward_error());

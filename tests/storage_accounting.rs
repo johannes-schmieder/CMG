@@ -186,11 +186,18 @@ fn owned_solution_banks_include_outer_spare_capacity() {
             ..Default::default()
         })
         .unwrap();
-        let solver =
-            ParallelPcgSolver::from_preconditioner(pre, executor, ParallelPcgPolicy::default())
-                .unwrap();
+        let solver = ParallelPcgSolver::from_preconditioner(
+            pre,
+            executor.team(),
+            ParallelPcgPolicy::default(),
+        )
+        .unwrap();
         let batch = solver
-            .solve_batch(&[rhs.to_vec(), rhs.to_vec()], PcgOptions::default())
+            .solve_batch(
+                &[rhs.to_vec(), rhs.to_vec()],
+                PcgOptions::default(),
+                executor.team(),
+            )
             .unwrap();
         let observed = report(&[&batch]);
         let results = batch.into_results();
@@ -262,13 +269,13 @@ fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
             ..Default::default()
         })
         .unwrap();
-        let bound = ParallelCmgPlan::construction_allocation_bound(&pre, &executor).unwrap();
+        let bound = ParallelCmgPlan::construction_allocation_bound(&pre, executor.team()).unwrap();
         let before = live();
         let calls = CALLS.with(Cell::get);
-        assert!(ParallelCmgPlan::build_with_budget(&pre, &executor, bound - 1).is_err());
+        assert!(ParallelCmgPlan::build_with_budget(&pre, executor.team(), bound - 1).is_err());
         assert_eq!(CALLS.with(Cell::get), calls);
         PEAK.with(|p| p.set(before));
-        let plan = ParallelCmgPlan::build_with_budget(&pre, &executor, bound).unwrap();
+        let plan = ParallelCmgPlan::build_with_budget(&pre, executor.team(), bound).unwrap();
         assert_eq!(plan.operator_count(), 1);
         let observed_peak = (PEAK.with(Cell::get) - before) as usize;
         assert_eq!(observed_peak, bound);
@@ -280,7 +287,7 @@ fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
         // lineage only once. No clone/replacement is hidden by admission.
         let old_and_parent = report(&[&pre, &plan]);
         let before_new = live();
-        let new = ParallelCmgPlan::build_with_budget(&pre, &executor, bound).unwrap();
+        let new = ParallelCmgPlan::build_with_budget(&pre, executor.team(), bound).unwrap();
         assert_eq!(
             report(&[&pre, &plan, &new]) - old_and_parent,
             (live() - before_new) as usize
@@ -290,7 +297,7 @@ fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
         let mut failures = 0;
         for index in 0..20 {
             FAIL.with(|f| f.set(Some(index)));
-            let result = ParallelCmgPlan::build_with_budget(&pre, &executor, bound);
+            let result = ParallelCmgPlan::build_with_budget(&pre, executor.team(), bound);
             FAIL.with(|f| f.set(None));
             let success = result.is_ok();
             drop(result);
@@ -301,18 +308,34 @@ fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
             failures += 1;
         }
         assert_eq!(failures, 6); // two descriptor banks and four serial CSR banks
-        let solver =
-            ParallelPcgSolver::from_preconditioner(pre, executor, ParallelPcgPolicy::default())
-                .unwrap();
+        let solver = ParallelPcgSolver::from_preconditioner(
+            pre,
+            executor.team(),
+            ParallelPcgPolicy::default(),
+        )
+        .unwrap();
         assert_eq!(solver.plan_construction_allocation_bound().unwrap(), bound);
-        assert!(solver.try_plan_with_budget(bound - 1).is_err());
+        assert!(
+            solver
+                .try_plan_with_budget(executor.team(), bound - 1)
+                .is_err()
+        );
         assert_eq!(
-            solver.try_plan_with_budget(bound).unwrap().operator_count(),
+            solver
+                .try_plan_with_budget(executor.team(), bound)
+                .unwrap()
+                .operator_count(),
             1
         );
         assert_eq!(solver.plan_construction_allocation_bound().unwrap(), 0);
         let calls = CALLS.with(Cell::get);
-        assert_eq!(solver.try_plan_with_budget(0).unwrap().operator_count(), 1);
+        assert_eq!(
+            solver
+                .try_plan_with_budget(executor.team(), 0)
+                .unwrap()
+                .operator_count(),
+            1
+        );
         assert_eq!(CALLS.with(Cell::get), calls);
         println!(
             "PLAN_ALLOCATION_SUCCESS bound={bound} observed_peak={observed_peak} fallible_failures={failures}"

@@ -1,7 +1,9 @@
 //! Deterministic row-oriented Laplacian storage for solve kernels.
 
+use crate::cancel::Meter;
 #[cfg(feature = "parallel")]
-use crate::ParallelExecutor;
+use crate::execution::Team;
+use crate::preconditioner::Width;
 use crate::storage::{add, bytes, try_capacity, try_filled};
 use crate::{CmgError, Laplacian};
 #[cfg(feature = "parallel")]
@@ -149,48 +151,6 @@ impl PartialEq for CsrLaplacian {
 }
 
 impl CsrLaplacian {
-    #[cfg(feature = "parallel")]
-    pub(crate) fn matvec_batch(
-        &self,
-        input: &[f64],
-        output: &mut [f64],
-        columns: usize,
-        executor: &ParallelExecutor,
-    ) {
-        let row_product = |row: usize, values: &mut [f64]| {
-            values.fill(0.0);
-            let (start, end) = self.row_offsets.bounds(row);
-            for index in start..end {
-                let neighbor = match &self.columns {
-                    ColumnIndices::Compact(indices) => indices[index] as usize,
-                    ColumnIndices::Native(indices) => indices[index],
-                };
-                let weight = self.weights[index];
-                for (lane, value) in values.iter_mut().enumerate() {
-                    *value +=
-                        weight * (input[row * columns + lane] - input[neighbor * columns + lane]);
-                }
-            }
-        };
-        if executor.should_parallel(self.vertex_count) {
-            let rows = executor.work_chunk_len(self.vertex_count);
-            executor.install(|| {
-                output
-                    .par_chunks_mut(rows * columns)
-                    .enumerate()
-                    .for_each(|(block, chunk)| {
-                        for (offset, values) in chunk.chunks_exact_mut(columns).enumerate() {
-                            row_product(block * rows + offset, values);
-                        }
-                    })
-            });
-        } else {
-            for (row, values) in output.chunks_exact_mut(columns).enumerate() {
-                row_product(row, values);
-            }
-        }
-    }
-
     /// Upper bound on new CMG-owned requested layouts during serial CSR
     /// construction. Includes retained arrays and overlapping cursor scratch;
     /// excludes borrowed graph/lineage, allocator overhead and inline roots.
@@ -236,17 +196,25 @@ impl CsrLaplacian {
         Self::from_laplacian(graph)
     }
 
-    /// CMG-owned construction layouts for the unchanged executor routing.
+    /// CMG-owned construction layouts for the unchanged team routing.
     /// Rayon runtime allocations, allocator overhead and existing parents are
     /// explicitly excluded; this is not whole-action/runtime admission.
     #[cfg(feature = "parallel")]
-    pub fn construction_allocation_bound_with_executor(
+    pub fn construction_allocation_bound_with_team(
         graph: &Laplacian,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
+    ) -> Result<usize, CmgError> {
+        Self::construction_allocation_bound_for_shape(graph, team.options())
+    }
+
+    #[cfg(feature = "parallel")]
+    pub(crate) fn construction_allocation_bound_for_shape(
+        graph: &Laplacian,
+        shape: crate::ParallelOptions,
     ) -> Result<usize, CmgError> {
         let n = graph.vertex_count();
         let m = graph.edge_count();
-        if !Self::uses_parallel_construction(graph, executor) {
+        if !Self::uses_parallel_construction(graph, shape) {
             return Self::construction_allocation_bound(n, m);
         }
         let directed = m.checked_mul(2).ok_or(CmgError::AllocationFailed {
@@ -267,7 +235,7 @@ impl CsrLaplacian {
             add(add(rows, two_offsets)?, bytes::<usize>(n)?)?,
             bytes::<usize>(m)?,
         )?;
-        let blocks = n.div_ceil(executor.work_chunk_len(n));
+        let blocks = n.div_ceil(shape.work_chunk_len(n));
         let descriptors = if n <= u32::MAX as usize {
             bytes::<RowFillBlock<'_, u32>>(blocks)?
         } else {
@@ -284,9 +252,9 @@ impl CsrLaplacian {
     }
 
     #[cfg(feature = "parallel")]
-    fn uses_parallel_construction(graph: &Laplacian, executor: &ParallelExecutor) -> bool {
-        executor.thread_count() > 1
-            && executor.should_parallel(graph.edge_count())
+    fn uses_parallel_construction(graph: &Laplacian, shape: crate::ParallelOptions) -> bool {
+        shape.threads > 1
+            && shape.should_parallel(graph.edge_count())
             && graph.edge_count() >= graph.vertex_count().saturating_mul(4)
     }
 
@@ -295,38 +263,22 @@ impl CsrLaplacian {
         Self::from_laplacian_impl::<false>(graph).map(|(operator, _)| operator)
     }
 
+    /// Row operator for one level on `team`; `PROFILE` only times phases.
     #[cfg(feature = "parallel")]
-    pub(crate) fn from_laplacian_with_executor(
+    pub(crate) fn from_laplacian_with_team_impl<const PROFILE: bool>(
         graph: &Laplacian,
-        executor: &ParallelExecutor,
-    ) -> Result<Self, CmgError> {
-        Self::from_laplacian_with_executor_impl::<false>(graph, executor)
-            .map(|(operator, _)| operator)
-    }
-
-    #[cfg(all(feature = "parallel", feature = "profiling"))]
-    pub(crate) fn from_laplacian_with_executor_profiled(
-        graph: &Laplacian,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
     ) -> Result<(Self, CsrBuildProfile), CmgError> {
-        Self::from_laplacian_with_executor_impl::<true>(graph, executor)
-    }
-
-    #[cfg(feature = "parallel")]
-    fn from_laplacian_with_executor_impl<const PROFILE: bool>(
-        graph: &Laplacian,
-        executor: &ParallelExecutor,
-    ) -> Result<(Self, CsrBuildProfile), CmgError> {
-        if !Self::uses_parallel_construction(graph, executor) {
+        if !Self::uses_parallel_construction(graph, team.options()) {
             return Self::from_laplacian_impl::<PROFILE>(graph);
         }
-        Self::from_laplacian_parallel_impl::<PROFILE>(graph, executor)
+        Self::from_laplacian_parallel_impl::<PROFILE>(graph, team)
     }
 
     #[cfg(feature = "parallel")]
     fn from_laplacian_parallel_impl<const PROFILE: bool>(
         graph: &Laplacian,
-        executor: &ParallelExecutor,
+        team: Team<'_>,
     ) -> Result<(Self, CsrBuildProfile), CmgError> {
         let mut profile = CsrBuildProfile::default();
         let vertex_count = graph.vertex_count();
@@ -408,7 +360,7 @@ impl CsrLaplacian {
                     &incoming_edges,
                     &mut columns,
                     &mut weights,
-                    executor,
+                    team,
                 )
             })?;
             ColumnIndices::Compact(columns)
@@ -426,7 +378,7 @@ impl CsrLaplacian {
                     &incoming_edges,
                     &mut columns,
                     &mut weights,
-                    executor,
+                    team,
                 )
             })?;
             ColumnIndices::Native(columns)
@@ -600,143 +552,102 @@ impl CsrLaplacian {
     /// Compute `output = L * input` without allocating.
     pub fn matvec_into(&self, input: &[f64], output: &mut [f64]) -> Result<(), CmgError> {
         self.validate_matvec_dimensions(input, output)?;
-
-        match &self.columns {
-            ColumnIndices::Compact(columns) => {
-                for row in 0..self.vertex_count {
-                    let center = input[row];
-                    let mut sum = 0.0;
-                    let (start, end) = self.row_offsets.bounds(row);
-                    for index in start..end {
-                        sum += self.weights[index] * (center - input[columns[index] as usize]);
-                    }
-                    output[row] = sum;
-                }
-            }
-            ColumnIndices::Native(columns) => {
-                for row in 0..self.vertex_count {
-                    let center = input[row];
-                    let mut sum = 0.0;
-                    let (start, end) = self.row_offsets.bounds(row);
-                    for index in start..end {
-                        sum += self.weights[index] * (center - input[columns[index]]);
-                    }
-                    output[row] = sum;
-                }
-            }
-        }
-        Ok(())
+        self.matvec_lanes(
+            input,
+            output,
+            crate::preconditioner::One,
+            None,
+            &mut crate::cancel::Unmetered,
+        )
     }
 
-    /// Compute `output = L * input` using the supplied package-owned pool.
+    /// Compute `output = L * input` on a borrowed team.
     ///
     /// Every row is evaluated in its canonical neighbor order, so the
     /// arithmetic for an individual row is independent of worker scheduling.
-    /// Small problems and one-thread executors use the serial row kernel.
+    /// Small problems and one-worker teams use the serial row kernel.
     #[cfg(feature = "parallel")]
-    pub fn matvec_into_parallel(
+    pub fn matvec_into_with_team(
         &self,
         input: &[f64],
         output: &mut [f64],
-        executor: &ParallelExecutor,
+        team: Team<'_>,
     ) -> Result<(), CmgError> {
         self.validate_matvec_dimensions(input, output)?;
-        if !executor.should_parallel(self.vertex_count) {
-            return self.matvec_into(input, output);
-        }
-
-        let rows_per_chunk = executor.work_chunk_len(self.vertex_count);
-        executor.install(|| match &self.columns {
-            ColumnIndices::Compact(columns) => output
-                .par_chunks_mut(rows_per_chunk)
-                .enumerate()
-                .for_each(|(chunk_index, chunk)| {
-                    let first_row = chunk_index * rows_per_chunk;
-                    for (offset, value) in chunk.iter_mut().enumerate() {
-                        let row = first_row + offset;
-                        let center = input[row];
-                        let mut sum = 0.0;
-                        let (start, end) = self.row_offsets.bounds(row);
-                        for index in start..end {
-                            sum += self.weights[index] * (center - input[columns[index] as usize]);
-                        }
-                        *value = sum;
-                    }
-                }),
-            ColumnIndices::Native(columns) => output
-                .par_chunks_mut(rows_per_chunk)
-                .enumerate()
-                .for_each(|(chunk_index, chunk)| {
-                    let first_row = chunk_index * rows_per_chunk;
-                    for (offset, value) in chunk.iter_mut().enumerate() {
-                        let row = first_row + offset;
-                        let center = input[row];
-                        let mut sum = 0.0;
-                        let (start, end) = self.row_offsets.bounds(row);
-                        for index in start..end {
-                            sum += self.weights[index] * (center - input[columns[index]]);
-                        }
-                        *value = sum;
-                    }
-                }),
-        });
-        Ok(())
+        self.matvec_lanes(
+            input,
+            output,
+            crate::preconditioner::One,
+            Some(team),
+            &mut crate::cancel::Unmetered,
+        )
     }
 
-    #[cfg(feature = "parallel")]
-    pub(crate) fn maximum_weight_neighbors_with_executor(
+    /// The one row (gather) kernel for vertex-major lanes: every lane of a row
+    /// sums its neighbors in canonical order from zero. Above the team's
+    /// parallel threshold, fixed row blocks run on the team and poll the
+    /// meter's query; serially, rows are counted by their entries.
+    pub(crate) fn matvec_lanes<W: Width, M: Meter>(
         &self,
-        executor: &ParallelExecutor,
-    ) -> (Vec<usize>, Vec<f64>) {
-        if !executor.should_parallel(self.directed_entry_count()) {
-            return self.maximum_weight_neighbors_serial();
-        }
-        let selections: Vec<(usize, f64)> = executor.install(|| {
-            (0..self.vertex_count)
-                .into_par_iter()
-                .map(|row| self.maximum_weight_neighbor(row))
-                .collect()
-        });
-        selections.into_iter().unzip()
-    }
-
-    #[cfg(feature = "parallel")]
-    fn maximum_weight_neighbors_serial(&self) -> (Vec<usize>, Vec<f64>) {
-        (0..self.vertex_count)
-            .map(|row| self.maximum_weight_neighbor(row))
-            .unzip()
-    }
-
-    #[cfg(feature = "parallel")]
-    fn maximum_weight_neighbor(&self, row: usize) -> (usize, f64) {
-        let mut best_neighbor = row;
-        let mut best_weight = 0.0;
+        input: &[f64],
+        output: &mut [f64],
+        width: W,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<
+            crate::execution::Team<'_>,
+        >,
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
         match &self.columns {
             ColumnIndices::Compact(columns) => {
-                let (start, end) = self.row_offsets.bounds(row);
-                for (&neighbor, &weight) in
-                    columns[start..end].iter().zip(&self.weights[start..end])
-                {
-                    let neighbor = neighbor as usize;
-                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {
-                        best_neighbor = neighbor;
-                        best_weight = weight;
-                    }
-                }
+                self.matvec_rows(columns, input, output, width, team, meter)
             }
             ColumnIndices::Native(columns) => {
-                let (start, end) = self.row_offsets.bounds(row);
-                for (&neighbor, &weight) in
-                    columns[start..end].iter().zip(&self.weights[start..end])
-                {
-                    if weight > best_weight || (weight == best_weight && neighbor < best_neighbor) {
-                        best_neighbor = neighbor;
-                        best_weight = weight;
-                    }
-                }
+                self.matvec_rows(columns, input, output, width, team, meter)
             }
         }
-        (best_neighbor, best_weight)
+    }
+
+    #[inline(always)]
+    fn matvec_rows<C: crate::storage::StoredIndex, W: Width, M: Meter>(
+        &self,
+        neighbors: &[C],
+        input: &[f64],
+        output: &mut [f64],
+        width: W,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<
+            crate::execution::Team<'_>,
+        >,
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        let columns = width.get();
+        let row_product = |row: usize, values: &mut [f64]| {
+            values.fill(0.0);
+            let (start, end) = self.row_offsets.bounds(row);
+            for (neighbor, &weight) in neighbors[start..end].iter().zip(&self.weights[start..end]) {
+                let neighbor = neighbor.index();
+                for (lane, value) in values.iter_mut().enumerate() {
+                    *value +=
+                        weight * (input[row * columns + lane] - input[neighbor * columns + lane]);
+                }
+            }
+        };
+        #[cfg(feature = "parallel")]
+        if let Some(team) = team.filter(|team| team.should_parallel(self.vertex_count)) {
+            crate::preconditioner::rows_parallel(team, meter.query(), output, columns, row_product);
+            return meter.joined("CSR matvec");
+        }
+        if !M::POLLS {
+            for (row, values) in output.chunks_exact_mut(columns).enumerate() {
+                row_product(row, values);
+            }
+            return Ok(());
+        }
+        for (row, values) in output.chunks_exact_mut(columns).enumerate() {
+            let (start, end) = self.row_offsets.bounds(row);
+            meter.items("CSR matvec", (end - start + 1) * columns)?;
+            row_product(row, values);
+        }
+        Ok(())
     }
 
     fn validate_matvec_dimensions(&self, input: &[f64], output: &[f64]) -> Result<(), CmgError> {
@@ -896,11 +807,11 @@ fn fill_compact_rows_parallel(
     incoming_edges: &[usize],
     columns: &mut [u32],
     weights: &mut [f64],
-    executor: &ParallelExecutor,
+    team: Team<'_>,
 ) -> Result<(), CmgError> {
-    let rows_per_block = executor.work_chunk_len(graph.vertex_count());
+    let rows_per_block = team.work_chunk_len(graph.vertex_count());
     let blocks = row_fill_blocks(columns, weights, row_offsets, rows_per_block)?;
-    executor.install(|| {
+    team.install(|| {
         blocks.into_par_iter().for_each(|block| {
             fill_compact_row_block(
                 block,
@@ -926,11 +837,11 @@ fn fill_native_rows_parallel(
     incoming_edges: &[usize],
     columns: &mut [usize],
     weights: &mut [f64],
-    executor: &ParallelExecutor,
+    team: Team<'_>,
 ) -> Result<(), CmgError> {
-    let rows_per_block = executor.work_chunk_len(graph.vertex_count());
+    let rows_per_block = team.work_chunk_len(graph.vertex_count());
     let blocks = row_fill_blocks(columns, weights, row_offsets, rows_per_block)?;
-    executor.install(|| {
+    team.install(|| {
         blocks.into_par_iter().for_each(|block| {
             fill_native_row_block(
                 block,
@@ -1103,7 +1014,7 @@ mod tests {
             ..ParallelOptions::default()
         })
         .unwrap();
-        csr.matvec_into_parallel(&input, &mut parallel, &executor)
+        csr.matvec_into_with_team(&input, &mut parallel, executor.team())
             .unwrap();
         assert_eq!(serial, parallel);
     }
@@ -1132,7 +1043,9 @@ mod tests {
                 ..ParallelOptions::default()
             })
             .unwrap();
-            let parallel = CsrLaplacian::from_laplacian_with_executor(&graph, &executor).unwrap();
+            let (parallel, _) =
+                CsrLaplacian::from_laplacian_with_team_impl::<false>(&graph, executor.team())
+                    .unwrap();
             assert_eq!(parallel, serial);
             assert_eq!(parallel.byte_len(), serial.byte_len());
         }

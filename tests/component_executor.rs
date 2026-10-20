@@ -36,11 +36,25 @@ fn executor_component_setup_matches_serial_including_parallel_sort_boundary() {
                         direct_threshold: 8,
                         ..Default::default()
                     };
-                    let serial =
-                        CmgPreconditioner::build_component_experiment(&dense, options, experiment)
-                            .unwrap();
-                    let parallel = CmgPreconditioner::build_component_experiment_with_executor(
-                        &dense, options, experiment, &executor,
+                    let serial = CmgPreconditioner::build_with(
+                        &dense,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: experiment,
+                        },
+                        cmg::BuildContext::default(),
+                    )
+                    .unwrap();
+                    let parallel = CmgPreconditioner::build_with(
+                        &dense,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: experiment,
+                        },
+                        cmg::BuildContext {
+                            team: Some(executor.team()),
+                            ..cmg::BuildContext::default()
+                        },
                     )
                     .unwrap();
                     assert_eq!(serial, parallel);
@@ -53,37 +67,44 @@ fn executor_component_setup_matches_serial_including_parallel_sort_boundary() {
                     // intentionally covers serial CSR only; do not confuse it
                     // with a cross-thread/runtime allocation measurement.
                     let bound =
-                        ParallelCmgPlan::construction_allocation_bound(&parallel, &executor)
+                        ParallelCmgPlan::construction_allocation_bound(&parallel, executor.team())
                             .unwrap();
                     assert!(
-                        ParallelCmgPlan::build_with_budget(&parallel, &executor, bound - 1)
+                        ParallelCmgPlan::build_with_budget(&parallel, executor.team(), bound - 1)
                             .is_err()
                     );
                     let admitted =
-                        ParallelCmgPlan::build_with_budget(&parallel, &executor, bound).unwrap();
-                    let reference = ParallelCmgPlan::build(&parallel, &executor).unwrap();
+                        ParallelCmgPlan::build_with_budget(&parallel, executor.team(), bound)
+                            .unwrap();
+                    let reference = ParallelCmgPlan::build(&parallel, executor.team()).unwrap();
                     if threads == 4 {
                         assert!(admitted.operator_count() > 0);
                     }
                     let mut workspace = parallel.try_workspace().unwrap();
                     let mut expected = vec![0.0; 612];
                     let mut actual = vec![0.0; 612];
-                    reference
-                        .apply_compatible_into(
-                            &parallel,
+                    parallel
+                        .apply_compatible_into_with(
                             &rhs,
                             &mut expected,
                             &mut workspace,
-                            &executor,
+                            cmg::ApplyContext {
+                                plan: Some(&reference),
+                                team: Some(executor.team()),
+                                cancel: None,
+                            },
                         )
                         .unwrap();
-                    admitted
-                        .apply_compatible_into(
-                            &parallel,
+                    parallel
+                        .apply_compatible_into_with(
                             &rhs,
                             &mut actual,
                             &mut workspace,
-                            &executor,
+                            cmg::ApplyContext {
+                                plan: Some(&admitted),
+                                team: Some(executor.team()),
+                                cancel: None,
+                            },
                         )
                         .unwrap();
                     assert_eq!(actual, expected);
@@ -124,17 +145,22 @@ fn prepared_component_banks_cover_serial_planned_and_concurrent_rhs() {
             ..Default::default()
         })
         .unwrap();
-        let pre = CmgPreconditioner::build_component_experiment_with_executor(
+        let pre = CmgPreconditioner::build_with(
             &first,
-            CmgOptions {
-                direct_threshold: 8,
-                ..Default::default()
+            cmg::BuildOptions {
+                hierarchy: CmgOptions {
+                    direct_threshold: 8,
+                    ..Default::default()
+                },
+                components: COMPONENT,
             },
-            COMPONENT,
-            &executor,
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                ..cmg::BuildContext::default()
+            },
         )
         .unwrap();
-        let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+        let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
         let bank_bytes = PcgBatchWorkspace::bank_allocation_bytes(&pre, threads).unwrap();
         let mut bank = PcgBatchWorkspace::new_bank_with_budget(&pre, threads, bank_bytes).unwrap();
         let before = CmgStorageReport::measure(&[&bank]).unwrap();
@@ -154,21 +180,25 @@ fn prepared_component_banks_cover_serial_planned_and_concurrent_rhs() {
                     ..Default::default()
                 };
                 if planned {
-                    solve_pcg_batch_with_plan_and_retained_preconditioner_into_with_workspace(
+                    cmg::solve_pcg_batch_into(
                         &graph,
                         &pre,
-                        &plan,
                         rhs_view,
                         None,
                         out_view,
                         &mut diagnostic,
                         options,
-                        &mut bank[0],
-                        &executor,
+                        core::slice::from_mut(&mut bank[0]),
+                        cmg::SolveContext {
+                            plan: Some(&plan),
+                            team: Some(executor.team()),
+                            retained_preconditioner: true,
+                            ..cmg::SolveContext::default()
+                        },
                     )
                     .unwrap();
                 } else {
-                    solve_pcg_batch_with_retained_preconditioner_into_with_executor(
+                    cmg::solve_pcg_batch_into(
                         &graph,
                         &pre,
                         rhs_view,
@@ -177,7 +207,12 @@ fn prepared_component_banks_cover_serial_planned_and_concurrent_rhs() {
                         &mut diagnostic,
                         options,
                         &mut bank,
-                        &executor,
+                        cmg::SolveContext {
+                            team: Some(executor.team()),
+                            concurrent_right_hand_sides: true,
+                            retained_preconditioner: true,
+                            ..cmg::SolveContext::default()
+                        },
                     )
                     .unwrap();
                 }
@@ -250,20 +285,35 @@ fn dyadic_weak_bridge_matches_independent_resistance_oracle() {
                     ..Default::default()
                 };
                 let pre = if component {
-                    CmgPreconditioner::build_component_experiment_with_executor(
-                        &graph, options, COMPONENT, &executor,
+                    CmgPreconditioner::build_with(
+                        &graph,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: COMPONENT,
+                        },
+                        cmg::BuildContext {
+                            team: Some(executor.team()),
+                            ..cmg::BuildContext::default()
+                        },
                     )
                 } else {
-                    CmgPreconditioner::build_with_executor(&graph, options, &executor)
+                    CmgPreconditioner::build_with(
+                        &graph,
+                        cmg::BuildOptions::from(options),
+                        cmg::BuildContext {
+                            team: Some(executor.team()),
+                            ..cmg::BuildContext::default()
+                        },
+                    )
                 }
                 .unwrap();
-                let plan = ParallelCmgPlan::build_with_budget(&pre, &executor, usize::MAX).unwrap();
+                let plan =
+                    ParallelCmgPlan::build_with_budget(&pre, executor.team(), usize::MAX).unwrap();
                 let mut workspace = PcgWorkspace::try_new(&pre).unwrap();
                 let mut solution = [0.0; N];
-                let diagnostics = solve_pcg_with_plan_into_with_workspace(
+                let diagnostics = cmg::solve_pcg_into(
                     &graph,
                     &pre,
-                    &plan,
                     &rhs,
                     None,
                     &mut solution,
@@ -276,7 +326,11 @@ fn dyadic_weak_bridge_matches_independent_resistance_oracle() {
                         ..Default::default()
                     },
                     &mut workspace,
-                    &executor,
+                    cmg::SolveContext {
+                        plan: Some(&plan),
+                        team: Some(executor.team()),
+                        ..cmg::SolveContext::default()
+                    },
                 )
                 .unwrap();
                 assert!(diagnostics.residual_norm() <= diagnostics.tolerance());

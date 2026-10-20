@@ -2,9 +2,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use cmg::{
-    CmgOptions, Laplacian, ParallelOptions, ParallelPcgExecution, ParallelPcgPolicy,
-    ParallelPcgSolver, PcgOptions, PcgResult, PcgWorkspace, solve_pcg_batch_with_executor,
-    solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
+    CmgOptions, Laplacian, ParallelExecutor, ParallelOptions, ParallelPcgExecution,
+    ParallelPcgPolicy, ParallelPcgSolver, PcgOptions, PcgResult, PcgWorkspace, Team,
+    solve_pcg_batch_concurrent,
 };
 
 #[derive(Clone, Copy)]
@@ -115,6 +115,7 @@ fn validate_results(reference: &[PcgResult], candidate: &[PcgResult]) -> f64 {
 fn run_explicit(
     strategy: ExplicitStrategy,
     solver: &ParallelPcgSolver,
+    team: Team<'_>,
     right_hand_sides: &[Vec<f64>],
     options: PcgOptions,
     serial_workspace: &mut PcgWorkspace,
@@ -124,35 +125,39 @@ fn run_explicit(
         ExplicitStrategy::Serial => right_hand_sides
             .iter()
             .map(|rhs| {
-                solve_pcg_with_workspace(
+                cmg::solve_pcg_with(
                     solver.graph(),
                     solver.preconditioner(),
                     rhs,
                     options,
                     serial_workspace,
+                    cmg::SolveContext::default(),
                 )
                 .expect("serial solve should converge")
             })
             .collect(),
-        ExplicitStrategy::AcrossRhs => solve_pcg_batch_with_executor(
+        ExplicitStrategy::AcrossRhs => solve_pcg_batch_concurrent(
             solver.graph(),
             solver.preconditioner(),
             right_hand_sides,
             options,
-            solver.executor(),
+            team,
         )
         .expect("across-RHS solves should converge"),
         ExplicitStrategy::Planned => right_hand_sides
             .iter()
             .map(|rhs| {
-                solve_pcg_with_plan_and_workspace(
+                cmg::solve_pcg_with(
                     solver.graph(),
                     solver.preconditioner(),
-                    solver.plan(),
                     rhs,
                     options,
                     planned_workspace,
-                    solver.executor(),
+                    cmg::SolveContext {
+                        plan: Some(solver.try_plan(team).expect("parallel plan")),
+                        team: Some(team),
+                        ..cmg::SolveContext::default()
+                    },
                 )
                 .expect("planned solve should converge")
             })
@@ -204,17 +209,20 @@ fn main() {
         .map(|index| compatible_rhs(&bench_graph.graph, index))
         .collect();
     let build_start = Instant::now();
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads,
+        min_parallel_len: 16_384,
+        ..ParallelOptions::default()
+    })
+    .expect("parallel executor should build");
+    let team = executor.team();
     let solver = ParallelPcgSolver::build_with_policy(
         &bench_graph.graph,
         CmgOptions {
             direct_threshold: 64,
             ..CmgOptions::default()
         },
-        ParallelOptions {
-            threads,
-            min_parallel_len: 16_384,
-            ..ParallelOptions::default()
-        },
+        team,
         ParallelPcgPolicy::default(),
     )
     .expect("prepared solver should build");
@@ -227,6 +235,7 @@ fn main() {
     let serial_reference = run_explicit(
         ExplicitStrategy::Serial,
         &solver,
+        team,
         &right_hand_sides,
         options,
         &mut serial_workspace,
@@ -235,6 +244,7 @@ fn main() {
     let across_reference = run_explicit(
         ExplicitStrategy::AcrossRhs,
         &solver,
+        team,
         &right_hand_sides,
         options,
         &mut serial_workspace,
@@ -243,13 +253,14 @@ fn main() {
     let planned_reference = run_explicit(
         ExplicitStrategy::Planned,
         &solver,
+        team,
         &right_hand_sides,
         options,
         &mut serial_workspace,
         &mut planned_workspace,
     );
     let auto_reference = solver
-        .solve_batch_with_workspace(&right_hand_sides, options, &mut auto_workspace)
+        .solve_batch_with_workspace(&right_hand_sides, options, &mut auto_workspace, team)
         .expect("automatic solves should converge");
     let across_difference = validate_results(&serial_reference, &across_reference);
     let planned_difference = validate_results(&serial_reference, &planned_reference);
@@ -259,7 +270,13 @@ fn main() {
     assert!(auto_difference <= 5.0e-9);
 
     let expected_execution = if rhs_count == 1 {
-        if solver.plan().operator_count() > 0 && bench_graph.edges >= 200_000 {
+        if solver
+            .try_plan(team)
+            .expect("parallel plan")
+            .operator_count()
+            > 0
+            && bench_graph.edges >= 200_000
+        {
             ParallelPcgExecution::Planned
         } else {
             ParallelPcgExecution::Serial
@@ -293,6 +310,7 @@ fn main() {
                     black_box(&right_hand_sides),
                     options,
                     &mut auto_workspace,
+                    team,
                 )
                 .expect("automatic solve should converge");
             auto_times.push(start.elapsed().as_nanos());
@@ -303,6 +321,7 @@ fn main() {
             let results = run_explicit(
                 strategy,
                 &solver,
+                team,
                 black_box(&right_hand_sides),
                 options,
                 &mut serial_workspace,
@@ -323,6 +342,7 @@ fn main() {
                     black_box(&right_hand_sides),
                     options,
                     &mut auto_workspace,
+                    team,
                 )
                 .expect("automatic solve should converge");
             auto_times.push(start.elapsed().as_nanos());
@@ -336,7 +356,7 @@ fn main() {
     let auto_ns = median(auto_times);
     let best_explicit_ns = serial_ns.min(across_ns).min(planned_ns);
     let report = solver
-        .select_batch_execution(rhs_count)
+        .select_batch_execution(rhs_count, team)
         .expect("routing report should be available");
     let selected_explicit_ns = match report.execution() {
         ParallelPcgExecution::Serial => serial_ns,
@@ -347,9 +367,12 @@ fn main() {
         "{{\"case\":\"{case}\",\"scale\":{scale},\"vertices\":{},\"edges\":{},\"rhs_count\":{rhs_count},\"threads\":{},\"levels\":{},\"operators\":{},\"execution\":\"{}\",\"concurrency\":{},\"serial_ns\":{serial_ns},\"across_rhs_ns\":{across_ns},\"planned_ns\":{planned_ns},\"auto_ns\":{auto_ns},\"best_explicit_ns\":{best_explicit_ns},\"selected_explicit_ns\":{selected_explicit_ns},\"auto_over_selected\":{:.17e},\"auto_over_best\":{:.17e},\"serial_over_best\":{:.17e},\"across_over_best\":{:.17e},\"planned_over_best\":{:.17e},\"build_ns\":{build_ns},\"plan_bytes\":{},\"workspace_bytes_each\":{},\"workspace_pool_bytes\":{},\"retained_workspace_bytes\":{},\"max_across_difference\":{across_difference:.17e},\"max_planned_difference\":{planned_difference:.17e},\"max_auto_difference\":{auto_difference:.17e}}}",
         bench_graph.vertices,
         bench_graph.edges,
-        solver.executor().thread_count(),
+        team.worker_ceiling(),
         solver.preconditioner().hierarchy().levels().len(),
-        solver.plan().operator_count(),
+        solver
+            .try_plan(team)
+            .expect("parallel plan")
+            .operator_count(),
         execution_name(report.execution()),
         report.concurrency(),
         auto_ns as f64 / selected_explicit_ns as f64,

@@ -98,12 +98,24 @@ fn check_scalar(cmg: &CmgPreconditioner, graph: &Laplacian, capacity: usize) {
         let rhs = inputs(graph, columns);
         let mut output = vec![f64::NAN; rhs.len()];
         let calls = CALLS.with(Cell::get);
-        cmg.apply_compatible_batch_into(&rhs, &mut output, columns, &mut workspace)
-            .unwrap();
+        cmg.apply_compatible_batch_into(
+            &rhs,
+            &mut output,
+            columns,
+            &mut workspace,
+            cmg::ApplyContext::default(),
+        )
+        .unwrap();
         assert_eq!(calls, CALLS.with(Cell::get), "serial application allocated");
         let first = output.clone();
-        cmg.apply_compatible_batch_into(&rhs, &mut output, columns, &mut workspace)
-            .unwrap();
+        cmg.apply_compatible_batch_into(
+            &rhs,
+            &mut output,
+            columns,
+            &mut workspace,
+            cmg::ApplyContext::default(),
+        )
+        .unwrap();
         assert_eq!(first, output);
         for lane in 0..columns {
             let scalar_rhs: Vec<_> = (0..graph.vertex_count())
@@ -174,19 +186,37 @@ fn checked_admission_failures_and_shape_rejection_leave_no_live_allocations() {
         let calls = CALLS.with(Cell::get) - before;
         assert_eq!(LIVE.with(Cell::get) - baseline, bytes as isize);
         assert!(
-            cmg.apply_compatible_batch_into(&[], &mut [], capacity + 1, &mut workspace)
-                .is_err()
+            cmg.apply_compatible_batch_into(
+                &[],
+                &mut [],
+                capacity + 1,
+                &mut workspace,
+                cmg::ApplyContext::default()
+            )
+            .is_err()
         );
         assert!(
-            cmg.apply_compatible_batch_into(&[0.0], &mut [], 1, &mut workspace)
-                .is_err()
+            cmg.apply_compatible_batch_into(
+                &[0.0],
+                &mut [],
+                1,
+                &mut workspace,
+                cmg::ApplyContext::default()
+            )
+            .is_err()
         );
         let different = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
         let rhs = inputs(&graph, 1);
         let mut output = vec![0.0; rhs.len()];
         assert!(
             different
-                .apply_compatible_batch_into(&rhs, &mut output, 1, &mut workspace)
+                .apply_compatible_batch_into(
+                    &rhs,
+                    &mut output,
+                    1,
+                    &mut workspace,
+                    cmg::ApplyContext::default()
+                )
                 .is_err()
         );
         drop(workspace);
@@ -222,8 +252,14 @@ fn multilevel_cycle_is_linear_symmetric_positive_and_lanes_are_independent() {
     let bytes = CmgBatchWorkspace::allocation_bytes(&cmg, 4).unwrap();
     let mut workspace = CmgBatchWorkspace::try_new(&cmg, 4, bytes).unwrap();
     let mut result = vec![0.0; rhs.len()];
-    cmg.apply_compatible_batch_into(&rhs, &mut result, 3, &mut workspace)
-        .unwrap();
+    cmg.apply_compatible_batch_into(
+        &rhs,
+        &mut result,
+        3,
+        &mut workspace,
+        cmg::ApplyContext::default(),
+    )
+    .unwrap();
     let dot = |a: usize, b: usize| {
         rhs.chunks_exact(3)
             .zip(result.chunks_exact(3))
@@ -242,18 +278,23 @@ fn pruned_and_component_terminal_options_match_scalar() {
     use cmg::ComponentBuildOptions;
     let graph = graph(513, false);
     for preserve in [false, true] {
-        let cmg = CmgPreconditioner::build_component_experiment_serial_with_budget(
+        let cmg = CmgPreconditioner::build_with(
             &graph,
-            CmgOptions {
-                direct_threshold: 16,
-                ..CmgOptions::default()
+            cmg::BuildOptions {
+                hierarchy: CmgOptions {
+                    direct_threshold: 16,
+                    ..CmgOptions::default()
+                },
+                components: ComponentBuildOptions {
+                    prune_coarse_isolates: true,
+                    preserve_unpruned_stopping: preserve,
+                    factor_terminal_components: true,
+                },
             },
-            ComponentBuildOptions {
-                prune_coarse_isolates: true,
-                preserve_unpruned_stopping: preserve,
-                factor_terminal_components: true,
+            cmg::BuildContext {
+                budget_bytes: Some(usize::MAX),
+                ..cmg::BuildContext::default()
             },
-            usize::MAX,
         )
         .unwrap();
         check_scalar(&cmg, &graph, 4);
@@ -281,7 +322,7 @@ fn planned_batch_preserves_scalar_single_rhs_and_is_repeatable_across_workers() 
             ..ParallelOptions::default()
         })
         .unwrap();
-        let plan = ParallelCmgPlan::build(&cmg, &executor).unwrap();
+        let plan = ParallelCmgPlan::build(&cmg, executor.team()).unwrap();
         assert!(plan.operator_count() > 0);
         for capacity in [1, 4] {
             let bytes = CmgBatchWorkspace::allocation_bytes(&cmg, capacity).unwrap();
@@ -289,23 +330,29 @@ fn planned_batch_preserves_scalar_single_rhs_and_is_repeatable_across_workers() 
             for columns in [capacity, 1, capacity] {
                 let rhs = inputs(&graph, columns);
                 let mut output = vec![0.0; rhs.len()];
-                plan.apply_compatible_batch_into(
-                    &cmg,
+                cmg.apply_compatible_batch_into(
                     &rhs,
                     &mut output,
                     columns,
                     &mut workspace,
-                    &executor,
+                    cmg::ApplyContext {
+                        plan: Some(&plan),
+                        team: Some(executor.team()),
+                        cancel: None,
+                    },
                 )
                 .unwrap();
                 let first = output.clone();
-                plan.apply_compatible_batch_into(
-                    &cmg,
+                cmg.apply_compatible_batch_into(
                     &rhs,
                     &mut output,
                     columns,
                     &mut workspace,
-                    &executor,
+                    cmg::ApplyContext {
+                        plan: Some(&plan),
+                        team: Some(executor.team()),
+                        cancel: None,
+                    },
                 )
                 .unwrap();
                 assert_eq!(first, output);
@@ -314,12 +361,15 @@ fn planned_batch_preserves_scalar_single_rhs_and_is_repeatable_across_workers() 
                         .map(|row| rhs[row * columns + lane])
                         .collect();
                     let mut scalar = vec![0.0; graph.vertex_count()];
-                    plan.apply_compatible_into(
-                        &cmg,
+                    cmg.apply_compatible_into_with(
                         &scalar_rhs,
                         &mut scalar,
                         &mut cmg.workspace(),
-                        &executor,
+                        cmg::ApplyContext {
+                            plan: Some(&plan),
+                            team: Some(executor.team()),
+                            cancel: None,
+                        },
                     )
                     .unwrap();
                     for (row, &value) in scalar.iter().enumerate() {

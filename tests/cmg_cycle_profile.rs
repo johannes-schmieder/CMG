@@ -2,8 +2,7 @@
 
 use cmg::{
     CmgApplyPhase as Phase, CmgOptions, CmgPreconditioner, Components, Laplacian, ParallelCmgPlan,
-    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace, profile_pcg_with_plan,
-    solve_pcg_with_plan_and_workspace,
+    ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace,
 };
 
 #[test]
@@ -24,14 +23,17 @@ fn exclusive_cycle_counts_and_arithmetic_match_recursive_execution() {
             };
             for prune in [false, true] {
                 #[cfg(feature = "experimental-components")]
-                let pre = CmgPreconditioner::build_component_experiment(
+                let pre = CmgPreconditioner::build_with(
                     &graph,
-                    options,
-                    cmg::ComponentBuildOptions {
-                        prune_coarse_isolates: prune,
-                        preserve_unpruned_stopping: true,
-                        factor_terminal_components: true,
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: cmg::ComponentBuildOptions {
+                            prune_coarse_isolates: prune,
+                            preserve_unpruned_stopping: true,
+                            factor_terminal_components: true,
+                        },
                     },
+                    cmg::BuildContext::default(),
                 )
                 .unwrap();
                 #[cfg(not(feature = "experimental-components"))]
@@ -53,7 +55,12 @@ fn exclusive_cycle_counts_and_arithmetic_match_recursive_execution() {
                     pre.apply_compatible_into(&rhs, &mut expected, &mut ws)
                         .unwrap();
                     let profile = pre
-                        .profile_apply_compatible_into(&rhs, &mut actual, &mut ws)
+                        .profile_apply_compatible_into(
+                            &rhs,
+                            &mut actual,
+                            &mut ws,
+                            cmg::ApplyContext::default(),
+                        )
                         .unwrap();
                     assert!(
                         actual
@@ -127,21 +134,33 @@ fn planned_profile_preserves_solution_and_accounts_exclusive_time() {
             ..ParallelOptions::default()
         })
         .unwrap();
-        let plan = ParallelCmgPlan::build(&pre, &executor).unwrap();
+        let plan = ParallelCmgPlan::build(&pre, executor.team()).unwrap();
         let mut ws = PcgWorkspace::new(&pre);
-        let reference = solve_pcg_with_plan_and_workspace(
+        let reference = cmg::solve_pcg_with(
             &graph,
             &pre,
-            &plan,
             &rhs,
             PcgOptions::default(),
             &mut ws,
-            &executor,
+            cmg::SolveContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
         )
         .unwrap();
-        let actual =
-            profile_pcg_with_plan(&graph, &pre, &plan, &rhs, PcgOptions::default(), &executor)
-                .unwrap();
+        let actual = cmg::profile_pcg(
+            &graph,
+            &pre,
+            &rhs,
+            PcgOptions::default(),
+            cmg::SolveContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
+        )
+        .unwrap();
         assert!(
             actual
                 .solution()

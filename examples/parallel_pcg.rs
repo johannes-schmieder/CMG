@@ -1,7 +1,7 @@
 #[cfg(feature = "parallel")]
 use cmg::{
     CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgWorkspace, solve_pcg_with_plan_and_workspace,
+    PcgOptions, PcgWorkspace,
 };
 
 #[cfg(feature = "parallel")]
@@ -31,19 +31,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         threads: 0, // detect available parallelism; set an explicit cap if desired
         ..ParallelOptions::default()
     })?;
-    let plan = ParallelCmgPlan::build(&preconditioner, &executor)?;
+    let plan = ParallelCmgPlan::build(&preconditioner, executor.team())?;
     let mut workspace = PcgWorkspace::new(&preconditioner);
 
     // Reuse the same executor, plan, and workspace for subsequent right-hand
     // sides on the unchanged weighted graph.
-    let result = solve_pcg_with_plan_and_workspace(
+    let result = cmg::solve_pcg_with(
         &graph,
         &preconditioner,
-        &plan,
         &rhs,
         PcgOptions::default(),
         &mut workspace,
-        &executor,
+        cmg::SolveContext {
+            plan: Some(&plan),
+            team: Some(executor.team()),
+            ..cmg::SolveContext::default()
+        },
     )?;
 
     println!("threads: {}", executor.thread_count());

@@ -20,6 +20,8 @@ pub enum CmgApplyPhase {
     Terminal,
 }
 
+/// Observer of the one cycle algorithm; `()` records nothing and compiles
+/// away, a cycle profile records exclusive phase times.
 pub(crate) trait CycleRecorder {
     type Stamp;
     fn start() -> Self::Stamp;
@@ -28,7 +30,19 @@ pub(crate) trait CycleRecorder {
     fn iteration(&mut self, level: usize);
 }
 
-#[cfg(feature = "profiling")]
+impl CycleRecorder for () {
+    type Stamp = ();
+    #[inline(always)]
+    fn start() {}
+    #[inline(always)]
+    fn finish(&mut self, _: usize, _: CmgApplyPhase, (): ()) {}
+    #[inline(always)]
+    fn enter(&mut self, _: usize) {}
+    #[inline(always)]
+    fn iteration(&mut self, _: usize) {}
+}
+
+#[cfg(feature = "cycle-profiling")]
 mod timed {
     use super::{CmgApplyPhase, CycleRecorder};
     use std::time::Instant;
@@ -138,5 +152,5 @@ mod timed {
     }
 }
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "cycle-profiling")]
 pub use timed::{CmgApplyLevelProfile, CmgApplyProfile};

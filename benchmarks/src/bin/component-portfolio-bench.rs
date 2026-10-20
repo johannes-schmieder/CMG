@@ -2,7 +2,6 @@
 use cmg::{
     CmgError, CmgOptions, CmgPreconditioner, ComponentBuildOptions, ComponentPcgExperiment,
     ComponentPcgWorkspace, Components, Laplacian, PcgDiagnostics, PcgOptions, PcgWorkspace,
-    solve_pcg_into_with_workspace,
 };
 #[cfg(not(feature = "component-allocations"))]
 use std::{hint::black_box, time::Instant};
@@ -37,17 +36,18 @@ enum Workspace {
 impl Solver {
     fn build(graph: &Laplacian, route: Route) -> Result<Self, CmgError> {
         match route {
-            Route::Scalar => Ok(Self::Scalar(Box::new(
-                CmgPreconditioner::build_component_experiment(
-                    graph,
-                    CmgOptions::default(),
-                    ComponentBuildOptions {
+            Route::Scalar => Ok(Self::Scalar(Box::new(CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions {
+                    hierarchy: CmgOptions::default(),
+                    components: ComponentBuildOptions {
                         prune_coarse_isolates: true,
                         preserve_unpruned_stopping: true,
                         factor_terminal_components: true,
                     },
-                )?,
-            ))),
+                },
+                cmg::BuildContext::default(),
+            )?))),
             Route::Portfolio => Ok(Self::Portfolio(ComponentPcgExperiment::build(
                 graph,
                 CmgOptions::default(),
@@ -82,7 +82,7 @@ impl Solver {
     ) -> Result<(PcgDiagnostics, Option<PcgDiagnostics>), CmgError> {
         match (self, ws) {
             (Self::Scalar(s), Workspace::Scalar(w)) => {
-                let d = solve_pcg_into_with_workspace(
+                let d = cmg::solve_pcg_into(
                     graph,
                     s,
                     b,
@@ -90,6 +90,7 @@ impl Solver {
                     out,
                     PcgOptions::default(),
                     w,
+                    cmg::SolveContext::default(),
                 )?;
                 Ok((d, Some(d)))
             }

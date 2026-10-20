@@ -1,6 +1,6 @@
 use cmg::{
     CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor, ParallelOptions,
-    PcgOptions, PcgWorkspace, solve_pcg_batch_with_executor, solve_pcg_with_workspace,
+    PcgOptions, PcgWorkspace, solve_pcg_batch_concurrent,
 };
 use std::env;
 use std::error::Error;
@@ -143,8 +143,14 @@ fn run(
         min_parallel_len: 16_384,
         ..ParallelOptions::default()
     })?;
-    let preconditioner =
-        CmgPreconditioner::build_with_executor(&graph, CmgOptions::default(), &executor)?;
+    let preconditioner = CmgPreconditioner::build_with(
+        &graph,
+        cmg::BuildOptions::from(CmgOptions::default()),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )?;
     let hierarchy_bytes = hierarchy_bytes(&preconditioner);
     checkpoints.push(checkpoint("hierarchy", started, hierarchy_bytes));
     if stop == "hierarchy" {
@@ -166,7 +172,7 @@ fn run(
         );
     }
 
-    let plan = ParallelCmgPlan::build(&preconditioner, &executor)?;
+    let plan = ParallelCmgPlan::build(&preconditioner, executor.team())?;
     let plan_bytes = plan.byte_len();
     checkpoints.push(checkpoint("plan", started, plan_bytes));
     if stop == "plan" {
@@ -210,7 +216,9 @@ fn run(
         );
     }
 
-    let concurrency = executor.batch_concurrency(workspace_bytes, rhs_count)?;
+    let concurrency = executor
+        .team()
+        .batch_concurrency(workspace_bytes, rhs_count)?;
     let mut workspace_pool = (0..concurrency)
         .map(|_| PcgWorkspace::new(&preconditioner))
         .collect::<Vec<_>>();
@@ -244,22 +252,23 @@ fn run(
         ..PcgOptions::default()
     };
     let numerical = if stop == "solve" {
-        let result = solve_pcg_with_workspace(
+        let result = cmg::solve_pcg_with(
             &graph,
             &preconditioner,
             &right_hand_sides[0],
             options,
             &mut workspace_pool[0],
+            cmg::SolveContext::default(),
         )?;
         checkpoints.push(checkpoint("solve", started, 0));
         Some((result.iterations(), result.backward_error()))
     } else {
-        let results = solve_pcg_batch_with_executor(
+        let results = solve_pcg_batch_concurrent(
             &graph,
             &preconditioner,
             &right_hand_sides[..rhs_count],
             options,
-            &executor,
+            executor.team(),
         )?;
         checkpoints.push(checkpoint("batch", started, 0));
         Some((

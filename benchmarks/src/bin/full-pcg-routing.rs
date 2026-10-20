@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use cmg::{
-    CmgOptions, Laplacian, ParallelOptions, ParallelPcgSolver, PcgOptions, PcgResult, PcgWorkspace,
-    solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
+    CmgOptions, Laplacian, ParallelExecutor, ParallelOptions, ParallelPcgSolver, PcgOptions,
+    PcgResult, PcgWorkspace, Team,
 };
 
 struct BenchGraph {
@@ -112,12 +112,13 @@ fn time_serial(
     workspace: &mut PcgWorkspace,
 ) -> (u128, PcgResult) {
     let start = Instant::now();
-    let result = solve_pcg_with_workspace(
+    let result = cmg::solve_pcg_with(
         solver.graph(),
         solver.preconditioner(),
         black_box(rhs),
         options,
         workspace,
+        cmg::SolveContext::default(),
     )
     .expect("serial benchmark solve should converge");
     (start.elapsed().as_nanos(), result)
@@ -125,19 +126,23 @@ fn time_serial(
 
 fn time_planned(
     solver: &ParallelPcgSolver,
+    team: Team<'_>,
     rhs: &[f64],
     options: PcgOptions,
     workspace: &mut PcgWorkspace,
 ) -> (u128, PcgResult) {
     let start = Instant::now();
-    let result = solve_pcg_with_plan_and_workspace(
+    let result = cmg::solve_pcg_with(
         solver.graph(),
         solver.preconditioner(),
-        solver.plan(),
         black_box(rhs),
         options,
         workspace,
-        solver.executor(),
+        cmg::SolveContext {
+            plan: Some(solver.try_plan(team).expect("parallel plan")),
+            team: Some(team),
+            ..cmg::SolveContext::default()
+        },
     )
     .expect("planned benchmark solve should converge");
     (start.elapsed().as_nanos(), result)
@@ -171,21 +176,20 @@ fn main() {
 
     let bench_graph = build_case(&case, scale);
     let rhs = compatible_rhs(&bench_graph.graph);
-    let solver = ParallelPcgSolver::build(
-        &bench_graph.graph,
-        CmgOptions::default(),
-        ParallelOptions {
-            threads,
-            ..ParallelOptions::default()
-        },
-    )
-    .expect("prepared parallel solver should build");
+    let executor = ParallelExecutor::new(ParallelOptions {
+        threads,
+        ..ParallelOptions::default()
+    })
+    .expect("parallel executor should build");
+    let team = executor.team();
+    let solver = ParallelPcgSolver::build(&bench_graph.graph, CmgOptions::default(), team)
+        .expect("prepared parallel solver should build");
     let options = PcgOptions::default();
     let mut serial_workspace = PcgWorkspace::new(solver.preconditioner());
     let mut planned_workspace = PcgWorkspace::new(solver.preconditioner());
 
     let (_, serial_warm) = time_serial(&solver, &rhs, options, &mut serial_workspace);
-    let (_, planned_warm) = time_planned(&solver, &rhs, options, &mut planned_workspace);
+    let (_, planned_warm) = time_planned(&solver, team, &rhs, options, &mut planned_workspace);
     black_box((&serial_warm, &planned_warm));
 
     let mut serial_ns = Vec::with_capacity(repetitions);
@@ -198,11 +202,13 @@ fn main() {
             let (elapsed, result) = time_serial(&solver, &rhs, options, &mut serial_workspace);
             serial_ns.push(elapsed);
             serial_result = result;
-            let (elapsed, result) = time_planned(&solver, &rhs, options, &mut planned_workspace);
+            let (elapsed, result) =
+                time_planned(&solver, team, &rhs, options, &mut planned_workspace);
             planned_ns.push(elapsed);
             planned_result = result;
         } else {
-            let (elapsed, result) = time_planned(&solver, &rhs, options, &mut planned_workspace);
+            let (elapsed, result) =
+                time_planned(&solver, team, &rhs, options, &mut planned_workspace);
             planned_ns.push(elapsed);
             planned_result = result;
             let (elapsed, result) = time_serial(&solver, &rhs, options, &mut serial_workspace);
@@ -224,7 +230,7 @@ fn main() {
     let execution = format!(
         "{:?}",
         solver
-            .select_batch_execution(1)
+            .select_batch_execution(1, team)
             .expect("routing report should succeed")
             .execution()
     );
@@ -235,8 +241,11 @@ fn main() {
         bench_graph.input_edges,
         bench_graph.canonical_edges,
         solver.preconditioner().hierarchy().levels().len(),
-        solver.plan().operator_count(),
-        solver.plan().byte_len(),
+        solver
+            .try_plan(team)
+            .expect("parallel plan")
+            .operator_count(),
+        solver.try_plan(team).expect("parallel plan").byte_len(),
         serial_workspace.byte_len(),
         serial_result.iterations(),
         planned_result.iterations(),

@@ -5,7 +5,6 @@
 use cmg::ComponentBuildOptions;
 use cmg::{
     CmgError, CmgOptions, CmgPreconditioner, Components, Laplacian, PcgOptions, PcgWorkspace,
-    solve_pcg_with_workspace,
 };
 use std::hint::black_box;
 use std::time::Instant;
@@ -24,14 +23,17 @@ fn build(graph: &Laplacian, route: usize) -> Result<CmgPreconditioner, CmgError>
         return CmgPreconditioner::build(graph, CmgOptions::default());
     }
     #[cfg(feature = "experimental-components")]
-    return CmgPreconditioner::build_component_experiment(
+    return CmgPreconditioner::build_with(
         graph,
-        CmgOptions::default(),
-        ComponentBuildOptions {
-            prune_coarse_isolates: route == 1 || route >= 3,
-            factor_terminal_components: route >= 2,
-            preserve_unpruned_stopping: route == 4,
+        cmg::BuildOptions {
+            hierarchy: CmgOptions::default(),
+            components: ComponentBuildOptions {
+                prune_coarse_isolates: route == 1 || route >= 3,
+                factor_terminal_components: route >= 2,
+                preserve_unpruned_stopping: route == 4,
+            },
         },
+        cmg::BuildContext::default(),
     );
     #[cfg(not(feature = "experimental-components"))]
     panic!("experimental route requested from baseline-only build")
@@ -77,7 +79,14 @@ fn measure(
     let results: Vec<_> = rhs
         .iter()
         .map(|b| {
-            solve_pcg_with_workspace(graph, &pre, black_box(b), PcgOptions::default(), &mut ws)
+            cmg::solve_pcg_with(
+                graph,
+                &pre,
+                black_box(b),
+                PcgOptions::default(),
+                &mut ws,
+                cmg::SolveContext::default(),
+            )
         })
         .collect::<Result<_, _>>()
         .map_err(|e| Failure::new("solve", e))?;
@@ -394,7 +403,7 @@ fn main() {
 
 #[cfg(feature = "component-allocations")]
 fn allocation_probe(case: &Case, rhs: &[Vec<f64>], route: usize) -> Result<(), Failure> {
-    use cmg::{CmgMemoryEstimate, CmgProblemSize, ParallelOptions, solve_pcg_into_with_workspace};
+    use cmg::{CmgMemoryEstimate, CmgProblemSize, ParallelOptions};
     let graph = &case.graph;
     let estimate = CmgMemoryEstimate::conservative(
         CmgProblemSize {
@@ -420,7 +429,7 @@ fn allocation_probe(case: &Case, rhs: &[Vec<f64>], route: usize) -> Result<(), F
     let mut out = vec![0.0; graph.vertex_count()];
     pre.apply_into(&rhs[0], &mut out, &mut cmg_ws)
         .map_err(|e| Failure::new("allocation-apply-warmup", e))?;
-    solve_pcg_into_with_workspace(
+    cmg::solve_pcg_into(
         graph,
         &pre,
         &rhs[0],
@@ -428,6 +437,7 @@ fn allocation_probe(case: &Case, rhs: &[Vec<f64>], route: usize) -> Result<(), F
         &mut out,
         PcgOptions::default(),
         &mut ws,
+        cmg::SolveContext::default(),
     )
     .map_err(|e| Failure::new("allocation-pcg-warmup", e))?;
     let start = allocations::begin();
@@ -438,7 +448,7 @@ fn allocation_probe(case: &Case, rhs: &[Vec<f64>], route: usize) -> Result<(), F
     let apply = allocations::end(start);
     let start = allocations::begin();
     for b in rhs {
-        solve_pcg_into_with_workspace(
+        cmg::solve_pcg_into(
             graph,
             &pre,
             b,
@@ -446,6 +456,7 @@ fn allocation_probe(case: &Case, rhs: &[Vec<f64>], route: usize) -> Result<(), F
             &mut out,
             PcgOptions::default(),
             &mut ws,
+            cmg::SolveContext::default(),
         )
         .map_err(|e| Failure::new("allocation-pcg", e))?;
     }

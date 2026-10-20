@@ -1,6 +1,6 @@
 #![cfg(feature = "parallel")]
 
-use cmg::{CmgError, ControlledStage, HostExecutor, ParallelExecutor, ParallelOptions};
+use cmg::{CmgError, ControlledStage, ParallelExecutor, ParallelOptions, Team};
 use std::sync::{
     Barrier,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -29,11 +29,12 @@ fn empty_stage_and_precancelled_stage_never_call_kernel() {
         ..Default::default()
     })
     .unwrap();
-    pool.with_installed(|team| {
+    let team = pool.team();
+    {
         let empty = stage(0, 1);
         empty
             .run(
-                &team,
+                team,
                 &mut [] as &mut [u32],
                 || false,
                 |_, _| panic!("empty"),
@@ -42,16 +43,15 @@ fn empty_stage_and_precancelled_stage_never_call_kernel() {
         let mut values = [7; 2];
         interrupted(
             stage(2, 1)
-                .run(&team, &mut values, || true, |_, _| panic!("cancelled"))
+                .run(team, &mut values, || true, |_, _| panic!("cancelled"))
                 .unwrap_err(),
         );
         assert_eq!(values, [7; 2]);
-    })
-    .unwrap();
+    }
 }
 
 #[test]
-fn host_requires_its_exact_pool_and_positive_bounded_ceiling() {
+fn team_borrows_a_bounded_ceiling_and_dispatches_on_its_own_pool() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
@@ -60,26 +60,34 @@ fn host_requires_its_exact_pool_and_positive_bounded_ceiling() {
         .num_threads(2)
         .build()
         .unwrap();
-    assert!(HostExecutor::new(&pool, 0).is_err());
-    assert!(HostExecutor::new(&pool, 5).is_err());
-    let host = HostExecutor::new(&pool, 2).unwrap();
-    assert!(
-        host.with_installed(|_| panic!("must reject first"))
-            .is_err()
-    );
-    foreign.install(|| {
-        assert!(host.with_installed(|_| panic!("wrong pool")).is_err());
-    });
-    pool.install(|| {
-        // This controller is intentionally !Send: host callbacks do not migrate.
-        let local = std::rc::Rc::new(std::cell::Cell::new(0));
-        host.with_installed(|team| {
-            assert_eq!(team.worker_ceiling(), 2);
-            local.set(local.get() + 1);
-        })
+    assert!(Team::new(&pool, 0, ParallelOptions::default()).is_err());
+    assert!(Team::new(&pool, 5, ParallelOptions::default()).is_err());
+    let team = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
+    assert_eq!(team.worker_ceiling(), 2);
+    assert_eq!(team.options().threads, 2);
+    // Dispatch from outside the pool, or from a foreign pool, still runs
+    // every kernel on the borrowed pool's workers.
+    for caller in [None, Some(&foreign)] {
+        let mut values = [0_usize; 4];
+        let mut run = || {
+            stage(4, 1).run(
+                team,
+                &mut values,
+                || false,
+                |chunk, values| {
+                    assert!(pool.current_thread_index().is_some());
+                    values[0] = chunk + 1;
+                    Ok(())
+                },
+            )
+        };
+        match caller {
+            None => run(),
+            Some(other) => other.install(run),
+        }
         .unwrap();
-        assert_eq!(local.get(), 1);
-    });
+        assert_eq!(values, [1, 2, 3, 4]);
+    }
 }
 
 #[test]
@@ -95,11 +103,11 @@ fn stage_uses_host_workers_and_caps_terminal_lanes() {
         let visits = AtomicUsize::new(0);
         let mut output = vec![usize::MAX; 4 * ceiling];
         pool.install(|| {
-            HostExecutor::new(&pool, ceiling)
-                .unwrap()
-                .with_installed(|team| {
+            let team = Team::new(&pool, ceiling, ParallelOptions::default()).unwrap();
+            {
+                {
                     stage(output.len(), 1).run(
-                        &team,
+                        team,
                         &mut output,
                         || false,
                         |chunk, values| {
@@ -117,9 +125,9 @@ fn stage_uses_host_workers_and_caps_terminal_lanes() {
                             Ok(())
                         },
                     )
-                })
-                .unwrap()
-                .unwrap();
+                }
+            }
+            .unwrap();
         });
         assert_eq!(maximum.load(Ordering::SeqCst), ceiling);
         assert_eq!(visits.load(Ordering::SeqCst), output.len());
@@ -137,14 +145,14 @@ fn admitted_stage_rejects_mismatched_storage_before_writes() {
     .unwrap();
     let mut values = [7; 3];
     assert!(
-        pool.with_installed(|team| admitted.run(
-            &team,
-            &mut values,
-            || false,
-            |_, _| { panic!("mismatched storage must reject before writes") }
-        ))
-        .unwrap()
-        .is_err()
+        admitted
+            .run(
+                pool.team(),
+                &mut values,
+                || false,
+                |_, _| { panic!("mismatched storage must reject before writes") }
+            )
+            .is_err()
     );
     assert_eq!(values, [7; 3]);
 }
@@ -159,10 +167,10 @@ fn errors_are_canonical_and_all_chunks_join_before_return() {
         .unwrap();
         let completed = AtomicUsize::new(0);
         let mut values = [0; 16];
-        let result = pool
-            .with_installed(|team| {
+        let result = {
+            {
                 stage(16, 1).run(
-                    &team,
+                    pool.team(),
                     &mut values,
                     || false,
                     |chunk, values| {
@@ -177,8 +185,8 @@ fn errors_are_canonical_and_all_chunks_join_before_return() {
                         }
                     },
                 )
-            })
-            .unwrap();
+            }
+        };
         assert!(matches!(
             result,
             Err(CmgError::InvalidHierarchy {
@@ -200,10 +208,10 @@ fn cancellation_during_work_dominates_errors_and_joins() {
     let cancel = AtomicBool::new(false);
     let active = AtomicUsize::new(0);
     let mut values = [0; 64];
-    let result = pool
-        .with_installed(|team| {
+    let result = {
+        {
             stage(64, 1).run(
-                &team,
+                pool.team(),
                 &mut values,
                 || cancel.load(Ordering::Acquire),
                 |chunk, values| {
@@ -218,8 +226,8 @@ fn cancellation_during_work_dominates_errors_and_joins() {
                     })
                 },
             )
-        })
-        .unwrap();
+        }
+    };
     interrupted(result.unwrap_err());
     assert_eq!(active.load(Ordering::SeqCst), 0);
     assert_eq!(values[0], 1);
@@ -237,9 +245,9 @@ fn panic_joins_sibling_lanes_before_unwinding() {
     let completed = AtomicUsize::new(0);
     let mut values = [0; 4];
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        pool.with_installed(|team| {
+        {
             stage(4, 1).run(
-                &team,
+                pool.team(),
                 &mut values,
                 || false,
                 |chunk, values| {
@@ -252,8 +260,7 @@ fn panic_joins_sibling_lanes_before_unwinding() {
                     Ok(())
                 },
             )
-        })
-        .unwrap()
+        }
         .unwrap();
     }));
     assert!(result.is_err());
@@ -284,15 +291,12 @@ fn owned_and_host_dispatch_same_kernel_without_retaining_output_storage() {
     let capacity = a.capacity();
     host_pool
         .install(|| {
-            HostExecutor::new(&host_pool, 4)
-                .unwrap()
-                .with_installed(|team| stage(29, 3).run(&team, &mut a, || false, kernel))
+            let team = Team::new(&host_pool, 4, ParallelOptions::default()).unwrap();
+            stage(29, 3).run(team, &mut a, || false, kernel)
         })
-        .unwrap()
         .unwrap();
-    owned_pool
-        .with_installed(|team| stage(29, 3).run(&team, &mut b, || false, kernel))
-        .unwrap()
+    stage(29, 3)
+        .run(owned_pool.team(), &mut b, || false, kernel)
         .unwrap();
     assert_eq!(a, b);
     assert_eq!(a, (0..29).collect::<Vec<_>>());

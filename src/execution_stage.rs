@@ -1,76 +1,6 @@
 //! Borrowed execution and canonical admission for bounded independent chunks.
 
-use crate::CmgError;
-
-/// A borrowed, already admitted host pool and a positive stage worker ceiling.
-///
-/// This creates no pool, retains no owner and does not admit host runtime memory.
-/// The host remains responsible for its pool's lifetime and resource admission.
-pub struct HostExecutor<'pool> {
-    pool: &'pool rayon::ThreadPool,
-    workers: usize,
-}
-
-impl<'pool> HostExecutor<'pool> {
-    /// Borrow an explicit host pool without installing or starting any work.
-    pub fn new(pool: &'pool rayon::ThreadPool, workers: usize) -> Result<Self, CmgError> {
-        if workers == 0 || workers > pool.current_num_threads() {
-            return Err(CmgError::InvalidHierarchy {
-                context: "host execution worker ceiling is outside the borrowed pool",
-            });
-        }
-        Ok(Self { pool, workers })
-    }
-
-    /// Lend an execution view only while already running on this exact pool.
-    ///
-    /// The coordinator callback need not be `Send`: serial coordinator state may
-    /// stay on the calling thread. Calling from outside this pool fails before
-    /// the callback runs. The view cannot escape the callback or own the pool.
-    /// All callback work must finish synchronously or within joined scopes;
-    /// detached tasks are outside the supported interface contract.
-    ///
-    /// ```compile_fail
-    /// let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    /// let host = cmg::HostExecutor::new(&pool, 1).unwrap();
-    /// pool.install(|| host.with_installed(|team| team)); // Cannot retain a view.
-    /// ```
-    pub fn with_installed<R>(
-        &self,
-        operation: impl for<'scope> FnOnce(InstalledTeam<'scope>) -> R,
-    ) -> Result<R, CmgError> {
-        check_installed(self.pool)?;
-        Ok(operation(InstalledTeam {
-            pool: self.pool,
-            workers: self.workers,
-        }))
-    }
-}
-
-/// A callback-scoped view of the host or CMG-owned installed pool.
-///
-/// It is never stored in a hierarchy or workspace. Only admitted stages can
-/// dispatch through it; it exposes neither an asynchronous spawn nor an owner.
-pub struct InstalledTeam<'scope> {
-    pool: &'scope rayon::ThreadPool,
-    workers: usize,
-}
-
-impl InstalledTeam<'_> {
-    /// Maximum concurrently executing terminal lanes for each stage.
-    pub const fn worker_ceiling(&self) -> usize {
-        self.workers
-    }
-}
-
-fn check_installed(pool: &rayon::ThreadPool) -> Result<(), CmgError> {
-    if pool.current_thread_index().is_none() {
-        return Err(CmgError::InvalidHierarchy {
-            context: "host execution requires its borrowed pool to be installed",
-        });
-    }
-    Ok(())
-}
+use crate::{CmgError, Team};
 
 /// Fixed logical chunking of a mutable slice for independent bounded kernels.
 ///
@@ -122,28 +52,23 @@ impl AdmittedStage {
     /// in logical order wins, independent of scheduling. All admitted chunks
     /// run unless cancelled or unwinding; kernel errors do not cancel siblings.
     /// Outputs remain private partial state on error and must not be published.
-    /// No callbacks or arithmetic from existing serial builders are replaced.
+    /// Dispatch installs on the team's pool; on a worker of that pool it runs
+    /// inline. No callbacks or arithmetic from existing serial builders change.
     pub fn run<T: Send>(
         self,
-        executor: &InstalledTeam<'_>,
+        team: Team<'_>,
         values: &mut [T],
         cancelled: impl Fn() -> bool + Sync,
         kernel: impl Fn(usize, &mut [T]) -> Result<(), CmgError> + Sync,
     ) -> Result<(), CmgError> {
-        check_installed(executor.pool)?;
         if values.len() != self.len {
             return Err(CmgError::InvalidHierarchy {
                 context: "controlled stage output length differs from admission",
             });
         }
-        let result = self.dispatch(
-            values,
-            0,
-            self.chunks,
-            executor.workers.min(self.chunks).max(1),
-            &cancelled,
-            &kernel,
-        );
+        let lanes = team.worker_ceiling().min(self.chunks).max(1);
+        let result =
+            team.install(|| self.dispatch(values, 0, self.chunks, lanes, &cancelled, &kernel));
         if cancelled() {
             return Err(self.interrupted());
         }

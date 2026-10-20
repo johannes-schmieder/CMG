@@ -156,29 +156,30 @@ cargo run --example laplacian_pcg
 ## Reusable parallel and batch solves
 
 For application code, `ParallelPcgSolver` is the preferred high-level parallel
-API. It retains the graph, CMG hierarchy, selective parallel plan, package-owned
-Rayon pool, and reusable workspaces. Depending on the workload, it chooses
-serial PCG, parallelizes one sufficiently large solve, or solves independent
-right-hand sides concurrently within the configured memory budget.
+API. It retains the graph, CMG hierarchy, selective parallel plan and the shape
+of the team it was built for; it owns no pool. Every parallel operation borrows
+a `Team`: a host's own Rayon pool via `Team::new`, or a standalone
+`ParallelExecutor` created once and lent with `executor.team()`. Depending on
+the workload, the solver chooses serial PCG, parallelizes one sufficiently
+large solve, or solves independent right-hand sides concurrently within the
+configured memory budget.
 
 ```rust,ignore
-use cmg::{CmgOptions, ParallelOptions, ParallelPcgSolver, PcgOptions};
+use cmg::{CmgOptions, ParallelExecutor, ParallelOptions, ParallelPcgSolver, PcgOptions};
 
-let solver = ParallelPcgSolver::build(
-    &graph,
-    CmgOptions::default(),
-    ParallelOptions {
-        threads: 16,
-        workspace_memory_budget_bytes: Some(8 * 1024 * 1024 * 1024),
-        ..ParallelOptions::default()
-    },
-)?;
+let executor = ParallelExecutor::new(ParallelOptions {
+    threads: 16,
+    workspace_memory_budget_bytes: Some(8 * 1024 * 1024 * 1024),
+    ..ParallelOptions::default()
+})?;
+let solver = ParallelPcgSolver::build(&graph, CmgOptions::default(), executor.team())?;
 
 let mut workspace = solver.workspace();
 let batch = solver.solve_batch_with_workspace(
     &right_hand_sides,
     PcgOptions::default(),
     &mut workspace,
+    executor.team(),
 )?;
 println!("execution = {:?}", batch.report().execution());
 println!(
@@ -206,7 +207,7 @@ Outer Krylov solvers can apply the stationary preconditioner to a small tile of
 component-compatible right-hand sides without starting an inner PCG solve:
 
 ```rust
-use cmg::{CmgBatchWorkspace, CmgOptions, CmgPreconditioner, Laplacian};
+use cmg::{ApplyContext, CmgBatchWorkspace, CmgOptions, CmgPreconditioner, Laplacian};
 
 # fn main() -> Result<(), cmg::CmgError> {
 let graph = Laplacian::from_edges(3, [(0, 1, 1.0), (1, 2, 1.0)])?;
@@ -216,16 +217,16 @@ let mut workspace = CmgBatchWorkspace::try_new(&cmg, 4, required)?;
 // Two columns, vertex-major: [b0(vertex0), b1(vertex0), b0(vertex1), ...].
 let rhs = [1.0, 2.0, 0.0, -1.0, -1.0, -1.0];
 let mut output = [0.0; 6];
-cmg.apply_compatible_batch_into(&rhs, &mut output, 2, &mut workspace)?;
+cmg.apply_compatible_batch_into(&rhs, &mut output, 2, &mut workspace, ApplyContext::default())?;
 # Ok(())
 # }
 ```
 
 Each application uses its actual column count as the row stride, so the same
 workspace accepts smaller tiles and tails. Sparse matrix, transfer and terminal
-factor passes share their traversal across the columns. `ParallelCmgPlan` offers
-the same `apply_compatible_batch_into` operation with a supplied executor;
-there is no additional pool or per-column CMG-owned allocation. The checked
+factor passes share their traversal across the columns. An `ApplyContext` may
+supply a `ParallelCmgPlan` with its borrowed `Team` and a cancellation query;
+there is no pool or per-column CMG-owned allocation. The checked
 workspace budget includes all retained numerical buffers and descriptor banks,
 but excludes the borrowed hierarchy, caller input/output and parallel runtime.
 `CmgStorageReport` includes the new workspace in capacity-based ownership reports.

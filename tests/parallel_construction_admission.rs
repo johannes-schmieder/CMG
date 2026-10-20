@@ -79,15 +79,24 @@ fn report(roots: &[&dyn CmgStorage]) -> usize {
 }
 
 fn check(graph: &Laplacian, executor: &ParallelExecutor, options: CmgOptions) {
-    let bound = CmgPreconditioner::executor_construction_cmg_allocation_bound(
+    let bound = CmgPreconditioner::construction_allocation_bound(
         graph.vertex_count(),
         graph.edge_count(),
-        options,
+        cmg::BuildOptions::from(options),
+        true,
     )
     .unwrap();
     let calls = CALLS.with(Cell::get);
     assert!(matches!(
-        CmgPreconditioner::build_with_executor_and_cmg_budget(graph, options, executor, bound - 1),
+        CmgPreconditioner::build_with(
+            graph,
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                budget_bytes: Some(bound - 1),
+                ..cmg::BuildContext::default()
+            }
+        ),
         Err(CmgError::MemoryBudgetExceeded { .. })
     ));
     assert_eq!(
@@ -95,30 +104,49 @@ fn check(graph: &Laplacian, executor: &ParallelExecutor, options: CmgOptions) {
         calls,
         "short budget allocated before rejection"
     );
-    let reference = CmgPreconditioner::build_with_executor(graph, options, executor).unwrap();
+    let reference = CmgPreconditioner::build_with(
+        graph,
+        cmg::BuildOptions::from(options),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            ..cmg::BuildContext::default()
+        },
+    )
+    .unwrap();
     let parents = report(&[graph, &reference]);
     let before = LIVE.load(SeqCst);
     PEAK.store(before, SeqCst);
-    let pre =
-        CmgPreconditioner::build_with_executor_and_cmg_budget(graph, options, executor, bound)
-            .unwrap();
+    let pre = CmgPreconditioner::build_with(
+        graph,
+        cmg::BuildOptions::from(options),
+        cmg::BuildContext {
+            team: Some(executor.team()),
+            budget_bytes: Some(bound),
+            ..cmg::BuildContext::default()
+        },
+    )
+    .unwrap();
     let peak = (PEAK.load(SeqCst) - before).max(0);
     assert_eq!(pre, reference);
     let retained = report(&[graph, &reference, &pre]) - parents;
     assert!(retained <= bound);
-    let hierarchy_bound = CmgHierarchy::executor_construction_cmg_allocation_bound(
+    let hierarchy_bound = CmgHierarchy::construction_allocation_bound(
         graph.vertex_count(),
         graph.edge_count(),
         options,
+        true,
     )
     .unwrap();
     let calls = CALLS.with(Cell::get);
     assert!(
-        CmgHierarchy::build_with_executor_and_cmg_budget(
+        CmgHierarchy::build_with(
             graph,
-            options,
-            executor,
-            hierarchy_bound - 1
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                budget_bytes: Some(hierarchy_bound - 1),
+                ..cmg::BuildContext::default()
+            }
         )
         .is_err()
     );
@@ -128,9 +156,25 @@ fn check(graph: &Laplacian, executor: &ParallelExecutor, options: CmgOptions) {
     // hierarchy still uses coarse-graph nonzeros. The exact preconditioner
     // comparison above separately checks that finalization is preserved.
     assert_eq!(
-        CmgHierarchy::build_with_executor_and_cmg_budget(graph, options, executor, hierarchy_bound)
-            .unwrap(),
-        CmgHierarchy::build_with_executor(graph, options, executor).unwrap()
+        CmgHierarchy::build_with(
+            graph,
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                budget_bytes: Some(hierarchy_bound),
+                ..cmg::BuildContext::default()
+            }
+        )
+        .unwrap(),
+        CmgHierarchy::build_with(
+            graph,
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                team: Some(executor.team()),
+                ..cmg::BuildContext::default()
+            }
+        )
+        .unwrap()
     );
     println!(
         "PARALLEL_CMG_CONSTRUCTION_SUCCESS vertices={} edges={} workers={} cmg_bound={bound} retained_new={retained} observed_process_peak_increment={peak} runtime_included_in_observation=true runtime_admitted=false",
@@ -148,8 +192,14 @@ fn check(graph: &Laplacian, executor: &ParallelExecutor, options: CmgOptions) {
         ] {
             let before = CALLER_LIVE.with(Cell::get);
             FAIL_SIZE.with(|slot| slot.set(Some(size * graph.edge_count())));
-            let result = CmgPreconditioner::build_with_executor_and_cmg_budget(
-                graph, options, executor, bound,
+            let result = CmgPreconditioner::build_with(
+                graph,
+                cmg::BuildOptions::from(options),
+                cmg::BuildContext {
+                    team: Some(executor.team()),
+                    budget_bytes: Some(bound),
+                    ..cmg::BuildContext::default()
+                },
             );
             let unconsumed = FAIL_SIZE.with(|slot| slot.replace(None));
             assert!(
@@ -169,33 +219,56 @@ fn check(graph: &Laplacian, executor: &ParallelExecutor, options: CmgOptions) {
                     preserve_unpruned_stopping: preserve,
                     factor_terminal_components: factor,
                 };
-                let bound =
-                    CmgPreconditioner::component_executor_construction_cmg_allocation_bound(
-                        graph.vertex_count(),
-                        graph.edge_count(),
-                        options,
-                        component,
-                    )
-                    .unwrap();
+                let bound = CmgPreconditioner::construction_allocation_bound(
+                    graph.vertex_count(),
+                    graph.edge_count(),
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: component,
+                    },
+                    true,
+                )
+                .unwrap();
                 let calls = CALLS.with(Cell::get);
                 assert!(
-                    CmgPreconditioner::build_component_experiment_with_executor_and_cmg_budget(
+                    CmgPreconditioner::build_with(
                         graph,
-                        options,
-                        component,
-                        executor,
-                        bound - 1,
+                        cmg::BuildOptions {
+                            hierarchy: options,
+                            components: component
+                        },
+                        cmg::BuildContext {
+                            team: Some(executor.team()),
+                            budget_bytes: Some(bound - 1),
+                            ..cmg::BuildContext::default()
+                        }
                     )
                     .is_err()
                 );
                 assert_eq!(CALLS.with(Cell::get), calls);
-                let admitted =
-                    CmgPreconditioner::build_component_experiment_with_executor_and_cmg_budget(
-                        graph, options, component, executor, bound,
-                    )
-                    .unwrap();
-                let legacy = CmgPreconditioner::build_component_experiment_with_executor(
-                    graph, options, component, executor,
+                let admitted = CmgPreconditioner::build_with(
+                    graph,
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: component,
+                    },
+                    cmg::BuildContext {
+                        team: Some(executor.team()),
+                        budget_bytes: Some(bound),
+                        ..cmg::BuildContext::default()
+                    },
+                )
+                .unwrap();
+                let legacy = CmgPreconditioner::build_with(
+                    graph,
+                    cmg::BuildOptions {
+                        hierarchy: options,
+                        components: component,
+                    },
+                    cmg::BuildContext {
+                        team: Some(executor.team()),
+                        ..cmg::BuildContext::default()
+                    },
                 )
                 .unwrap();
                 assert_eq!(admitted, legacy);
@@ -250,9 +323,15 @@ fn fixed_parallel_banks_preserve_thresholds_policies_and_cleanup() {
         drop(executor); // Existing TLS lifetime tests verify the actual joins.
     }
     for (n, m) in [(usize::MAX, 0), (1, usize::MAX)] {
-        assert!(CmgHierarchy::executor_construction_cmg_allocation_bound(n, m, options).is_err());
+        assert!(CmgHierarchy::construction_allocation_bound(n, m, options, true).is_err());
         assert!(
-            CmgPreconditioner::executor_construction_cmg_allocation_bound(n, m, options).is_err()
+            CmgPreconditioner::construction_allocation_bound(
+                n,
+                m,
+                cmg::BuildOptions::from(options),
+                true
+            )
+            .is_err()
         );
     }
     assert_eq!(ParallelExecutor::runtime_allocation_bound(), None);

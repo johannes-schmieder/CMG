@@ -7,8 +7,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod build;
 mod cancel;
-#[cfg(feature = "cycle-profiling")]
 mod cmg_profile;
 mod coarsen;
 #[cfg(feature = "experimental-components")]
@@ -39,6 +39,7 @@ mod sddm_solver;
 mod storage;
 mod workspace;
 
+pub use build::{BuildContext, BuildOptions};
 pub use cancel::Cancellation;
 #[cfg(feature = "cycle-profiling")]
 pub use cmg_profile::{CmgApplyLevelProfile, CmgApplyPhase, CmgApplyProfile};
@@ -54,14 +55,12 @@ pub use csr::CsrLaplacian;
 pub use error::CmgError;
 pub use execution::ParallelOptions;
 #[cfg(feature = "parallel")]
-pub use execution::{ParallelExecutor, ParallelRuntimeAllowance, ParallelRuntimeEstimate};
+pub use execution::{ParallelExecutor, ParallelRuntimeAllowance, ParallelRuntimeEstimate, Team};
 #[cfg(feature = "parallel")]
-pub use execution_stage::{AdmittedStage, ControlledStage, HostExecutor, InstalledTeam};
+pub use execution_stage::{AdmittedStage, ControlledStage};
 pub use forest::{
     ForestGrouping, build_forest_grouping, forest_components, maximum_weight_forest, split_forest,
 };
-#[cfg(feature = "parallel")]
-pub use forest::{build_forest_grouping_with_executor, maximum_weight_forest_with_executor};
 pub use graph::{Edge, Laplacian};
 pub use hierarchy::{CmgHierarchy, HierarchyBuildReport, HierarchyLevel, TerminalReason};
 pub use ldl::GroundedLdl;
@@ -75,31 +74,19 @@ pub use parallel_solver::{
     DEFAULT_MIN_PLANNED_EDGES, ParallelPcgBatchReport, ParallelPcgBatchResult,
     ParallelPcgExecution, ParallelPcgPolicy, ParallelPcgSolver, ParallelPcgWorkspace,
 };
-#[cfg(feature = "profiling")]
-pub use pcg::PcgBatchPhaseProfile;
-#[cfg(feature = "profiling")]
-pub use pcg::profile_pcg_batch_into_with_workspace;
+#[cfg(feature = "parallel")]
+pub use pcg::solve_pcg_batch_concurrent;
 pub use pcg::{
     PcgBatchMut, PcgBatchRef, PcgBatchWorkspace, PcgDiagnostics, PcgResult, PcgWorkspace,
-    solve_pcg, solve_pcg_batch, solve_pcg_batch_into_with_workspace,
-    solve_pcg_batch_with_retained_preconditioner_into_with_workspace,
-    solve_pcg_into_with_workspace, solve_pcg_with_retained_preconditioner_into_with_workspace,
-    solve_pcg_with_workspace,
-};
-#[cfg(feature = "parallel")]
-pub use pcg::{
-    solve_pcg_batch_into_with_executor, solve_pcg_batch_into_with_plan_and_workspace,
-    solve_pcg_batch_parallel, solve_pcg_batch_with_executor,
-    solve_pcg_batch_with_plan_and_retained_preconditioner_into_with_workspace,
-    solve_pcg_batch_with_retained_preconditioner_into_with_executor, solve_pcg_with_plan,
-    solve_pcg_with_plan_and_retained_preconditioner_into_with_workspace,
-    solve_pcg_with_plan_and_workspace, solve_pcg_with_plan_into_with_workspace,
+    SolveContext, solve_pcg, solve_pcg_batch, solve_pcg_batch_into, solve_pcg_into, solve_pcg_with,
 };
 #[cfg(feature = "profiling")]
-pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg_with_plan};
+pub use pcg::{PcgBatchPhaseProfile, profile_pcg_batch_into};
+#[cfg(feature = "profiling")]
+pub use pcg_profile::{PcgPhaseProfile, PcgPhaseSample, ProfiledPcgResult, profile_pcg};
 #[cfg(feature = "parallel")]
 pub use preconditioner::ParallelCmgPlan;
-pub use preconditioner::{CmgBatchWorkspace, CmgPreconditioner};
+pub use preconditioner::{ApplyContext, CmgBatchWorkspace, CmgPreconditioner};
 #[cfg(feature = "profiling")]
 pub use preconditioner::{
     HierarchyPhaseProfile, ParallelPlanBuildProfile, ParallelPlanLevelProfile,

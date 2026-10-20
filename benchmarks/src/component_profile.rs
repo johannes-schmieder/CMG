@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use cmg::{
     Components, ParallelCmgPlan, ParallelExecutor, ParallelOptions, PcgOptions, PcgWorkspace,
-    profile_pcg_with_plan, solve_pcg_with_plan_and_workspace, solve_pcg_with_workspace,
 };
 
 use super::{Case, Failure, build, json_string, names, solution_bit_hash};
@@ -23,8 +22,8 @@ pub(crate) fn run(
         ..ParallelOptions::default()
     })
     .map_err(|e| Failure::new("profile-executor", e))?;
-    let plan =
-        ParallelCmgPlan::build(&pre, &executor).map_err(|e| Failure::new("profile-plan", e))?;
+    let plan = ParallelCmgPlan::build(&pre, executor.team())
+        .map_err(|e| Failure::new("profile-plan", e))?;
     assert_eq!(plan.operator_count(), 0, "one-thread serial operator path");
     if let Some(factor) = pre.terminal_factor() {
         let terminal = pre.hierarchy().levels().last().unwrap().graph();
@@ -48,17 +47,26 @@ pub(crate) fn run(
     }
     let mut workspace = PcgWorkspace::new(&pre);
     for (column, b) in rhs.iter().enumerate() {
-        let scalar =
-            solve_pcg_with_workspace(&case.graph, &pre, b, PcgOptions::default(), &mut workspace)
-                .map_err(|e| Failure::new("profile-scalar-reference", e))?;
-        let planned = solve_pcg_with_plan_and_workspace(
+        let scalar = cmg::solve_pcg_with(
             &case.graph,
             &pre,
-            &plan,
             b,
             PcgOptions::default(),
             &mut workspace,
-            &executor,
+            cmg::SolveContext::default(),
+        )
+        .map_err(|e| Failure::new("profile-scalar-reference", e))?;
+        let planned = cmg::solve_pcg_with(
+            &case.graph,
+            &pre,
+            b,
+            PcgOptions::default(),
+            &mut workspace,
+            cmg::SolveContext {
+                plan: Some(&plan),
+                team: Some(executor.team()),
+                ..cmg::SolveContext::default()
+            },
         )
         .map_err(|e| Failure::new("profile-planned-reference", e))?;
         if scalar != planned || !same_bits(scalar.solution(), planned.solution()) {
@@ -68,13 +76,16 @@ pub(crate) fn run(
             });
         }
         for round in 0..repetitions + 2 {
-            let result = profile_pcg_with_plan(
+            let result = cmg::profile_pcg(
                 &case.graph,
                 &pre,
-                &plan,
                 b,
                 PcgOptions::default(),
-                &executor,
+                cmg::SolveContext {
+                    plan: Some(&plan),
+                    team: Some(executor.team()),
+                    ..cmg::SolveContext::default()
+                },
             )
             .map_err(|e| Failure::new("profile-solve", e))?;
             let diagnostics_match = scalar.iterations() == result.iterations()
