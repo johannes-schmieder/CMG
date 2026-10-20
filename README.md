@@ -237,8 +237,10 @@ recursive repeats, without tolerance-based stopping. Capacity one preserves the
 existing scalar workspace and cycle exactly. Larger-capacity tiles use serial
 compensated coarse-component sums independently in each lane, including when a
 parallel plan is supplied; this can differ by rounding from scalar parallel
-chunk reductions. Existing scalar and PCG APIs retain their arithmetic and
-routing. Tile width is a caller resource choice, not an automatic performance
+chunk reductions. Existing scalar and PCG APIs retain their routing. Any
+team-carrying solve or application, including a one-worker team and every
+`ParallelPcgSolver` mode, uses the same fixed-chunk reductions and centering
+above their thresholds, so its bits do not depend on the worker count. Tile width is a caller resource choice, not an automatic performance
 claim.
 
 ## Validated benchmarks

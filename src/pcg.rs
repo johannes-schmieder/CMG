@@ -834,8 +834,9 @@ pub struct SolveContext<'a> {
     /// The borrowed host team.
     #[cfg(feature = "parallel")]
     pub team: Option<Team<'a>>,
-    /// For batches: solve right-hand sides concurrently on `team`, each with
-    /// the serial recurrence and its own workspace. Requires a team and no plan.
+    /// For batches: solve right-hand sides concurrently on `team`, each on one
+    /// lane of it ([`Team::single_lane`], the team's reduction arithmetic) with
+    /// its own workspace. Requires a team and no plan.
     #[cfg(feature = "parallel")]
     pub concurrent_right_hand_sides: bool,
     /// Precondition with an earlier hierarchy whose finest graph shares the
@@ -927,8 +928,9 @@ pub fn solve_pcg_batch(
         .collect()
 }
 
-/// Solve independent right-hand sides concurrently on `team`, each with the
-/// serial recurrence and a private reusable workspace, returning owned results
+/// Solve independent right-hand sides concurrently on `team`, each on one lane
+/// of it (the team's reduction arithmetic) with a private reusable workspace,
+/// returning owned results
 /// in input order. The team's workspace-memory budget limits the number of
 /// simultaneous solves.
 #[cfg(feature = "parallel")]
@@ -998,7 +1000,10 @@ pub(crate) fn solve_owned_concurrently(
                 &rhs_chunk[index],
                 options,
                 workspace,
-                SolveContext::default(),
+                SolveContext {
+                    team: Some(team.single_lane()),
+                    ..SolveContext::default()
+                },
             ));
             Ok(())
         })?;
@@ -1225,9 +1230,10 @@ fn solve_concurrently(
     if right_hand_sides.rhs_count == 0 {
         return Ok(());
     }
-    // Each concurrent solve is the serial recurrence on its own workspace.
+    // Each concurrent solve runs on one lane with its own workspace; the
+    // one-lane team keeps the full team's reduction and centering arithmetic.
     let lane = Pcg {
-        team: None,
+        team: Some(team.single_lane()),
         ..*solve
     };
     let concurrency = team
@@ -1477,7 +1483,9 @@ impl<'a> Pcg<'a> {
     /// Teams of two or more workers select fixed-chunk reductions.
     #[cfg(feature = "parallel")]
     fn reduction_team(&self) -> Option<Team<'a>> {
-        self.team.filter(|team| team.worker_ceiling() > 1)
+        // Any team, one lane included: the fixed-chunk tree depends only on
+        // lengths and the team's thresholds, never on its lane count.
+        self.team
     }
 
     #[cfg(not(feature = "parallel"))]
@@ -2665,47 +2673,42 @@ mod tests {
             .map(|index| ((index * 31 + 7) % 113) as f64 / 19.0 - 2.0)
             .collect();
         let serial = Pcg::new(&graph, &preconditioner, SolveContext::default());
-        let mut reference = None;
-        for threads in [2, 3, 4] {
-            let executor = executor(threads);
+        let reductions = |team: Team<'_>| {
             let solve = Pcg::new(
                 &graph,
                 &preconditioner,
                 SolveContext {
-                    team: Some(executor.team()),
+                    team: Some(team),
                     ..SolveContext::default()
                 },
             );
-            let dot = solve.dot(&left, &right, &mut Unmetered).unwrap();
-            let norm = solve.norm(&right, &mut Unmetered).unwrap();
-            match reference {
-                Some(bits) => assert_eq!(bits, (dot.to_bits(), norm.to_bits())),
-                None => reference = Some((dot.to_bits(), norm.to_bits())),
+            (
+                solve.dot(&left, &right, &mut Unmetered).unwrap().to_bits(),
+                solve.norm(&right, &mut Unmetered).unwrap().to_bits(),
+            )
+        };
+        // One worker included: the fixed-chunk tree depends only on lengths
+        // and thresholds, and a one-lane view of a wider team is the same.
+        let mut reference = None;
+        for threads in [1, 2, 3, 4, 8] {
+            let executor = executor(threads);
+            for bits in [
+                reductions(executor.team()),
+                reductions(executor.team().single_lane()),
+            ] {
+                match reference {
+                    Some(expected) => assert_eq!(bits, expected, "{threads} threads"),
+                    None => reference = Some(bits),
+                }
             }
         }
+        // The team-free serial recurrence keeps its single compensated sum,
+        // within rounding of the tree.
         let (dot, norm) = reference.unwrap();
         let serial_dot = serial.dot(&left, &right, &mut Unmetered).unwrap();
         let serial_norm = serial.norm(&right, &mut Unmetered).unwrap();
         assert!((f64::from_bits(dot) - serial_dot).abs() <= 2.0e-13 * (1.0 + serial_dot.abs()));
         assert!((f64::from_bits(norm) - serial_norm).abs() <= 3.0e-13 * (1.0 + serial_norm));
-        // A one-worker team is the serial recurrence.
-        let one = executor(1);
-        let solve = Pcg::new(
-            &graph,
-            &preconditioner,
-            SolveContext {
-                team: Some(one.team()),
-                ..SolveContext::default()
-            },
-        );
-        assert_eq!(
-            solve.dot(&left, &right, &mut Unmetered).unwrap().to_bits(),
-            serial_dot.to_bits()
-        );
-        assert_eq!(
-            solve.norm(&right, &mut Unmetered).unwrap().to_bits(),
-            serial_norm.to_bits()
-        );
     }
 
     #[cfg(feature = "parallel")]
@@ -3145,54 +3148,66 @@ mod reduction_leaf_tests {
             .num_threads(4)
             .build()
             .unwrap();
-        let team = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
-        let interval = crate::cancel::POLL_UNITS as usize;
-        let after_bound = team.worker_ceiling() * (interval + 1024);
-        let dot = fixed_chunk_dot(&left, &right, chunk, team, None).unwrap();
-        let squares = fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, None).unwrap();
-        let scale = fixed_chunk_scale(&right, chunk, team, None).unwrap();
-        for stop in [0, 2] {
-            let runs: [(&[f64], &Reduction<'_>); 3] = [
-                (&left, &|query| {
-                    fixed_chunk_dot(&left, &right, chunk, team, Some(query))
-                }),
-                (&right, &|query| {
-                    fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, Some(query))
-                }),
-                (&right, &|query| {
-                    fixed_chunk_scale(&right, chunk, team, Some(query))
-                }),
-            ];
-            for (watched, run) in runs {
-                let (result, at, total) = observed(watched, stop, run);
-                assert!(matches!(result, Err(CmgError::Cancelled { .. })));
-                assert!(at <= total, "{at} > {total}");
-                assert!(
-                    total - at <= after_bound,
-                    "{} entries visited after cancellation was observed",
-                    total - at
-                );
-                assert!(total <= (stop + 2 * team.worker_ceiling()) * (interval + 1024));
-                assert!(total < len / 4, "{total} of {len} entries visited");
+        let wide = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
+        let reference = (
+            fixed_chunk_dot(&left, &right, chunk, wide, None).unwrap(),
+            fixed_chunk_scaled_square_sum(&right, 3.0, chunk, wide, None).unwrap(),
+            fixed_chunk_scale(&right, chunk, wide, None).unwrap(),
+        );
+        // The one-lane view runs the same tree on its calling lane: equal bits
+        // and the same per-lane cancellation bounds.
+        for team in [wide, wide.single_lane()] {
+            let interval = crate::cancel::POLL_UNITS as usize;
+            let after_bound = team.worker_ceiling() * (interval + 1024);
+            let dot = fixed_chunk_dot(&left, &right, chunk, team, None).unwrap();
+            let squares = fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, None).unwrap();
+            let scale = fixed_chunk_scale(&right, chunk, team, None).unwrap();
+            for stop in [0, 2] {
+                let runs: [(&[f64], &Reduction<'_>); 3] = [
+                    (&left, &|query| {
+                        fixed_chunk_dot(&left, &right, chunk, team, Some(query))
+                    }),
+                    (&right, &|query| {
+                        fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, Some(query))
+                    }),
+                    (&right, &|query| {
+                        fixed_chunk_scale(&right, chunk, team, Some(query))
+                    }),
+                ];
+                for (watched, run) in runs {
+                    let (result, at, total) = observed(watched, stop, run);
+                    assert!(matches!(result, Err(CmgError::Cancelled { .. })));
+                    assert!(at <= total, "{at} > {total}");
+                    assert!(
+                        total - at <= after_bound,
+                        "{} entries visited after cancellation was observed",
+                        total - at
+                    );
+                    assert!(total <= (stop + 2 * team.worker_ceiling()) * (interval + 1024));
+                    assert!(total < len / 4, "{total} of {len} entries visited");
+                }
             }
+            // The uncancelled reductions see every entry once and reproduce bits.
+            visits::watch(&left);
+            let again = fixed_chunk_dot(&left, &right, chunk, team, None).unwrap();
+            assert_eq!(visits::count(), len);
+            visits::unwatch();
+            assert_eq!(again.to_bits(), dot.to_bits());
+            assert_eq!(
+                fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, None)
+                    .unwrap()
+                    .to_bits(),
+                squares.to_bits()
+            );
+            assert_eq!(
+                fixed_chunk_scale(&right, chunk, team, None)
+                    .unwrap()
+                    .to_bits(),
+                scale.to_bits()
+            );
+            assert_eq!(dot.to_bits(), reference.0.to_bits());
+            assert_eq!(squares.to_bits(), reference.1.to_bits());
+            assert_eq!(scale.to_bits(), reference.2.to_bits());
         }
-        // The uncancelled reductions see every entry once and reproduce bits.
-        visits::watch(&left);
-        let again = fixed_chunk_dot(&left, &right, chunk, team, None).unwrap();
-        assert_eq!(visits::count(), len);
-        visits::unwatch();
-        assert_eq!(again.to_bits(), dot.to_bits());
-        assert_eq!(
-            fixed_chunk_scaled_square_sum(&right, 3.0, chunk, team, None)
-                .unwrap()
-                .to_bits(),
-            squares.to_bits()
-        );
-        assert_eq!(
-            fixed_chunk_scale(&right, chunk, team, None)
-                .unwrap()
-                .to_bits(),
-            scale.to_bits()
-        );
     }
 }

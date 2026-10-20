@@ -426,7 +426,7 @@ impl ParallelPcgSolver {
         let context = match self.select_batch_execution(1, team)?.execution {
             ParallelPcgExecution::Planned => self.planned(team)?,
             ParallelPcgExecution::Serial | ParallelPcgExecution::AcrossRightHandSides => {
-                SolveContext::default()
+                Self::serial(team)
             }
         };
         self.solve_one(rhs, options, &mut workspace.workspaces[0], context)
@@ -473,7 +473,7 @@ impl ParallelPcgSolver {
                 let context = if report.execution == ParallelPcgExecution::Planned {
                     self.planned(team)?
                 } else {
-                    SolveContext::default()
+                    Self::serial(team)
                 };
                 right_hand_sides
                     .iter()
@@ -490,6 +490,16 @@ impl ParallelPcgSolver {
             )?,
         };
         Ok(ParallelPcgBatchResult { results, report })
+    }
+
+    /// The serial context: one lane of `team`, so a serial solve keeps the
+    /// planned solve's reduction and centering arithmetic.
+    #[must_use]
+    pub fn serial(team: Team<'_>) -> SolveContext<'_> {
+        SolveContext {
+            team: Some(team.single_lane()),
+            ..SolveContext::default()
+        }
     }
 
     fn planned<'s>(&'s self, team: Team<'s>) -> Result<SolveContext<'s>, CmgError> {

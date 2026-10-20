@@ -299,6 +299,9 @@ fn parallel_cmg_plan_matches_stationary_cycle_and_rejects_other_hierarchies() {
     );
 }
 
+// Below the fixed-chunk reduction threshold (4,000 vertices against 131,072),
+// a one-worker team performs the serial arithmetic; above it every team uses
+// the fixed-chunk tree (`tests/worker_independent.rs`).
 #[test]
 fn one_thread_parallel_cmg_plan_is_bitwise_serial() {
     let (graph, right_hand_sides) = path_problem(4_000, 1);
@@ -393,6 +396,9 @@ fn planned_parallel_pcg_matches_serial_certification() {
     }
 }
 
+// Below the fixed-chunk reduction threshold (4,000 vertices against 131,072),
+// a one-worker team performs the serial arithmetic; above it every team uses
+// the fixed-chunk tree (`tests/worker_independent.rs`).
 #[test]
 fn one_thread_planned_pcg_is_bitwise_serial() {
     let (graph, right_hand_sides) = path_problem(4_000, 1);

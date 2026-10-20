@@ -18,6 +18,16 @@ reductions use one fixed balanced tree over fixed leaves whose forks stop once
 the lane budget is spent, so the tree, and every bit, is independent of the
 ceiling. No other CMG code forks or installs work on the pool.
 
+A team of any ceiling, one included, uses that tree for PCG dot products, norm
+sums and single-component centering whenever a length reaches
+`max(min_parallel_len, 8 * reduction_chunk_size)`. `Team::single_lane()` is a
+one-lane view of the same pool with the same thresholds; `ParallelPcgSolver`
+runs serial solves and each concurrent right-hand-side lane on it, so every
+execution mode and worker ceiling produces the same bits. Row operators (CSR
+gather) and edge-list products (scatter) are bit-identical, so which levels
+carry row operators remains a worker-dependent resource choice. Team-free
+calls keep the serial compensated sums.
+
 Owned-executor destruction joins every worker and its TLS destructors. If a
 misbehaving detached callback retains the final executor owner on its own
 worker, defensive destruction signals termination and detaches the handles to

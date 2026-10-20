@@ -396,6 +396,21 @@ impl<'a> Team<'a> {
         self.options
     }
 
+    /// A one-lane view of the same pool with the same thresholds: every
+    /// kernel runs on the calling lane, and fixed-chunk reductions and
+    /// centering keep the team's reduction tree, so their bits equal those of
+    /// the full team. Serial solves and each concurrent right-hand-side lane
+    /// use it; no pool is created.
+    #[must_use]
+    pub const fn single_lane(&self) -> Self {
+        let mut options = self.options;
+        options.threads = 1;
+        Self {
+            pool: self.pool,
+            options,
+        }
+    }
+
     /// Return the maximum number of simultaneous workspaces allowed for a
     /// batch of the supplied size.
     pub fn batch_concurrency(
@@ -737,12 +752,21 @@ pub(crate) mod gauge {
 
     pub(crate) struct Lane(bool);
 
+    std::thread_local! {
+        // Nested lane entries on this thread (a one-lane primitive inside a
+        // lane runs inline): the thread counts as one concurrent lane.
+        static DEPTH: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
     pub(crate) fn enter(pool: &rayon::ThreadPool) -> Lane {
         let mut state = state();
         let watched = state.pool == core::ptr::from_ref(pool) as usize;
         if watched {
-            state.active += 1;
-            state.max = state.max.max(state.active);
+            let depth = DEPTH.with(|depth| depth.replace(depth.get() + 1));
+            if depth == 0 {
+                state.active += 1;
+                state.max = state.max.max(state.active);
+            }
         }
         Lane(watched)
     }
@@ -750,7 +774,14 @@ pub(crate) mod gauge {
     impl Drop for Lane {
         fn drop(&mut self) {
             if self.0 {
-                state().active -= 1;
+                let mut state = state();
+                let depth = DEPTH.with(|depth| {
+                    depth.set(depth.get() - 1);
+                    depth.get()
+                });
+                if depth == 0 {
+                    state.active -= 1;
+                }
             }
         }
     }

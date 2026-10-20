@@ -1144,7 +1144,7 @@ fn should_parallel_centering(length: usize, team: Team<'_>) -> bool {
     let parallel_floor = options
         .min_parallel_len
         .max(options.reduction_chunk_size.saturating_mul(8));
-    team.worker_ceiling() > 1 && length >= parallel_floor
+    length >= parallel_floor
 }
 
 /// One-component centering with fixed-chunk team sums. Lanes poll the meter's
@@ -1709,39 +1709,43 @@ mod fixed_chunk_sum_tests {
             .num_threads(4)
             .build()
             .unwrap();
-        let team = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
+        let wide = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
         let interval = crate::cancel::POLL_UNITS as usize;
-        let reference = fixed_chunk_sum(&values, chunk, team, None).unwrap();
-        for stop in [0, 2] {
-            let calls = AtomicUsize::new(0);
-            let at = AtomicUsize::new(usize::MAX);
-            let query = || {
-                if calls.fetch_add(1, Ordering::SeqCst) < stop {
-                    return false;
-                }
-                let _ = at.compare_exchange(
-                    usize::MAX,
-                    visits::count(),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
-                true
-            };
+        let reference = fixed_chunk_sum(&values, chunk, wide, None).unwrap();
+        // The one-lane view runs the same tree on its calling lane: equal bits
+        // and the same per-lane cancellation bounds.
+        for team in [wide, wide.single_lane()] {
+            for stop in [0, 2] {
+                let calls = AtomicUsize::new(0);
+                let at = AtomicUsize::new(usize::MAX);
+                let query = || {
+                    if calls.fetch_add(1, Ordering::SeqCst) < stop {
+                        return false;
+                    }
+                    let _ = at.compare_exchange(
+                        usize::MAX,
+                        visits::count(),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    );
+                    true
+                };
+                visits::watch(&values);
+                let result = fixed_chunk_sum(&values, chunk, team, Some(&query));
+                let total = visits::count();
+                visits::unwatch();
+                assert!(matches!(result, Err(CmgError::Cancelled { .. })));
+                let at = at.load(Ordering::SeqCst);
+                assert!(at <= total);
+                assert!(total - at <= team.worker_ceiling() * (interval + 1024));
+                assert!(total <= (stop + 2 * team.worker_ceiling()) * (interval + 1024));
+                assert!(total < len / 4, "{total} of {len} entries visited");
+            }
             visits::watch(&values);
-            let result = fixed_chunk_sum(&values, chunk, team, Some(&query));
-            let total = visits::count();
+            let again = fixed_chunk_sum(&values, chunk, team, None).unwrap();
+            assert_eq!(visits::count(), len);
             visits::unwatch();
-            assert!(matches!(result, Err(CmgError::Cancelled { .. })));
-            let at = at.load(Ordering::SeqCst);
-            assert!(at <= total);
-            assert!(total - at <= team.worker_ceiling() * (interval + 1024));
-            assert!(total <= (stop + 2 * team.worker_ceiling()) * (interval + 1024));
-            assert!(total < len / 4, "{total} of {len} entries visited");
+            assert_eq!(again.to_bits(), reference.to_bits());
         }
-        visits::watch(&values);
-        let again = fixed_chunk_sum(&values, chunk, team, None).unwrap();
-        assert_eq!(visits::count(), len);
-        visits::unwatch();
-        assert_eq!(again.to_bits(), reference.to_bits());
     }
 }

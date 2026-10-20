@@ -34,13 +34,26 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Changed
 
+- Team-carrying solves and applications are bit-identical at every worker
+  ceiling, one included, and in every `ParallelPcgSolver` execution mode. PCG
+  dot products, norm sums and single-component centering (finest PCG level and
+  scalar-cycle coarse levels) use the team's fixed-chunk tree whenever a length
+  reaches `max(min_parallel_len, 8 * reduction_chunk_size)`, also on a
+  one-worker team, and serial and concurrent right-hand-side solves run on
+  `Team::single_lane()`, a one-lane view of the caller's team, instead of the
+  team-free recurrence. This changes rounding (not iteration logic or
+  certification) of one-worker, serial-mode and across-RHS solves at or above
+  that length; multi-worker planned results are unchanged. Team-free calls keep
+  the serial compensated sums. Row operators remain a worker-dependent
+  resource choice: they reproduce the edge-list products bit for bit. No
+  allocation, pool or admission changes.
 - Prepared topology and numeric-frame publication polls before each shared-owner
   allocation, and topology preparation polls after constructing its private
   result. Cancellation drops partial owners before returning; allocation order,
   layout admission and successful arithmetic are unchanged.
 - Planned within-solve PCG uses fixed-order parallel component centering for
   large connected systems, preserving deterministic results across eligible
-  multithreaded worker-pool sizes while one worker retains the serial path;
+  multithreaded worker-pool sizes (one worker too, since the change above);
   prepared automatic routing can select these qualified vector kernels even
   when no hierarchy operator qualifies for row-parallel storage.
 - Dense parallel-plan construction fills deterministic row-owned CSR blocks in
