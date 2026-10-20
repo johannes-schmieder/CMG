@@ -27,8 +27,6 @@ use crate::cmg_profile::{CmgApplyPhase, CycleRecorder};
 #[cfg(feature = "parallel")]
 use crate::execution::Team;
 use crate::{CmgError, GroundedLdl, TerminalReason};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 
 /// Lanes processed per vertex by one application.
 pub(crate) trait Width: Copy + Send + Sync {
@@ -359,8 +357,9 @@ impl<S: Store> Cycle<'_, S> {
         #[cfg(feature = "parallel")]
         if let Some(team) = self.parallel_team(parallel) {
             if team.should_parallel(output.len()) {
-                rows_parallel(team, meter.query(), output, columns, operation);
-                return meter.joined("CMG cycle diagonal");
+                let rows = rows_parallel(team, meter.query(), output, columns, operation);
+                meter.joined("CMG cycle diagonal")?;
+                return rows;
             }
         }
         let _ = parallel;
@@ -388,8 +387,9 @@ impl<S: Store> Cycle<'_, S> {
         #[cfg(feature = "parallel")]
         if let Some(team) = self.parallel_team(parallel) {
             if team.should_parallel(output.len()) {
-                rows_parallel(team, meter.query(), output, columns, operation);
-                return meter.joined("CMG cycle smoothing");
+                let rows = rows_parallel(team, meter.query(), output, columns, operation);
+                meter.joined("CMG cycle smoothing")?;
+                return rows;
             }
         }
         let _ = parallel;
@@ -455,33 +455,41 @@ fn rows_serial<M: Meter>(
     })
 }
 
-/// Rows on the team in fixed work chunks; each lane polls the sticky query
-/// between bounded sub-ranges and stops early once it is true.
+/// Rows on the team in fixed blocks of the team's work-chunk length, claimed by
+/// at most `worker_ceiling` lanes. `kernel(row, values, poll)` counts its own
+/// work through the lane's poll, inside long rows too, and its error stops the
+/// lane. Callers poll their meter after the join, so cancellation dominates.
+#[cfg(feature = "parallel")]
+pub(crate) fn rows_parallel_with(
+    team: Team<'_>,
+    query: Option<crate::Cancellation<'_>>,
+    output: &mut [f64],
+    columns: usize,
+    kernel: impl Fn(usize, &mut [f64], &mut crate::cancel::LanePoll<'_>) -> Result<(), CmgError> + Sync,
+) -> Result<(), CmgError> {
+    let rows = team.work_chunk_len(output.len() / columns);
+    team.chunks_mut(output, rows * columns, query, |block, values, poll| {
+        let first = block * rows;
+        for (offset, row) in values.chunks_exact_mut(columns).enumerate() {
+            kernel(first + offset, row, poll)?;
+        }
+        Ok(())
+    })
+}
+
+/// Elementwise rows of `columns` units each on the team.
 #[cfg(feature = "parallel")]
 pub(crate) fn rows_parallel(
     team: Team<'_>,
     query: Option<crate::Cancellation<'_>>,
     output: &mut [f64],
     columns: usize,
-    operation: impl Fn(usize, &mut [f64]) + Send + Sync,
-) {
-    let rows = team.work_chunk_len(output.len() / columns);
-    team.install(|| {
-        output
-            .par_chunks_mut(rows * columns)
-            .enumerate()
-            .for_each(|(block, values)| {
-                let first = block * rows;
-                crate::cancel::lane(query, 0..values.len() / columns, |range| {
-                    for offset in range {
-                        operation(
-                            first + offset,
-                            &mut values[offset * columns..(offset + 1) * columns],
-                        );
-                    }
-                });
-            })
-    });
+    operation: impl Fn(usize, &mut [f64]) + Sync,
+) -> Result<(), CmgError> {
+    rows_parallel_with(team, query, output, columns, |row, values, poll| {
+        operation(row, values);
+        crate::cancel::Progress::advance(poll, "parallel rows", columns)
+    })
 }
 
 #[cfg(test)]
@@ -693,7 +701,30 @@ mod cancellation_tests {
             )
             .unwrap();
 
-        for threshold in [1, 7, 40, 200] {
+        // Queries of one uncancelled planned application (coordinator and lanes).
+        let total = {
+            let calls = AtomicUsize::new(0);
+            let query = || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                false
+            };
+            let mut output = vec![0.0; n];
+            preconditioner
+                .apply_compatible_into_with(
+                    &rhs,
+                    &mut output,
+                    &mut workspace,
+                    ApplyContext {
+                        cancel: Some(&query),
+                        ..planned
+                    },
+                )
+                .unwrap();
+            assert_eq!(bits(&output), bits(&expected));
+            calls.load(Ordering::SeqCst)
+        };
+        assert!(total > 8, "{total} queries");
+        for threshold in [1, total / 4, total / 2, total - 1] {
             // Sticky after `threshold` queries from the coordinator or any lane.
             let calls = AtomicUsize::new(0);
             let query = || calls.fetch_add(1, Ordering::SeqCst) >= threshold;

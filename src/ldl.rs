@@ -1,6 +1,6 @@
 //! Component-grounded, static-degree-ordered LDL^T terminal solver.
 
-use crate::cancel::{Meter, Unmetered, chunked};
+use crate::cancel::{Meter, Progress, Unmetered, chunked};
 use crate::storage::{add, bytes};
 use crate::{CmgError, Components, Laplacian, ValidationOptions};
 
@@ -73,6 +73,12 @@ impl crate::storage::Storage for LowerFactor {
     }
 }
 
+/// The empty sum of the toolchain's `Iterator::sum` for `f64` (its fold seed),
+/// so segmented corrections reproduce the reference sums bit for bit.
+fn empty_sum() -> f64 {
+    core::iter::empty::<f64>().sum()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum LowerFactor {
     Packed {
@@ -89,14 +95,19 @@ enum LowerFactor {
 }
 
 impl LowerFactor {
-    fn batch_correction(
+    /// Every lane's strict-row correction, accumulated into `sums` from zero
+    /// in canonical entry order. A polling progress counts the row in
+    /// segments while it runs; the per-lane accumulation order is unchanged.
+    fn batch_correction<P: Progress>(
         &self,
         row: usize,
         input: &[f64],
         columns: usize,
         forward: bool,
         sums: &mut [f64],
-    ) {
+        progress: &mut P,
+    ) -> Result<(), CmgError> {
+        const PHASE: &str = "terminal row correction";
         sums.fill(0.0);
         let mut add_entry = |source: usize, coefficient: f64| {
             for (lane, value) in sums.iter_mut().enumerate() {
@@ -106,26 +117,44 @@ impl LowerFactor {
         match self {
             Self::Packed { values } if forward => {
                 let start = row * row.saturating_sub(1) / 2;
-                for (column, &value) in values[start..start + row].iter().enumerate() {
-                    add_entry(column, value);
-                }
+                chunked(progress, PHASE, row, columns, |range| {
+                    for column in range {
+                        add_entry(column, values[start + column]);
+                    }
+                    Ok(())
+                })
             }
             Self::Packed { values } => {
                 let mut index = row * (row + 1) / 2 + row;
-                for later in row + 1..input.len() / columns {
-                    add_entry(later, values[index]);
-                    index += later;
-                }
+                let first = row + 1;
+                let count = (input.len() / columns).saturating_sub(first);
+                chunked(progress, PHASE, count, columns, |range| {
+                    for later in first + range.start..first + range.end {
+                        add_entry(later, values[index]);
+                        index += later;
+                    }
+                    Ok(())
+                })
             }
             Self::Sparse {
                 row_offsets,
-                columns,
+                columns: entries,
                 row_values,
                 ..
             } if forward => {
-                for index in row_offsets[row]..row_offsets[row + 1] {
-                    add_entry(columns[index] as usize, row_values[index]);
-                }
+                let start = row_offsets[row];
+                chunked(
+                    progress,
+                    PHASE,
+                    row_offsets[row + 1] - start,
+                    columns,
+                    |range| {
+                        for index in start + range.start..start + range.end {
+                            add_entry(entries[index] as usize, row_values[index]);
+                        }
+                        Ok(())
+                    },
+                )
             }
             Self::Sparse {
                 column_offsets,
@@ -133,9 +162,19 @@ impl LowerFactor {
                 column_values,
                 ..
             } => {
-                for index in column_offsets[row]..column_offsets[row + 1] {
-                    add_entry(rows[index] as usize, column_values[index]);
-                }
+                let start = column_offsets[row];
+                chunked(
+                    progress,
+                    PHASE,
+                    column_offsets[row + 1] - start,
+                    columns,
+                    |range| {
+                        for index in start + range.start..start + range.end {
+                            add_entry(rows[index] as usize, column_values[index]);
+                        }
+                        Ok(())
+                    },
+                )
             }
         }
     }
@@ -234,64 +273,114 @@ impl LowerFactor {
         })
     }
 
-    fn forward_correction(&self, row: usize, forward: &[f64]) -> f64 {
+    /// Add the forward correction of `row` to `sum` term by term, in the
+    /// order of the reference `Iterator::sum`; seed `sum` with [`empty_sum()`].
+    /// A polling progress counts the row in segments while it runs.
+    fn forward_correction_into<P: Progress>(
+        &self,
+        row: usize,
+        forward: &[f64],
+        sum: &mut f64,
+        progress: &mut P,
+    ) -> Result<(), CmgError> {
+        const PHASE: &str = "terminal forward solve";
         match self {
             Self::Packed { values } => {
                 let start = row.saturating_mul(row.saturating_sub(1)) / 2;
-                values[start..start + row]
-                    .iter()
-                    .zip(&forward[..row])
-                    .map(|(lower_value, previous)| lower_value * previous)
-                    .sum()
+                chunked(progress, PHASE, row, 1, |range| {
+                    *sum = values[start + range.start..start + range.end]
+                        .iter()
+                        .zip(&forward[range])
+                        .map(|(lower_value, previous)| lower_value * previous)
+                        .fold(*sum, |total, term| total + term);
+                    Ok(())
+                })
             }
             Self::Sparse {
                 row_offsets,
                 columns,
                 row_values,
                 ..
-            } => (row_offsets[row]..row_offsets[row + 1])
-                .map(|index| row_values[index] * forward[columns[index] as usize])
-                .sum(),
+            } => {
+                let start = row_offsets[row];
+                chunked(progress, PHASE, row_offsets[row + 1] - start, 1, |range| {
+                    *sum = (start + range.start..start + range.end)
+                        .map(|index| row_values[index] * forward[columns[index] as usize])
+                        .fold(*sum, |total, term| total + term);
+                    Ok(())
+                })
+            }
         }
     }
 
-    fn backward_correction(&self, row: usize, solution: &[f64]) -> f64 {
+    /// Add the backward correction of `row` to `sum` as
+    /// [`Self::forward_correction_into`] does for the forward solve.
+    fn backward_correction_into<P: Progress>(
+        &self,
+        row: usize,
+        solution: &[f64],
+        sum: &mut f64,
+        progress: &mut P,
+    ) -> Result<(), CmgError> {
+        const PHASE: &str = "terminal backward solve";
         match self {
             Self::Packed { values } => {
                 // Consecutive packed rows differ in length by one. Advance the
                 // column position instead of multiplying triangular indices
                 // for every coefficient; retain the reference summation order.
                 let mut index = row.saturating_mul(row.saturating_add(1)) / 2 + row;
-                solution
-                    .iter()
-                    .enumerate()
-                    .skip(row + 1)
-                    .map(|(later, &value)| {
-                        let product = values[index] * value;
+                let first = row + 1;
+                let count = solution.len().saturating_sub(first);
+                chunked(progress, PHASE, count, 1, |range| {
+                    for (later, &value) in solution
+                        .iter()
+                        .enumerate()
+                        .take(first + range.end)
+                        .skip(first + range.start)
+                    {
+                        *sum += values[index] * value;
                         index += later;
-                        product
-                    })
-                    .sum()
+                    }
+                    Ok(())
+                })
             }
             Self::Sparse {
                 column_offsets,
                 rows,
                 column_values,
                 ..
-            } => (column_offsets[row]..column_offsets[row + 1])
-                .map(|index| column_values[index] * solution[rows[index] as usize])
-                .sum(),
+            } => {
+                let start = column_offsets[row];
+                chunked(
+                    progress,
+                    PHASE,
+                    column_offsets[row + 1] - start,
+                    1,
+                    |range| {
+                        *sum = (start + range.start..start + range.end)
+                            .map(|index| column_values[index] * solution[rows[index] as usize])
+                            .fold(*sum, |total, term| total + term);
+                        Ok(())
+                    },
+                )
+            }
         }
     }
 
-    /// Strict entries read by one forward or backward row correction.
-    fn row_len(&self, row: usize, dimension: usize, forward: bool) -> usize {
-        match self {
-            Self::Packed { .. } if forward => row,
-            Self::Packed { .. } => dimension - row - 1,
-            Self::Sparse { row_offsets, .. } if forward => row_offsets[row + 1] - row_offsets[row],
-            Self::Sparse { column_offsets, .. } => column_offsets[row + 1] - column_offsets[row],
-        }
+    #[cfg(all(test, feature = "experimental-components"))]
+    fn forward_correction(&self, row: usize, forward: &[f64]) -> f64 {
+        let mut sum = empty_sum();
+        self.forward_correction_into(row, forward, &mut sum, &mut crate::cancel::Unmetered)
+            .unwrap_or_else(|_| unreachable!());
+        sum
+    }
+
+    #[cfg(all(test, feature = "experimental-components"))]
+    fn backward_correction(&self, row: usize, solution: &[f64]) -> f64 {
+        let mut sum = empty_sum();
+        self.backward_correction_into(row, solution, &mut sum, &mut crate::cancel::Unmetered)
+            .unwrap_or_else(|_| unreachable!());
+        sum
     }
 
     fn byte_len(&self) -> usize {
@@ -358,13 +447,10 @@ impl GroundedLdl {
         let scratch_len = columns.min(solution.len());
         let dimension = self.active_dimension();
         for row in 0..dimension {
-            meter.items(
-                "terminal forward solve",
-                (self.lower.row_len(row, dimension, true) + 1) * columns,
-            )?;
             let scratch = &mut solution[..scratch_len];
             self.lower
-                .batch_correction(row, forward, columns, true, scratch);
+                .batch_correction(row, forward, columns, true, scratch, meter)?;
+            meter.items("terminal forward solve", columns)?;
             for lane in 0..columns {
                 let value = rhs[self.permutation[row] * columns + lane] - scratch[lane];
                 forward[row * columns + lane] = value;
@@ -390,13 +476,10 @@ impl GroundedLdl {
             },
         )?;
         for row in (0..dimension).rev() {
-            meter.items(
-                "terminal backward solve",
-                (self.lower.row_len(row, dimension, false) + 1) * columns,
-            )?;
             let scratch = &mut solution[..scratch_len];
             self.lower
-                .batch_correction(row, factor_solution, columns, false, scratch);
+                .batch_correction(row, factor_solution, columns, false, scratch, meter)?;
+            meter.items("terminal backward solve", columns)?;
             for lane in 0..columns {
                 #[cfg(feature = "experimental-components")]
                 {
@@ -813,34 +896,36 @@ impl GroundedLdl {
         #[cfg(feature = "experimental-components")]
         {
             for row in 0..dimension {
-                meter.items(
-                    "terminal forward solve",
-                    self.lower.row_len(row, dimension, true) + 1,
-                )?;
-                let value =
-                    rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
+                let mut correction = empty_sum();
+                self.lower
+                    .forward_correction_into(row, forward, &mut correction, meter)?;
+                meter.items("terminal forward solve", 1)?;
+                let value = rhs[self.permutation[row]] - correction;
                 // Later forward rows need the unscaled value. The existing
                 // second scratch holds D^-1 y until its backward row is solved.
                 forward[row] = value;
                 factor_solution[row] = value / self.diagonal[row];
             }
             for row in (0..dimension).rev() {
-                meter.items(
-                    "terminal backward solve",
-                    self.lower.row_len(row, dimension, false) + 1,
+                let mut correction = empty_sum();
+                self.lower.backward_correction_into(
+                    row,
+                    factor_solution,
+                    &mut correction,
+                    meter,
                 )?;
-                factor_solution[row] -= self.lower.backward_correction(row, factor_solution);
+                meter.items("terminal backward solve", 1)?;
+                factor_solution[row] -= correction;
             }
         }
         #[cfg(not(feature = "experimental-components"))]
         {
             for row in 0..dimension {
-                meter.items(
-                    "terminal forward solve",
-                    self.lower.row_len(row, dimension, true) + 1,
-                )?;
-                forward[row] =
-                    rhs[self.permutation[row]] - self.lower.forward_correction(row, forward);
+                let mut correction = empty_sum();
+                self.lower
+                    .forward_correction_into(row, forward, &mut correction, meter)?;
+                meter.items("terminal forward solve", 1)?;
+                forward[row] = rhs[self.permutation[row]] - correction;
             }
             chunked(meter, "terminal diagonal solve", dimension, 1, |range| {
                 for (value, pivot) in forward[range.clone()].iter_mut().zip(&self.diagonal[range]) {
@@ -849,12 +934,15 @@ impl GroundedLdl {
                 Ok(())
             })?;
             for row in (0..dimension).rev() {
-                meter.items(
-                    "terminal backward solve",
-                    self.lower.row_len(row, dimension, false) + 1,
+                let mut correction = empty_sum();
+                self.lower.backward_correction_into(
+                    row,
+                    factor_solution,
+                    &mut correction,
+                    meter,
                 )?;
-                factor_solution[row] =
-                    forward[row] - self.lower.backward_correction(row, factor_solution);
+                meter.items("terminal backward solve", 1)?;
+                factor_solution[row] = forward[row] - correction;
             }
         }
 
@@ -1408,5 +1496,134 @@ mod controlled_factor_tests {
                 assert_eq!(cancel.polls(), stop + 1);
             }
         }
+    }
+}
+
+/// Long factor rows are counted while they are traversed: a cancellation at
+/// any segment leaves exactly the earlier terms summed, and uncancelled rows
+/// equal the reference `Iterator::sum` bit for bit.
+#[cfg(test)]
+mod long_row_cancellation_tests {
+    use super::{LowerFactor, empty_sum};
+    use crate::cancel::{Recorder, Unmetered};
+
+    const ENTRIES: usize = 100_000;
+
+    fn long_sparse_row(value: impl Fn(usize) -> f64) -> LowerFactor {
+        // Row ENTRIES of a lower factor has every earlier column.
+        let mut row_offsets = vec![0; ENTRIES + 1];
+        row_offsets.push(ENTRIES);
+        let columns: Vec<u32> = (0..ENTRIES as u32).collect();
+        let row_values: Vec<f64> = (0..ENTRIES).map(value).collect();
+        LowerFactor::from_sparse_rows(row_offsets, columns, row_values, &mut Unmetered).unwrap()
+    }
+
+    #[test]
+    fn forward_and_batch_rows_poll_inside_and_keep_reference_bits() {
+        let factor = long_sparse_row(|i| 1.0 + (i % 7) as f64 * 0.25);
+        let unit = long_sparse_row(|_| 1.0);
+        let LowerFactor::Sparse { row_values, .. } = &factor else {
+            panic!("sparse factor");
+        };
+        let forward: Vec<f64> = (0..=ENTRIES)
+            .map(|i| ((i * 31 % 97) as f64).sin())
+            .collect();
+        let reference: f64 = (0..ENTRIES).map(|i| row_values[i] * forward[i]).sum();
+        let mut sum = empty_sum();
+        let mut full = Recorder::default();
+        factor
+            .forward_correction_into(ENTRIES, &forward, &mut sum, &mut full)
+            .unwrap();
+        assert_eq!(sum.to_bits(), reference.to_bits());
+        assert_eq!(full.advances, ENTRIES.div_ceil(1024));
+        assert!(full.max_units <= 1024);
+        let ones = vec![1.0; ENTRIES + 1];
+        for stop in [1, 30, full.advances - 1] {
+            let mut sum = empty_sum();
+            let mut cancelled = Recorder {
+                stop_at: Some(stop),
+                ..Recorder::default()
+            };
+            assert!(
+                unit.forward_correction_into(ENTRIES, &ones, &mut sum, &mut cancelled)
+                    .is_err()
+            );
+            assert_eq!(sum, (stop * 1024) as f64);
+            // The interleaved kernel leaves its partial lanes in `sums`.
+            let lanes = 3;
+            let interleaved = vec![1.0; (ENTRIES + 1) * lanes];
+            let mut sums = vec![f64::NAN; lanes];
+            let mut cancelled = Recorder {
+                stop_at: Some(stop),
+                ..Recorder::default()
+            };
+            assert!(
+                unit.batch_correction(
+                    ENTRIES,
+                    &interleaved,
+                    lanes,
+                    true,
+                    &mut sums,
+                    &mut cancelled
+                )
+                .is_err()
+            );
+            let per_segment = 1024 / lanes;
+            assert_eq!(sums, vec![(stop * per_segment) as f64; lanes]);
+        }
+    }
+
+    #[test]
+    fn packed_backward_rows_poll_inside_and_keep_reference_bits() {
+        let dimension: usize = 3_000;
+        let packed = dimension * (dimension - 1) / 2;
+        let factor = LowerFactor::Packed {
+            values: (0..packed)
+                .map(|i| ((i % 13) as f64 - 6.0) * 0.125)
+                .collect(),
+        };
+        let LowerFactor::Packed { values } = &factor else {
+            unreachable!()
+        };
+        let solution: Vec<f64> = (0..dimension)
+            .map(|i| ((i * 17 % 29) as f64).cos())
+            .collect();
+        let mut index = 0;
+        let reference: f64 = solution
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(later, &value)| {
+                let product = values[index] * value;
+                index += later;
+                product
+            })
+            .sum();
+        let mut sum = empty_sum();
+        let mut full = Recorder::default();
+        factor
+            .backward_correction_into(0, &solution, &mut sum, &mut full)
+            .unwrap();
+        assert_eq!(sum.to_bits(), reference.to_bits());
+        assert_eq!(full.advances, (dimension - 1).div_ceil(1024));
+        let mut sum = empty_sum();
+        let mut cancelled = Recorder {
+            stop_at: Some(1),
+            ..Recorder::default()
+        };
+        assert!(
+            factor
+                .backward_correction_into(0, &solution, &mut sum, &mut cancelled)
+                .is_err()
+        );
+        let mut index = 0;
+        let first: f64 = (1..=1024)
+            .map(|later| {
+                let product = values[index] * solution[later];
+                index += later;
+                product
+            })
+            .sum();
+        assert_eq!(sum.to_bits(), first.to_bits());
     }
 }

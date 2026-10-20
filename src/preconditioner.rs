@@ -25,9 +25,9 @@ pub(crate) use with_meter;
 mod batch;
 mod cycle;
 pub use batch::CmgBatchWorkspace;
-#[cfg(feature = "parallel")]
-pub(crate) use cycle::rows_parallel;
 pub(crate) use cycle::{LevelParts, One, Parts, Store, Width};
+#[cfg(feature = "parallel")]
+pub(crate) use cycle::{rows_parallel, rows_parallel_with};
 
 use crate::cancel::{Meter, Unmetered};
 use crate::cmg_profile::CycleRecorder;
@@ -294,11 +294,51 @@ impl ParallelCmgPlan {
         team: Team<'_>,
         budget_bytes: usize,
     ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::construction_allocation_bound(preconditioner, team)?,
-            budget_bytes,
-        )?;
-        Self::build(preconditioner, team)
+        Self::build_with(
+            preconditioner,
+            BuildContext {
+                team: Some(team),
+                budget_bytes: Some(budget_bytes),
+                ..BuildContext::default()
+            },
+        )
+    }
+
+    /// Build the plan under a construction context, which must carry the
+    /// team. A budget admits [`Self::construction_allocation_bound`] before the
+    /// first allocation. With a cancellation query every row-operator stage is
+    /// counted (lanes poll inside their rows), the query is polled before every
+    /// allocation and before returning, and a true query returns
+    /// [`CmgError::Cancelled`] with every partial operator dropped. Operators
+    /// and eligibility never depend on the context.
+    pub fn build_with(
+        preconditioner: &CmgPreconditioner,
+        context: BuildContext<'_>,
+    ) -> Result<Self, CmgError> {
+        let team = context.team.ok_or(CmgError::InvalidOption {
+            name: "ParallelCmgPlan requires a team",
+            value: 0.0,
+        })?;
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(
+                Self::construction_allocation_bound(preconditioner, team)?,
+                budget,
+            )?;
+        }
+        match context.cancel {
+            Some(cancel) => Self::build_levels::<false, _>(
+                preconditioner,
+                team,
+                &mut crate::cancel::CancelMeter::new(cancel),
+                |_, _, _, _| Ok(()),
+            ),
+            None => Self::build_levels::<false, _>(
+                preconditioner,
+                team,
+                &mut crate::cancel::Unmetered,
+                |_, _, _, _| Ok(()),
+            ),
+        }
     }
 
     pub(crate) fn eligible_operator_count(
@@ -325,26 +365,39 @@ impl ParallelCmgPlan {
 
     /// Build deterministic row operators for one immutable preconditioner.
     pub fn build(preconditioner: &CmgPreconditioner, team: Team<'_>) -> Result<Self, CmgError> {
-        Self::build_levels::<false>(preconditioner, team, |_, _, _, _| {})
+        Self::build_with(
+            preconditioner,
+            BuildContext {
+                team: Some(team),
+                ..BuildContext::default()
+            },
+        )
     }
 
     /// The one plan loop: a row operator for every eligible level. `PROFILE`
     /// times each level's construction and passes it to `record` with the
     /// operator's phase timings; it never changes eligibility or an operator.
-    fn build_levels<const PROFILE: bool>(
+    fn build_levels<const PROFILE: bool, M: Meter>(
         preconditioner: &CmgPreconditioner,
         team: Team<'_>,
-        mut record: impl FnMut(usize, &HierarchyLevel, Option<&CsrLaplacian>, (u128, CsrBuildProfile)),
+        meter: &mut M,
+        mut record: impl FnMut(
+            usize,
+            &HierarchyLevel,
+            Option<&CsrLaplacian>,
+            (u128, CsrBuildProfile),
+        ) -> Result<(), CmgError>,
     ) -> Result<Self, CmgError> {
         let levels = preconditioner.hierarchy.levels();
-        let mut level_operators = crate::storage::try_capacity(levels.len(), "plan operators")?;
-        let mut level_lineages = crate::storage::try_capacity(levels.len(), "plan lineages")?;
+        let mut level_operators = meter.try_capacity(levels.len(), "plan operators")?;
+        let mut level_lineages = meter.try_capacity(levels.len(), "plan lineages")?;
         for (index, level) in levels.iter().enumerate() {
+            meter.work("plan level", 64)?;
             let graph = level.graph();
             let start = PROFILE.then(Instant::now);
             let (operator, profile) = if Self::level_is_eligible(level, team.options()) {
                 let (operator, profile) =
-                    CsrLaplacian::from_laplacian_with_team_impl::<PROFILE>(graph, team)?;
+                    CsrLaplacian::from_laplacian_with_team_impl::<PROFILE, M>(graph, team, meter)?;
                 (Some(operator), profile)
             } else {
                 (None, CsrBuildProfile::default())
@@ -355,11 +408,12 @@ impl ParallelCmgPlan {
                     level,
                     operator.as_ref(),
                     (start.elapsed().as_nanos(), profile),
-                );
+                )?;
             }
             level_operators.push(operator);
             level_lineages.push(Arc::clone(graph.lineage()));
         }
+        meter.checkpoint("plan publication")?;
         Ok(Self {
             level_operators,
             level_lineages,
@@ -367,6 +421,7 @@ impl ParallelCmgPlan {
     }
 
     /// Build the exact production plan and retain per-level eligibility timings.
+    /// Profile records are reserved fallibly before the first operator.
     #[cfg(feature = "profiling")]
     pub fn build_profiled(
         preconditioner: &CmgPreconditioner,
@@ -374,10 +429,12 @@ impl ParallelCmgPlan {
     ) -> Result<(Self, ParallelPlanBuildProfile), CmgError> {
         let total_start = Instant::now();
         let shape = team.options();
-        let mut levels = Vec::with_capacity(preconditioner.hierarchy.levels().len());
-        let plan = Self::build_levels::<true>(
+        let mut levels =
+            crate::storage::try_capacity(preconditioner.hierarchy.levels().len(), "plan profile")?;
+        let plan = Self::build_levels::<true, _>(
             preconditioner,
             team,
+            &mut crate::cancel::Unmetered,
             |level_index, level, operator, (construction_nanoseconds, csr)| {
                 let graph = level.graph();
                 let density_floor = graph
@@ -392,6 +449,7 @@ impl ParallelCmgPlan {
                 } else {
                     "eligible"
                 };
+                // Capacity is one record per level: this push never grows.
                 levels.push(ParallelPlanLevelProfile {
                     level: level_index,
                     vertices: graph.vertex_count(),
@@ -406,6 +464,7 @@ impl ParallelCmgPlan {
                     validation_nanoseconds: csr.validation_nanoseconds,
                     retained_bytes: operator.map_or(0, CsrLaplacian::byte_len),
                 });
+                Ok(())
             },
         )?;
         let profile = ParallelPlanBuildProfile {
@@ -530,12 +589,34 @@ impl CmgPreconditioner {
     /// Checked requested layouts for one scalar application workspace.
     /// Excludes allocator overhead and the retained preconditioner itself.
     pub fn workspace_allocation_bytes(&self) -> Result<usize, CmgError> {
+        self.workspace_allocation_bytes_metered(&mut crate::cancel::Unmetered)
+    }
+
+    /// The one scalar-workspace layout query; a polling meter only adds polls.
+    pub(crate) fn workspace_allocation_bytes_metered<M: Meter>(
+        &self,
+        meter: &mut M,
+    ) -> Result<usize, CmgError> {
         CmgWorkspace::allocation_bytes(
             &self.hierarchy,
             self.direct_terminal.as_ref(),
             &self.finest_components,
             &self.coarse_centering,
-            &mut crate::cancel::Unmetered,
+            meter,
+        )
+    }
+
+    /// The one scalar-workspace preparation; a polling meter only adds polls.
+    pub(crate) fn try_workspace_metered<M: Meter>(
+        &self,
+        meter: &mut M,
+    ) -> Result<CmgWorkspace, CmgError> {
+        CmgWorkspace::try_new(
+            &self.hierarchy,
+            self.direct_terminal.as_ref(),
+            &self.finest_components,
+            &self.coarse_centering,
+            meter,
         )
     }
 
@@ -546,13 +627,7 @@ impl CmgPreconditioner {
         &self,
         cancel: crate::Cancellation<'_>,
     ) -> Result<usize, CmgError> {
-        CmgWorkspace::allocation_bytes(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-            &mut crate::cancel::CancelMeter::new(cancel),
-        )
+        self.workspace_allocation_bytes_metered(&mut crate::cancel::CancelMeter::new(cancel))
     }
 
     #[cfg(feature = "parallel")]
@@ -683,37 +758,66 @@ impl CmgPreconditioner {
     }
 
     /// Build through [`Self::build_with`]'s pipeline while timing its stages.
+    /// The phase-record and profile banks are reserved fallibly, counted under
+    /// the context's meter and, with a budget, admitted with the build bound.
     #[cfg(feature = "profiling")]
     pub fn build_with_profiled(
         graph: &Laplacian,
         options: BuildOptions,
         context: BuildContext<'_>,
     ) -> Result<(Self, PreconditionerBuildProfile), CmgError> {
+        match context.cancel {
+            Some(cancel) => Self::build_profiled_metered(
+                graph,
+                options,
+                context,
+                &mut crate::cancel::CancelMeter::new(cancel),
+            ),
+            None => Self::build_profiled_metered(graph, options, context, &mut Unmetered),
+        }
+    }
+
+    #[cfg(feature = "profiling")]
+    fn build_profiled_metered<M: Meter>(
+        graph: &Laplacian,
+        options: BuildOptions,
+        context: BuildContext<'_>,
+        meter: &mut M,
+    ) -> Result<(Self, PreconditionerBuildProfile), CmgError> {
         let total_start = Instant::now();
         let (preconditioner, (hierarchy_phases, hierarchy_nanoseconds, finalization_nanoseconds)) =
-            match context.cancel {
-                Some(cancel) => Self::build_metered::<_, true>(
-                    graph,
-                    options,
-                    context,
-                    &mut crate::cancel::CancelMeter::new(cancel),
-                ),
-                None => Self::build_metered::<_, true>(graph, options, context, &mut Unmetered),
-            }?;
+            Self::build_metered::<_, true>(graph, options, context, meter)?;
+        let mut phases = meter.try_capacity(hierarchy_phases.len(), "hierarchy phase profile")?;
+        for record in hierarchy_phases {
+            meter.work("hierarchy phase profile", 16)?;
+            phases.push(HierarchyPhaseProfile {
+                level: record.level,
+                phase: record.phase,
+                nanoseconds: record.nanoseconds,
+            });
+        }
+        meter.checkpoint("profiled preconditioner publication")?;
         let profile = PreconditionerBuildProfile {
             hierarchy_nanoseconds,
-            hierarchy_phases: hierarchy_phases
-                .into_iter()
-                .map(|record| HierarchyPhaseProfile {
-                    level: record.level,
-                    phase: record.phase,
-                    nanoseconds: record.nanoseconds,
-                })
-                .collect(),
+            hierarchy_phases: phases,
             finalization_nanoseconds,
             total_nanoseconds: total_start.elapsed().as_nanos(),
         };
         Ok((preconditioner, profile))
+    }
+
+    /// Requested layouts of a profiled build's phase-record and profile banks.
+    fn profile_allocation_bound(options: BuildOptions) -> Result<usize, CmgError> {
+        let records =
+            crate::hierarchy::phase_record_bound(options.hierarchy.validate()?.max_levels);
+        #[cfg(feature = "profiling")]
+        let profile = crate::storage::bytes::<HierarchyPhaseProfile>(records)?;
+        #[cfg(not(feature = "profiling"))]
+        let profile = 0;
+        crate::storage::add(
+            crate::storage::bytes::<crate::hierarchy::HierarchyPhaseRecord>(records)?,
+            profile,
+        )
     }
 
     #[allow(clippy::type_complexity)]
@@ -732,15 +836,16 @@ impl CmgPreconditioner {
         // The allocation-bound formula uses fixed-work checked scalar arithmetic.
         meter.work("preconditioner admission", 1024)?;
         if let Some(budget) = context.budget_bytes {
-            crate::storage::admit(
-                Self::construction_allocation_bound(
-                    graph.vertex_count(),
-                    graph.edge_count(),
-                    options,
-                    context.team().is_some(),
-                )?,
-                budget,
+            let mut required = Self::construction_allocation_bound(
+                graph.vertex_count(),
+                graph.edge_count(),
+                options,
+                context.team().is_some(),
             )?;
+            if PROFILE {
+                required = crate::storage::add(required, Self::profile_allocation_bound(options)?)?;
+            }
+            crate::storage::admit(required, budget)?;
         }
         let hierarchy_start = PROFILE.then(Instant::now);
         let (hierarchy, phases) = CmgHierarchy::build_metered::<M, PROFILE>(
@@ -907,13 +1012,7 @@ impl CmgPreconditioner {
 
     /// Fallibly allocate reusable storage compatible with this preconditioner.
     pub fn try_workspace(&self) -> Result<CmgWorkspace, CmgError> {
-        CmgWorkspace::try_new(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-            &mut crate::cancel::Unmetered,
-        )
+        self.try_workspace_metered(&mut crate::cancel::Unmetered)
     }
 
     /// Cancellable `try_workspace` with the same layout, contents and errors.
@@ -924,13 +1023,7 @@ impl CmgPreconditioner {
         &self,
         cancel: crate::Cancellation<'_>,
     ) -> Result<CmgWorkspace, CmgError> {
-        CmgWorkspace::try_new(
-            &self.hierarchy,
-            self.direct_terminal.as_ref(),
-            &self.finest_components,
-            &self.coarse_centering,
-            &mut crate::cancel::CancelMeter::new(cancel),
-        )
+        self.try_workspace_metered(&mut crate::cancel::CancelMeter::new(cancel))
     }
 
     /// Apply the preconditioner using a newly allocated workspace.
@@ -1276,6 +1369,84 @@ mod controlled_build_tests {
                     "rounded matvec diagnostic: disconnected={disconnected}, scale={scale:e}, relative_linearity_defect={defect:e}, component_sum_defect_over_edge_scale={moment_defect:e}; legacy selected-hierarchy action is bit-exact"
                 );
             }
+        }
+    }
+}
+
+/// Profiled builds reserve their record banks fallibly under the context:
+/// admitted with the build bound, polled by its meter, same preconditioner.
+#[cfg(all(test, feature = "profiling"))]
+mod profiled_storage_tests {
+    use super::*;
+
+    #[test]
+    fn profile_banks_are_admitted_and_cancellable() {
+        let graph = Laplacian::from_edges(
+            600,
+            (0..600).flat_map(|i| {
+                (1..=3)
+                    .filter(move |d| i + d < 600)
+                    .map(move |d| (i, i + d, 1.0))
+            }),
+        )
+        .unwrap();
+        let options = BuildOptions::from(CmgOptions {
+            direct_threshold: 32,
+            ..CmgOptions::default()
+        });
+        let ordinary =
+            CmgPreconditioner::build_with(&graph, options, BuildContext::default()).unwrap();
+        let bound = CmgPreconditioner::construction_allocation_bound(
+            graph.vertex_count(),
+            graph.edge_count(),
+            options,
+            false,
+        )
+        .unwrap()
+            + CmgPreconditioner::profile_allocation_bound(options).unwrap();
+        let profiled = |budget: usize, cancel: Option<crate::Cancellation<'_>>| {
+            CmgPreconditioner::build_with_profiled(
+                &graph,
+                options,
+                BuildContext {
+                    team: None,
+                    cancel,
+                    budget_bytes: Some(budget),
+                },
+            )
+        };
+        let (built, profile) = profiled(bound, None).unwrap();
+        assert_eq!(built.hierarchy(), ordinary.hierarchy());
+        assert!(!profile.hierarchy_phases().is_empty());
+        assert!(matches!(
+            profiled(bound - 1, None),
+            Err(CmgError::MemoryBudgetExceeded { .. })
+        ));
+        // Cancellation reaches the record reserve and the profile conversion.
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let count = || {
+            polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            false
+        };
+        profiled(bound, Some(&count)).unwrap();
+        let total = polls.load(std::sync::atomic::Ordering::SeqCst);
+        let mut phases = std::collections::BTreeSet::new();
+        for stop in 0..total {
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= stop;
+            match profiled(bound, Some(&cancel)) {
+                Err(CmgError::Cancelled { phase }) => {
+                    phases.insert(phase);
+                }
+                other => panic!("poll {stop} of {total}: {:?}", other.err()),
+            }
+        }
+        for phase in [
+            "hierarchy profile records",
+            "hierarchy phase profile",
+            "profiled preconditioner publication",
+        ] {
+            assert!(phases.contains(phase), "{phase} not in {phases:?}");
         }
     }
 }

@@ -2,9 +2,9 @@
 
 use super::cycle::{Cycle, LevelParts, Parts, Store};
 use super::{ApplyContext, CmgPreconditioner};
+use crate::CmgError;
 use crate::cancel::Meter;
 use crate::storage::{add, bytes};
-use crate::{CmgError, CmgWorkspace};
 
 #[derive(Debug, Clone, Default)]
 struct BatchLevel {
@@ -95,6 +95,24 @@ impl CmgBatchWorkspace {
     /// Checked requested heap layouts for this workspace, excluding the borrowed
     /// hierarchy, caller buffers, allocator overhead and any parallel runtime.
     pub fn allocation_bytes(cmg: &CmgPreconditioner, max_rhs: usize) -> Result<usize, CmgError> {
+        Self::allocation_bytes_metered(cmg, max_rhs, &mut crate::cancel::Unmetered)
+    }
+
+    /// Cancellable `allocation_bytes`: the same value and errors, polling
+    /// `cancel` between bounded level steps and once before returning.
+    pub fn allocation_bytes_controlled(
+        cmg: &CmgPreconditioner,
+        max_rhs: usize,
+        cancel: crate::Cancellation<'_>,
+    ) -> Result<usize, CmgError> {
+        Self::allocation_bytes_metered(cmg, max_rhs, &mut crate::cancel::CancelMeter::new(cancel))
+    }
+
+    fn allocation_bytes_metered<M: Meter>(
+        cmg: &CmgPreconditioner,
+        max_rhs: usize,
+        meter: &mut M,
+    ) -> Result<usize, CmgError> {
         if max_rhs == 0 {
             return Err(CmgError::InvalidOption {
                 name: "CMG batch capacity",
@@ -102,10 +120,11 @@ impl CmgBatchWorkspace {
             });
         }
         if max_rhs == 1 {
-            return cmg.workspace_allocation_bytes();
+            return cmg.workspace_allocation_bytes_metered(meter);
         }
         let mut total = bytes::<BatchLevel>(cmg.hierarchy.levels().len())?;
         for index in 0..cmg.hierarchy.levels().len() {
+            meter.work("CMG batch layout", 64)?;
             let (rows, coarse, factor, components) = shape(cmg, index);
             let values = add(
                 add(rows, area(coarse, 2)?)?,
@@ -113,6 +132,7 @@ impl CmgBatchWorkspace {
             )?;
             total = add(total, bytes::<f64>(area(values, max_rhs)?)?)?;
         }
+        meter.checkpoint("CMG batch layout")?;
         Ok(total)
     }
 
@@ -152,29 +172,16 @@ impl CmgBatchWorkspace {
         meter: &mut M,
     ) -> Result<Self, CmgError> {
         if max_rhs == 1 {
-            crate::storage::admit(
-                CmgWorkspace::allocation_bytes(
-                    &cmg.hierarchy,
-                    cmg.direct_terminal.as_ref(),
-                    &cmg.finest_components,
-                    &cmg.coarse_centering,
-                    meter,
-                )?,
-                budget_bytes,
-            )?;
+            crate::storage::admit(cmg.workspace_allocation_bytes_metered(meter)?, budget_bytes)?;
             return Ok(Self {
                 capacity: 1,
-                storage: BatchStorage::Scalar(CmgWorkspace::try_new(
-                    &cmg.hierarchy,
-                    cmg.direct_terminal.as_ref(),
-                    &cmg.finest_components,
-                    &cmg.coarse_centering,
-                    meter,
-                )?),
+                storage: BatchStorage::Scalar(cmg.try_workspace_metered(meter)?),
             });
         }
-        meter.work("CMG batch layout", 64)?;
-        crate::storage::admit(Self::allocation_bytes(cmg, max_rhs)?, budget_bytes)?;
+        crate::storage::admit(
+            Self::allocation_bytes_metered(cmg, max_rhs, meter)?,
+            budget_bytes,
+        )?;
         let mut levels = meter.try_capacity(cmg.hierarchy.levels().len(), "CMG batch levels")?;
         for index in 0..cmg.hierarchy.levels().len() {
             meter.work("CMG batch level", 64)?;

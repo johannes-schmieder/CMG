@@ -13,16 +13,15 @@ const CHUNK: usize = 8;
 /// The logical chunking is identical at every worker ceiling, including one.
 /// Successful graph bits match the serial construction. The borrowed input and
 /// team runtime are outside the caller's admitted bound; all scratch belongs
-/// to that bound and is provisioned before dispatch. `cancelled` is polled by
-/// workers before every logical chunk and after each join; the coordinator's
-/// meter polls between its bounded serial operations. Cancellation dominates
-/// worker errors after joining; otherwise the earliest logical invalid edge
-/// wins. No partial stage is retried.
+/// to that bound and is provisioned before dispatch. The meter's query is
+/// polled by workers before every logical chunk and after each join; the
+/// coordinator's meter polls between its bounded serial operations.
+/// Cancellation dominates worker errors after joining; otherwise the earliest
+/// logical invalid edge wins. No partial stage is retried.
 pub(super) fn build<M: Meter>(
     vertex_count: usize,
     edges: &[(usize, usize, f64)],
     team: Team<'_>,
-    cancelled: crate::Cancellation<'_>,
     meter: &mut M,
 ) -> Result<Laplacian, CmgError> {
     meter.work("input graph memory bound", 128)?;
@@ -32,7 +31,7 @@ pub(super) fn build<M: Meter>(
         CHUNK,
         team,
         &mut raw,
-        cancelled,
+        meter.query(),
         |chunk, output| {
             for (index, value) in output.iter_mut().enumerate() {
                 *value = map_edge(vertex_count, edges[chunk * CHUNK + index])?;
@@ -40,7 +39,7 @@ pub(super) fn build<M: Meter>(
             Ok(())
         },
     )?;
-    sort(&mut raw, meter, team, cancelled)?;
+    sort(&mut raw, meter, team)?;
     // The spare sort bank has been dropped; reduce in the canonical order.
     Laplacian::from_sorted_edges(vertex_count, raw, true, meter)
 }
@@ -59,34 +58,35 @@ fn initialized_bank<M: Meter>(len: usize, meter: &mut M) -> Result<Vec<Edge>, Cm
     Ok(values)
 }
 
-/// Dispatch one stage of fixed logical chunks, translating its cancellation to
-/// the stage's phase. Chunk boundaries never depend on the worker ceiling.
-fn stage(
+/// Dispatch one stage of fixed logical chunks on at most the team's worker
+/// ceiling, translating its cancellation to the stage's phase. Chunk
+/// boundaries never depend on the worker ceiling.
+pub(crate) fn stage<T: Send>(
     phase: &'static str,
     chunk_len: usize,
     team: Team<'_>,
-    values: &mut [Edge],
-    cancelled: crate::Cancellation<'_>,
-    kernel: impl Fn(usize, &mut [Edge]) -> Result<(), CmgError> + Sync,
+    values: &mut [T],
+    query: Option<crate::Cancellation<'_>>,
+    kernel: impl Fn(usize, &mut [T]) -> Result<(), CmgError> + Sync,
 ) -> Result<(), CmgError> {
+    let cancelled = || query.is_some_and(|cancel| cancel());
     match ControlledStage::admit(values.len(), chunk_len)?.run(team, values, cancelled, kernel) {
         Err(CmgError::Cancelled { .. }) => Err(CancelMeter::cancelled(phase)),
         other => other,
     }
 }
 
-fn sort<M: Meter>(
-    values: &mut Vec<Edge>,
-    meter: &mut M,
-    team: Team<'_>,
-    cancelled: crate::Cancellation<'_>,
-) -> Result<(), CmgError> {
+/// The initial-graph sort: bounded insertion runs, then bounded merge packets
+/// between `values` and the spare bank admitted by
+/// `Laplacian::construction_allocation_bound`, every stage polled and capped
+/// at the worker ceiling. The spare bank is dropped before returning.
+fn sort<M: Meter>(values: &mut Vec<Edge>, meter: &mut M, team: Team<'_>) -> Result<(), CmgError> {
     stage(
         "hosted input sort runs",
         CHUNK,
         team,
         values,
-        cancelled,
+        meter.query(),
         |_, run| {
             // At most 28 compare/swap steps and seven loop starts. No library sort,
             // allocation, recursion, or data-dependent unbounded work is hidden here.
@@ -110,7 +110,7 @@ fn sort<M: Meter>(
             chunk_len,
             team,
             &mut scratch,
-            cancelled,
+            meter.query(),
             |chunk, out| {
                 merge_chunk(values, width, chunk * chunk_len, out);
                 Ok(())

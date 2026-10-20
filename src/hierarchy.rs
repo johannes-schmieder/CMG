@@ -44,6 +44,14 @@ pub(crate) struct HierarchyPhaseRecord {
     pub(crate) nanoseconds: u128,
 }
 
+/// Phase records a profiled hierarchy build can emit: option validation and
+/// graph setup, at most seven per level and the final report.
+pub(crate) fn phase_record_bound(max_levels: usize) -> usize {
+    max_levels.saturating_mul(7).saturating_add(3)
+}
+
+/// Time one phase into `records`, whose capacity was reserved fallibly for
+/// [`phase_record_bound`] records before the build; a push never grows it.
 #[inline]
 fn measure_hierarchy_phase<const PROFILE: bool, Output>(
     records: &mut Vec<HierarchyPhaseRecord>,
@@ -54,6 +62,7 @@ fn measure_hierarchy_phase<const PROFILE: bool, Output>(
     if PROFILE {
         let start = Instant::now();
         let output = operation();
+        debug_assert!(records.len() < records.capacity());
         records.push(HierarchyPhaseRecord {
             level,
             phase,
@@ -432,8 +441,17 @@ impl CmgHierarchy {
         team: Option<Team<'_>>,
         meter: &mut M,
     ) -> Result<(Self, Vec<HierarchyPhaseRecord>), CmgError> {
-        let mut phase_records = Vec::new();
         meter.work("hierarchy initialization", 128)?;
+        let mut phase_records = if PROFILE {
+            // Validation is repeated below as a timed phase; an invalid
+            // option reports the same error after this one-record reserve.
+            let records = options
+                .validate()
+                .map_or(1, |options| phase_record_bound(options.max_levels));
+            meter.try_capacity(records, "hierarchy profile records")?
+        } else {
+            Vec::new()
+        };
         let options = measure_hierarchy_phase::<PROFILE, _>(
             &mut phase_records,
             0,

@@ -105,46 +105,58 @@ impl<'a> CancelMeter<'a> {
     pub(crate) fn sort_by<T: Copy>(
         &mut self,
         values: &mut [T],
-        mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+        compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
         phase: &'static str,
     ) -> Result<(), CmgError> {
-        fn sift<T: Copy>(
-            meter: &mut CancelMeter<'_>,
-            values: &mut [T],
-            mut root: usize,
-            end: usize,
-            compare: &mut impl FnMut(&T, &T) -> core::cmp::Ordering,
-            phase: &'static str,
-        ) -> Result<(), CmgError> {
-            loop {
-                meter.work(phase, 64)?;
-                // root < end and slice lengths cannot exceed isize::MAX bytes.
-                let child = root * 2 + 1;
-                if child >= end {
-                    return Ok(());
-                }
-                let mut largest = child;
-                if child + 1 < end && compare(&values[child], &values[child + 1]).is_lt() {
-                    largest += 1;
-                }
-                if !compare(&values[root], &values[largest]).is_lt() {
-                    return Ok(());
-                }
-                values.swap(root, largest);
-                root = largest;
-            }
-        }
-        self.work(phase, 16)?;
-        for root in (0..values.len() / 2).rev() {
-            sift(self, values, root, values.len(), &mut compare, phase)?;
-        }
-        for end in (1..values.len()).rev() {
-            self.work(phase, 16)?;
-            values.swap(0, end);
-            sift(self, values, 0, end, &mut compare, phase)?;
-        }
-        Ok(())
+        heapsort(self, values, compare, phase)
     }
+}
+
+/// Allocation-free heapsort counted through any progress: every sift step
+/// (two comparisons and one swap) and every extraction is one bounded
+/// operation. With a total comparator the result equals any other sort.
+pub(crate) fn heapsort<T: Copy, P: Progress>(
+    progress: &mut P,
+    values: &mut [T],
+    mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+    phase: &'static str,
+) -> Result<(), CmgError> {
+    fn sift<T: Copy, P: Progress>(
+        progress: &mut P,
+        values: &mut [T],
+        mut root: usize,
+        end: usize,
+        compare: &mut impl FnMut(&T, &T) -> core::cmp::Ordering,
+        phase: &'static str,
+    ) -> Result<(), CmgError> {
+        loop {
+            progress.advance(phase, 64)?;
+            // root < end and slice lengths cannot exceed isize::MAX bytes.
+            let child = root * 2 + 1;
+            if child >= end {
+                return Ok(());
+            }
+            let mut largest = child;
+            if child + 1 < end && compare(&values[child], &values[child + 1]).is_lt() {
+                largest += 1;
+            }
+            if !compare(&values[root], &values[largest]).is_lt() {
+                return Ok(());
+            }
+            values.swap(root, largest);
+            root = largest;
+        }
+    }
+    progress.advance(phase, 16)?;
+    for root in (0..values.len() / 2).rev() {
+        sift(progress, values, root, values.len(), &mut compare, phase)?;
+    }
+    for end in (1..values.len()).rev() {
+        progress.advance(phase, 16)?;
+        values.swap(0, end);
+        sift(progress, values, 0, end, &mut compare, phase)?;
+    }
+    Ok(())
 }
 
 /// Polling policy of one construction or preparation kernel.
@@ -226,19 +238,79 @@ pub(crate) trait Meter {
     }
 }
 
-/// Run `body` over `0..len` in consecutive chunks whose `weight`-unit items
-/// total at most 1024 units, counting every chunk. Without polling, `body` runs
-/// once over the whole range, so an ordinary loop is unchanged. Chunking only
-/// splits a forward loop; it never changes arithmetic or order.
+/// Progress inside one traversal: a row, a factor row, a reduction leaf.
+///
+/// Serial kernels pass their [`Meter`]; parallel lanes pass a [`LanePoll`].
+/// A kernel counts its traversal while it runs, in segments of at most 1024
+/// units (see [`chunked`]), never once before or after an unbounded loop.
+pub(crate) trait Progress {
+    /// Whether traversals are split into counted segments.
+    const POLLS: bool;
+
+    /// Count `units` primitive units of work just performed.
+    fn advance(&mut self, phase: &'static str, units: usize) -> Result<(), CmgError>;
+}
+
+impl<M: Meter> Progress for M {
+    const POLLS: bool = M::POLLS;
+
+    #[inline(always)]
+    fn advance(&mut self, phase: &'static str, units: usize) -> Result<(), CmgError> {
+        self.items(phase, units)
+    }
+}
+
+/// One parallel lane's progress: counts units and polls the sticky query each
+/// [`POLL_UNITS`] counted units. A true query stops the lane with
+/// `Cancelled`; the joining coordinator then reports the cancellation and
+/// discards the lane's outputs. Lanes without a query only segment.
+#[cfg(feature = "parallel")]
+pub(crate) struct LanePoll<'a> {
+    query: Option<Cancellation<'a>>,
+    pending: usize,
+}
+
+#[cfg(feature = "parallel")]
+impl<'a> LanePoll<'a> {
+    pub(crate) fn new(query: Option<Cancellation<'a>>) -> Self {
+        Self { query, pending: 0 }
+    }
+}
+
+#[cfg(feature = "parallel")]
+impl Progress for LanePoll<'_> {
+    const POLLS: bool = true;
+
+    #[inline]
+    fn advance(&mut self, phase: &'static str, units: usize) -> Result<(), CmgError> {
+        let Some(cancel) = self.query else {
+            return Ok(());
+        };
+        self.pending = self.pending.saturating_add(units);
+        if self.pending >= POLL_UNITS as usize {
+            self.pending = 0;
+            if cancel() {
+                return Err(CancelMeter::cancelled(phase));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Run `body` over `0..len` in consecutive segments whose `weight`-unit items
+/// total at most 1024 units, counting every segment after it runs. Without
+/// polling, `body` runs once over the whole range, so an ordinary loop is
+/// unchanged. Segmenting only splits a forward loop; accumulators carried
+/// across segments keep their operation order, so arithmetic never changes.
 #[inline(always)]
-pub(crate) fn chunked<M: Meter>(
-    meter: &mut M,
+pub(crate) fn chunked<P: Progress>(
+    progress: &mut P,
     phase: &'static str,
     len: usize,
     weight: usize,
     mut body: impl FnMut(core::ops::Range<usize>) -> Result<(), CmgError>,
 ) -> Result<(), CmgError> {
-    if !M::POLLS {
+    if !P::POLLS {
         return body(0..len);
     }
     let weight = weight.max(1);
@@ -247,7 +319,7 @@ pub(crate) fn chunked<M: Meter>(
     while start < len {
         let end = len.min(start + step);
         body(start..end)?;
-        meter.items(phase, (end - start) * weight)?;
+        progress.advance(phase, (end - start) * weight)?;
         start = end;
     }
     Ok(())
@@ -264,34 +336,6 @@ pub(crate) fn zero<M: Meter>(
         values[range].fill(0.0);
         Ok(())
     })
-}
-
-/// Items one parallel lane processes between two polls of the sticky query.
-#[cfg(feature = "parallel")]
-pub(crate) const LANE_ITEMS: usize = 1 << 12;
-
-/// Run one parallel lane's `range` in sub-ranges of [`LANE_ITEMS`], stopping
-/// early once the query is true. The joining coordinator then reports the
-/// cancellation; outputs of a stopped lane are discarded.
-#[cfg(feature = "parallel")]
-#[inline(always)]
-pub(crate) fn lane(
-    query: Option<Cancellation<'_>>,
-    range: core::ops::Range<usize>,
-    mut body: impl FnMut(core::ops::Range<usize>),
-) {
-    let Some(cancel) = query else {
-        return body(range);
-    };
-    let mut start = range.start;
-    while start < range.end {
-        if cancel() {
-            return;
-        }
-        let end = range.end.min(start + LANE_ITEMS);
-        body(start..end);
-        start = end;
-    }
 }
 
 /// The ordinary, non-polling meter.
@@ -387,10 +431,11 @@ impl Meter for CancelMeter<'_> {
         phase: &'static str,
     ) -> Result<Vec<T>, CmgError> {
         let mut result = CancelMeter::try_capacity(self, count, phase)?;
-        for _ in 0..count {
-            self.work(phase, 8)?;
-            result.push(value.clone());
-        }
+        // Eight units per value, counted in segments of 128 values.
+        chunked(self, phase, count, 8, |range| {
+            result.resize(result.len() + range.len(), value.clone());
+            Ok(())
+        })?;
         Ok(result)
     }
 
@@ -463,6 +508,34 @@ pub(crate) fn try_filled<T: Clone, M: Meter>(
         values.resize(len, value);
     }
     Ok(values)
+}
+
+/// Test support: a polling progress recording every advance, which cancels
+/// at a chosen one-based advance. Kernels write partial results before the
+/// cancellation, so tests observe how much of a traversal ran.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Recorder {
+    pub(crate) advances: usize,
+    pub(crate) units: usize,
+    pub(crate) max_units: usize,
+    pub(crate) stop_at: Option<usize>,
+}
+
+#[cfg(test)]
+impl Progress for Recorder {
+    const POLLS: bool = true;
+
+    fn advance(&mut self, phase: &'static str, units: usize) -> Result<(), CmgError> {
+        self.advances += 1;
+        self.units += units;
+        self.max_units = self.max_units.max(units);
+        if self.stop_at == Some(self.advances) {
+            Err(CancelMeter::cancelled(phase))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Test support: count polls and cancel exactly at one zero-based poll.

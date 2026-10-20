@@ -298,7 +298,7 @@ impl ParallelPcgSolver {
     /// on `team` on first access and reporting any construction error.
     pub fn try_plan(&self, team: Team<'_>) -> Result<&ParallelCmgPlan, CmgError> {
         self.check_team(team)?;
-        self.ensure_plan_with_budget(team, None)
+        self.ensure_plan(team, None, None)
     }
 
     /// New CMG-owned plan layouts still needed by this solver (zero if already
@@ -322,7 +322,24 @@ impl ParallelPcgSolver {
         budget_bytes: usize,
     ) -> Result<&ParallelCmgPlan, CmgError> {
         self.check_team(team)?;
-        self.ensure_plan_with_budget(team, Some(budget_bytes))
+        self.ensure_plan(team, Some(budget_bytes), None)
+    }
+
+    /// Initialize the lazy plan under a construction context carrying this
+    /// solver's team, an optional budget (as [`Self::try_plan_with_budget`])
+    /// and an optional cancellation query (as [`ParallelCmgPlan::build_with`]).
+    /// A cancelled initialization leaves the plan uninitialized; a later call
+    /// builds it again. An initialized plan is returned without allocation.
+    pub fn try_plan_with(
+        &self,
+        context: crate::BuildContext<'_>,
+    ) -> Result<&ParallelCmgPlan, CmgError> {
+        let team = context.team.ok_or(CmgError::InvalidOption {
+            name: "ParallelPcgSolver plan requires a team",
+            value: 0.0,
+        })?;
+        self.check_team(team)?;
+        self.ensure_plan(team, context.budget_bytes, context.cancel)
     }
 
     /// Return the validated routing policy.
@@ -381,7 +398,7 @@ impl ParallelPcgSolver {
             ParallelPcgExecution::Serial | ParallelPcgExecution::Planned => 1,
         };
         if execution == ParallelPcgExecution::Planned {
-            self.ensure_plan_with_budget(team, None)?;
+            self.ensure_plan(team, None, None)?;
         }
         Ok(self.report(execution, rhs_count, retained_count))
     }
@@ -477,7 +494,7 @@ impl ParallelPcgSolver {
 
     fn planned<'s>(&'s self, team: Team<'s>) -> Result<SolveContext<'s>, CmgError> {
         Ok(SolveContext {
-            plan: Some(self.ensure_plan_with_budget(team, None)?),
+            plan: Some(self.ensure_plan(team, None, None)?),
             team: Some(team),
             ..SolveContext::default()
         })
@@ -515,10 +532,11 @@ impl ParallelPcgSolver {
         }
     }
 
-    fn ensure_plan_with_budget(
+    fn ensure_plan(
         &self,
         team: Team<'_>,
         budget_bytes: Option<usize>,
+        cancel: Option<crate::Cancellation<'_>>,
     ) -> Result<&ParallelCmgPlan, CmgError> {
         if let Some(plan) = self.plan.get() {
             return Ok(plan);
@@ -530,11 +548,14 @@ impl ParallelPcgSolver {
         if let Some(plan) = self.plan.get() {
             return Ok(plan);
         }
-        let plan = if let Some(budget) = budget_bytes {
-            ParallelCmgPlan::build_with_budget(&self.preconditioner, team, budget)?
-        } else {
-            ParallelCmgPlan::build(&self.preconditioner, team)?
-        };
+        let plan = ParallelCmgPlan::build_with(
+            &self.preconditioner,
+            crate::BuildContext {
+                team: Some(team),
+                cancel,
+                budget_bytes,
+            },
+        )?;
         if self.plan.set(plan).is_err() {
             return Err(CmgError::InvalidHierarchy {
                 context: "parallel CMG plan was initialized concurrently",

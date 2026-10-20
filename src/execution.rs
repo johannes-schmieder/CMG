@@ -406,6 +406,9 @@ impl<'a> Team<'a> {
         self.options.batch_concurrency(workspace_bytes, batch_len)
     }
 
+    /// Run `operation` on the borrowed pool. Only the dispatchers below and
+    /// [`crate::ControlledStage`] call this; kernels never fork on their own,
+    /// so no CMG stage can exceed the worker ceiling.
     pub(crate) fn install<Operation, Output>(&self, operation: Operation) -> Output
     where
         Operation: FnOnce() -> Output + Send,
@@ -414,12 +417,275 @@ impl<'a> Team<'a> {
         self.pool.install(operation)
     }
 
+    #[cfg(test)]
+    pub(crate) fn gauge_lane(&self) -> gauge::Lane {
+        gauge::enter(self.pool)
+    }
+
+    /// Run `operation` on the pool with this team's whole lane budget.
+    pub(crate) fn with_lanes<R: Send>(&self, operation: impl FnOnce(Lanes<'_>) -> R + Send) -> R {
+        let lanes = Lanes {
+            count: self.worker_ceiling(),
+            pool: self.pool,
+        };
+        self.install(|| {
+            #[cfg(test)]
+            let _lane = (lanes.count == 1).then(|| gauge::enter(self.pool));
+            operation(lanes)
+        })
+    }
+
+    /// Fork `lanes` lane bodies by balanced binary joins. At most `lanes`
+    /// closures exist, so at most that many CMG lanes run concurrently.
+    fn fork(lanes: usize, body: &(impl Fn() + Sync)) {
+        if lanes <= 1 {
+            body();
+        } else {
+            rayon::join(
+                || Self::fork(lanes / 2, body),
+                || Self::fork(lanes - lanes / 2, body),
+            );
+        }
+    }
+
+    /// Process `values` in fixed chunks of `chunk_len` elements; chunks are
+    /// claimed in ascending order by at most `worker_ceiling` lanes, each with
+    /// its own [`crate::cancel::LanePoll`]. Chunk boundaries depend only on the
+    /// slice and `chunk_len`. A lane stops at its first error; all lanes join.
+    /// The earliest failing chunk's non-cancellation error is returned; callers
+    /// poll their meter after the join so cancellation dominates.
+    pub(crate) fn chunks_mut<T: Send>(
+        &self,
+        values: &mut [T],
+        chunk_len: usize,
+        query: Option<crate::Cancellation<'_>>,
+        kernel: impl Fn(usize, &mut [T], &mut crate::cancel::LanePoll<'_>) -> Result<(), CmgError>
+        + Sync,
+    ) -> Result<(), CmgError> {
+        let chunk_len = chunk_len.max(1);
+        let chunks = values.len().div_ceil(chunk_len);
+        if chunks == 0 {
+            return Ok(());
+        }
+        let lanes = self.worker_ceiling().min(chunks);
+        let pending = std::sync::Mutex::new(values.chunks_mut(chunk_len).enumerate());
+        let failure: std::sync::Mutex<Option<(usize, CmgError)>> = std::sync::Mutex::new(None);
+        let lane = || {
+            #[cfg(test)]
+            let _lane = gauge::enter(self.pool);
+            let mut poll = crate::cancel::LanePoll::new(query);
+            loop {
+                let next = pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .next();
+                let Some((index, chunk)) = next else {
+                    return;
+                };
+                if let Err(error) = kernel(index, chunk, &mut poll) {
+                    if !matches!(error, CmgError::Cancelled { .. }) {
+                        let mut first = failure
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if first.as_ref().is_none_or(|(earliest, _)| index < *earliest) {
+                            *first = Some((index, error));
+                        }
+                    }
+                    return;
+                }
+            }
+        };
+        self.install(|| Self::fork(lanes, &lane));
+        failure
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map_or(Ok(()), |(_, error)| Err(error))
+    }
+
+    /// Reduce leaves `0..leaves` (at least one) over the fixed balanced tree:
+    /// a range splits at `first + len / 2` and `merge(left, right)` combines
+    /// the halves. The tree depends only on `leaves`. Subtrees fork while the
+    /// lane budget exceeds one, so at most `worker_ceiling` lanes run; each
+    /// lane passes one [`crate::cancel::LanePoll`] to all of its leaves.
+    pub(crate) fn reduce<R: Send>(
+        &self,
+        leaves: usize,
+        query: Option<crate::Cancellation<'_>>,
+        leaf: impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> R + Sync,
+        merge: impl Fn(R, R) -> R + Sync,
+    ) -> R {
+        fn serial<R>(
+            first: usize,
+            last: usize,
+            poll: &mut crate::cancel::LanePoll<'_>,
+            leaf: &(impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> R + Sync),
+            merge: &(impl Fn(R, R) -> R + Sync),
+        ) -> R {
+            if last - first == 1 {
+                return leaf(first, poll);
+            }
+            let middle = first + (last - first) / 2;
+            let left = serial(first, middle, poll, leaf, merge);
+            let right = serial(middle, last, poll, leaf, merge);
+            merge(left, right)
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn forked<R: Send>(
+            pool: &rayon::ThreadPool,
+            first: usize,
+            last: usize,
+            lanes: usize,
+            query: Option<crate::Cancellation<'_>>,
+            leaf: &(impl Fn(usize, &mut crate::cancel::LanePoll<'_>) -> R + Sync),
+            merge: &(impl Fn(R, R) -> R + Sync),
+        ) -> R {
+            if lanes <= 1 || last - first == 1 {
+                #[cfg(test)]
+                let _lane = gauge::enter(pool);
+                let _ = pool;
+                let mut poll = crate::cancel::LanePoll::new(query);
+                return serial(first, last, &mut poll, leaf, merge);
+            }
+            let middle = first + (last - first) / 2;
+            let (left, right) = rayon::join(
+                || forked(pool, first, middle, lanes / 2, query, leaf, merge),
+                || forked(pool, middle, last, lanes - lanes / 2, query, leaf, merge),
+            );
+            merge(left, right)
+        }
+        debug_assert!(leaves > 0);
+        let lanes = self.worker_ceiling().min(leaves);
+        self.install(|| forked(self.pool, 0, leaves, lanes, query, &leaf, &merge))
+    }
+
     pub(crate) fn should_parallel(&self, length: usize) -> bool {
         self.options.should_parallel(length)
     }
 
     pub(crate) fn work_chunk_len(&self, length: usize) -> usize {
         self.options.work_chunk_len(length)
+    }
+}
+
+/// A lane budget for recursive work on a team. Forking splits the budget, so
+/// at most the team's worker ceiling of closures ever run concurrently; a
+/// budget of one runs both halves in sequence on the current lane.
+#[cfg(feature = "parallel")]
+#[derive(Clone, Copy)]
+pub(crate) struct Lanes<'a> {
+    count: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pool: &'a rayon::ThreadPool,
+}
+
+#[cfg(feature = "parallel")]
+impl<'a> Lanes<'a> {
+    /// Remaining concurrent lanes, including this one.
+    pub(crate) const fn count(self) -> usize {
+        self.count
+    }
+
+    /// One lane: everything below runs sequentially here.
+    pub(crate) const fn single(self) -> Self {
+        Self {
+            count: 1,
+            pool: self.pool,
+        }
+    }
+
+    /// Run `left` and `right`, concurrently when more than one lane remains,
+    /// splitting the budget between them; otherwise in sequence.
+    pub(crate) fn join<A: Send, B: Send>(
+        self,
+        left: impl FnOnce(Self) -> A + Send,
+        right: impl FnOnce(Self) -> B + Send,
+    ) -> (A, B) {
+        if self.count <= 1 {
+            let a = left(self);
+            return (a, right(self));
+        }
+        let half = Self {
+            count: self.count / 2,
+            pool: self.pool,
+        };
+        let rest = Self {
+            count: self.count - self.count / 2,
+            pool: self.pool,
+        };
+        rayon::join(
+            || {
+                #[cfg(test)]
+                let _lane = (half.count == 1).then(|| gauge::enter(half.pool));
+                left(half)
+            },
+            || {
+                #[cfg(test)]
+                let _lane = (rest.count == 1).then(|| gauge::enter(rest.pool));
+                right(rest)
+            },
+        )
+    }
+}
+
+/// Test-only concurrency gauge: the maximum number of CMG lanes that ran at
+/// once on one watched pool. Every dispatcher lane enters it.
+#[cfg(all(test, feature = "parallel"))]
+pub(crate) mod gauge {
+    use std::sync::Mutex;
+
+    struct State {
+        pool: usize,
+        active: usize,
+        max: usize,
+    }
+
+    static STATE: Mutex<State> = Mutex::new(State {
+        pool: 0,
+        active: 0,
+        max: 0,
+    });
+    /// Serializes witnesses that watch a pool.
+    pub(crate) static WITNESS: Mutex<()> = Mutex::new(());
+
+    fn state() -> std::sync::MutexGuard<'static, State> {
+        STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) struct Lane(bool);
+
+    pub(crate) fn enter(pool: &rayon::ThreadPool) -> Lane {
+        let mut state = state();
+        let watched = state.pool == core::ptr::from_ref(pool) as usize;
+        if watched {
+            state.active += 1;
+            state.max = state.max.max(state.active);
+        }
+        Lane(watched)
+    }
+
+    impl Drop for Lane {
+        fn drop(&mut self) {
+            if self.0 {
+                state().active -= 1;
+            }
+        }
+    }
+
+    /// Start watching `pool` and reset its maximum.
+    pub(crate) fn watch(pool: &rayon::ThreadPool) {
+        let mut state = state();
+        *state = State {
+            pool: core::ptr::from_ref(pool) as usize,
+            active: 0,
+            max: 0,
+        };
+    }
+
+    /// The maximum concurrent lanes since `watch`.
+    pub(crate) fn max() -> usize {
+        state().max
     }
 }
 

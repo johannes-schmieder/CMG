@@ -1,6 +1,5 @@
 //! Reusable canonical topology for changing-weight Laplacians.
 
-use crate::graph::compensated_sum;
 use crate::{CmgError, Components, Edge, Laplacian};
 use std::sync::Arc;
 
@@ -58,11 +57,14 @@ impl PreparedLaplacianTopology {
         endpoints: &[(usize, usize)],
         budget_bytes: usize,
     ) -> Result<Self, CmgError> {
-        crate::storage::admit(
-            Self::preparation_allocation_bound(vertices, endpoints.len())?,
-            budget_bytes,
-        )?;
-        Self::prepare(vertices, endpoints.iter().copied())
+        Self::prepare_with(
+            vertices,
+            endpoints,
+            crate::BuildContext {
+                budget_bytes: Some(budget_bytes),
+                ..crate::BuildContext::default()
+            },
+        )
     }
 
     /// New numeric graph layouts; existing topology and assembly scratch are
@@ -90,15 +92,94 @@ impl PreparedLaplacianTopology {
         workspace: &mut PreparedLaplacianWorkspace,
         budget_bytes: usize,
     ) -> Result<Laplacian, CmgError> {
-        crate::storage::admit(self.numeric_allocation_bytes()?, budget_bytes)?;
-        self.assemble_with_workspace(weights, workspace)
+        self.assemble_with(
+            weights,
+            workspace,
+            crate::BuildContext {
+                budget_bytes: Some(budget_bytes),
+                ..crate::BuildContext::default()
+            },
+        )
     }
+
+    /// Assemble one numeric frame under a construction context; its team is
+    /// unused. A budget admits [`Self::numeric_allocation_bytes`] before the
+    /// first allocation. With a cancellation query, weight validation, every
+    /// duplicate group (gathered, sorted by counted heapsort and summed in
+    /// counted segments) and the diagonal are polled at the fixed cadence and
+    /// before every allocation, and once more before the frame is returned.
+    /// The graph's bits never depend on the context.
+    pub fn assemble_with(
+        &self,
+        weights: &[f64],
+        workspace: &mut PreparedLaplacianWorkspace,
+        context: crate::BuildContext<'_>,
+    ) -> Result<Laplacian, CmgError> {
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(self.numeric_allocation_bytes()?, budget)?;
+        }
+        match context.cancel {
+            Some(cancel) => self.assemble_metered(
+                weights,
+                workspace,
+                &mut crate::cancel::CancelMeter::new(cancel),
+            ),
+            None => self.assemble_metered(weights, workspace, &mut crate::cancel::Unmetered),
+        }
+    }
+    /// Prepare from a borrowed slice under a construction context; its team is
+    /// unused. A budget admits [`Self::preparation_allocation_bound`] first.
+    /// With a cancellation query, endpoint validation, the counted heapsort of
+    /// the indexed endpoints, duplicate grouping and component discovery are
+    /// polled at the fixed cadence and before every allocation, and once more
+    /// before the topology is returned. The topology never depends on the
+    /// context: the sort key (canonical endpoints, input index) is unique.
+    pub fn prepare_with(
+        vertices: usize,
+        endpoints: &[(usize, usize)],
+        context: crate::BuildContext<'_>,
+    ) -> Result<Self, CmgError> {
+        if let Some(budget) = context.budget_bytes {
+            crate::storage::admit(
+                Self::preparation_allocation_bound(vertices, endpoints.len())?,
+                budget,
+            )?;
+        }
+        match context.cancel {
+            Some(cancel) => Self::prepare_metered(
+                vertices,
+                endpoints.iter().copied(),
+                &mut crate::cancel::CancelMeter::new(cancel),
+            ),
+            None => Self::prepare_metered(
+                vertices,
+                endpoints.iter().copied(),
+                &mut crate::cancel::Unmetered,
+            ),
+        }
+    }
+
     /// Validate and canonicalize undirected endpoints once.
     pub fn prepare<I>(vertex_count: usize, endpoints: I) -> Result<Self, CmgError>
     where
         I: IntoIterator<Item = (usize, usize)>,
     {
+        Self::prepare_metered(vertex_count, endpoints, &mut crate::cancel::Unmetered)
+    }
+
+    fn prepare_metered<I, M: crate::cancel::Meter>(
+        vertex_count: usize,
+        endpoints: I,
+        meter: &mut M,
+    ) -> Result<Self, CmgError>
+    where
+        I: IntoIterator<Item = (usize, usize)>,
+    {
         let iterator = endpoints.into_iter();
+        meter.allocation(
+            "prepared topology endpoints",
+            iterator.size_hint().0.saturating_mul(16),
+        )?;
         let mut indexed = Vec::new();
         indexed
             .try_reserve_exact(iterator.size_hint().0)
@@ -106,6 +187,7 @@ impl PreparedLaplacianTopology {
                 context: "prepared topology endpoints",
             })?;
         for (input_index, (left, right)) in iterator.enumerate() {
+            meter.work("prepared endpoint validation", 16)?;
             validate_endpoint(vertex_count, left)?;
             validate_endpoint(vertex_count, right)?;
             if left == right {
@@ -117,6 +199,7 @@ impl PreparedLaplacianTopology {
                 (right as u32, left as u32)
             };
             if indexed.len() == indexed.capacity() {
+                meter.allocation("prepared topology endpoints", 16)?;
                 indexed
                     .try_reserve(1)
                     .map_err(|_| CmgError::AllocationFailed {
@@ -125,9 +208,13 @@ impl PreparedLaplacianTopology {
             }
             indexed.push((pack_key(u, v), input_index));
         }
-        indexed.sort_unstable();
+        meter.sort_by(&mut indexed, Ord::cmp, "prepared endpoint sort")?;
 
         let input_edge_count = indexed.len();
+        meter.allocation(
+            "prepared canonical maps",
+            input_edge_count.saturating_mul(40),
+        )?;
         let mut canonical_keys = Vec::new();
         let mut group_offsets = Vec::new();
         let mut group_input_indices = Vec::new();
@@ -152,7 +239,16 @@ impl PreparedLaplacianTopology {
             .map_err(|_| CmgError::AllocationFailed {
                 context: "prepared input edge map",
             })?;
-        input_to_canonical.resize(input_edge_count, 0);
+        crate::cancel::chunked(
+            meter,
+            "prepared input edge map",
+            input_edge_count,
+            1,
+            |range| {
+                input_to_canonical.resize(input_to_canonical.len() + range.len(), 0);
+                Ok(())
+            },
+        )?;
         group_offsets.push(0);
 
         let mut maximum_duplicate_count = 0;
@@ -163,6 +259,7 @@ impl PreparedLaplacianTopology {
             canonical_keys.push(key);
             let start = cursor;
             while cursor < indexed.len() && indexed[cursor].0 == key {
+                meter.work("prepared duplicate grouping", 16)?;
                 let input_index = indexed[cursor].1;
                 group_input_indices.push(input_index);
                 input_to_canonical[input_index] = canonical_index;
@@ -172,11 +269,17 @@ impl PreparedLaplacianTopology {
             group_offsets.push(cursor);
         }
 
-        let components = Arc::new(Components::from_endpoints(
+        let components = Components::from_endpoints(
             vertex_count,
             canonical_keys.iter().map(|&key| (key_u(key), key_v(key))),
-            &mut crate::cancel::Unmetered,
-        )?);
+            meter,
+        )?;
+        meter.allocation(
+            "prepared topology owners",
+            crate::storage::arc_bytes::<Components>()?,
+        )?;
+        meter.checkpoint("prepared topology publication")?;
+        let components = Arc::new(components);
 
         Ok(Self {
             vertex_count,
@@ -262,6 +365,16 @@ impl PreparedLaplacianTopology {
         weights: &[f64],
         workspace: &mut PreparedLaplacianWorkspace,
     ) -> Result<Laplacian, CmgError> {
+        self.assemble_metered(weights, workspace, &mut crate::cancel::Unmetered)
+    }
+
+    fn assemble_metered<M: crate::cancel::Meter>(
+        &self,
+        weights: &[f64],
+        workspace: &mut PreparedLaplacianWorkspace,
+        meter: &mut M,
+    ) -> Result<Laplacian, CmgError> {
+        use crate::cancel::chunked;
         if weights.len() != self.input_edge_count {
             return Err(CmgError::dimension(
                 "PreparedLaplacianTopology weights",
@@ -269,43 +382,82 @@ impl PreparedLaplacianTopology {
                 weights.len(),
             ));
         }
-        for (&weight, &canonical_index) in weights.iter().zip(&self.input_to_canonical) {
-            if !weight.is_finite() || weight <= 0.0 {
-                let key = self.canonical_keys[canonical_index];
-                return Err(CmgError::InvalidEdgeWeight {
-                    u: key_u(key),
-                    v: key_v(key),
-                    weight,
-                });
-            }
-        }
+        chunked(
+            meter,
+            "prepared weight validation",
+            weights.len(),
+            4,
+            |range| {
+                for (&weight, &canonical_index) in weights[range.clone()]
+                    .iter()
+                    .zip(&self.input_to_canonical[range])
+                {
+                    if !weight.is_finite() || weight <= 0.0 {
+                        let key = self.canonical_keys[canonical_index];
+                        return Err(CmgError::InvalidEdgeWeight {
+                            u: key_u(key),
+                            v: key_v(key),
+                            weight,
+                        });
+                    }
+                }
+                Ok(())
+            },
+        )?;
         workspace.validate(self.maximum_duplicate_count)?;
 
+        meter.allocation(
+            "prepared numeric canonical edges",
+            crate::storage::bytes::<Edge>(self.canonical_keys.len())?,
+        )?;
         let mut edges = Vec::new();
         edges
             .try_reserve_exact(self.canonical_keys.len())
             .map_err(|_| CmgError::AllocationFailed {
                 context: "prepared numeric canonical edges",
             })?;
-        let mut diagonal = Vec::new();
-        diagonal
-            .try_reserve_exact(self.vertex_count)
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "prepared numeric diagonal",
-            })?;
-        diagonal.resize(self.vertex_count, 0.0_f64);
+        let mut diagonal = crate::cancel::try_filled(
+            meter,
+            self.vertex_count,
+            0.0_f64,
+            "prepared numeric diagonal",
+        )?;
 
         for canonical_index in 0..self.canonical_keys.len() {
+            meter.work("prepared numeric edge", 32)?;
             let start = self.group_offsets[canonical_index];
             let end = self.group_offsets[canonical_index + 1];
-            workspace.duplicate_weights.clear();
-            workspace.duplicate_weights.extend(
-                self.group_input_indices[start..end]
-                    .iter()
-                    .map(|&input_index| weights[input_index]),
-            );
-            workspace.duplicate_weights.sort_unstable_by(f64::total_cmp);
-            let weight = compensated_sum(workspace.duplicate_weights.iter().copied());
+            let duplicates = &mut workspace.duplicate_weights;
+            duplicates.clear();
+            chunked(
+                meter,
+                "prepared duplicate gather",
+                end - start,
+                4,
+                |range| {
+                    duplicates.extend(
+                        self.group_input_indices[start + range.start..start + range.end]
+                            .iter()
+                            .map(|&input_index| weights[input_index]),
+                    );
+                    Ok(())
+                },
+            )?;
+            meter.sort_by(duplicates, f64::total_cmp, "prepared duplicate sort")?;
+            let (mut sum, mut correction) = (0.0, 0.0);
+            chunked(
+                meter,
+                "prepared duplicate sum",
+                duplicates.len(),
+                4,
+                |range| {
+                    for &value in &duplicates[range] {
+                        crate::graph::compensated_add(&mut sum, &mut correction, value);
+                    }
+                    Ok(())
+                },
+            )?;
+            let weight = sum + correction;
             let key = self.canonical_keys[canonical_index];
             let u = key_u(key);
             let v = key_v(key);
@@ -316,6 +468,7 @@ impl PreparedLaplacianTopology {
             diagonal[u] += weight;
             diagonal[v] += weight;
         }
+        meter.checkpoint("prepared numeric frame")?;
         Ok(Laplacian::from_prepared_parts(
             self.vertex_count,
             edges,
@@ -405,4 +558,127 @@ const fn key_u(key: u64) -> usize {
 
 const fn key_v(key: u64) -> usize {
     key as u32 as usize
+}
+
+#[cfg(test)]
+// Context literals keep `..Default::default()` for their feature-gated fields.
+#[allow(clippy::needless_update)]
+mod cancellable_assembly_tests {
+    use super::*;
+    use crate::cancel::StopAt;
+
+    #[test]
+    fn long_duplicate_groups_poll_inside_and_frames_keep_their_bits() {
+        // One pair repeated 30,000 times plus a path: a single long group.
+        let mut endpoints: Vec<(usize, usize)> = (0..30_000).map(|_| (0, 1)).collect();
+        endpoints.extend((1..500).map(|v| (v, v + 1)));
+        let topology = PreparedLaplacianTopology::prepare(501, endpoints.iter().copied()).unwrap();
+        let weights: Vec<f64> = (0..endpoints.len())
+            .map(|i| 1.0 + ((i * 37) % 101) as f64 * 1e-3)
+            .collect();
+        let mut workspace = topology.workspace().unwrap();
+        let reference = topology
+            .assemble_with_workspace(&weights, &mut workspace)
+            .unwrap();
+        let never = StopAt::never();
+        let query = || never.query();
+        let polled = topology
+            .assemble_with(
+                &weights,
+                &mut workspace,
+                crate::BuildContext {
+                    cancel: Some(&query),
+                    budget_bytes: Some(topology.numeric_allocation_bytes().unwrap()),
+                    ..crate::BuildContext::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(polled.edges(), reference.edges());
+        assert_eq!(polled.diagonal(), reference.diagonal());
+        let total = never.polls();
+        let mut phases = std::collections::BTreeSet::new();
+        for stop in 0..total {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            match topology.assemble_with(
+                &weights,
+                &mut workspace,
+                crate::BuildContext {
+                    cancel: Some(&query),
+                    ..crate::BuildContext::default()
+                },
+            ) {
+                Err(CmgError::Cancelled { phase }) => {
+                    phases.insert(phase);
+                }
+                other => panic!("poll {stop} of {total}: {:?}", other.err()),
+            }
+        }
+        for phase in [
+            "prepared weight validation",
+            "prepared duplicate gather",
+            "prepared duplicate sort",
+            "prepared duplicate sum",
+            "prepared numeric frame",
+        ] {
+            assert!(phases.contains(phase), "{phase} not in {phases:?}");
+        }
+        let after = topology
+            .assemble_with_workspace(&weights, &mut workspace)
+            .unwrap();
+        assert_eq!(after.edges(), reference.edges());
+    }
+
+    #[test]
+    fn topology_preparation_polls_inside_sort_and_grouping() {
+        let endpoints: Vec<(usize, usize)> = (0..20_000)
+            .map(|i| ((i * 7919) % 3001, (i * 104_729 + 1) % 3001))
+            .map(|(u, v)| if u == v { (u, (v + 1) % 3001) } else { (u, v) })
+            .collect();
+        let reference =
+            PreparedLaplacianTopology::prepare(3001, endpoints.iter().copied()).unwrap();
+        let never = StopAt::never();
+        let query = || never.query();
+        let polled = PreparedLaplacianTopology::prepare_with(
+            3001,
+            &endpoints,
+            crate::BuildContext {
+                cancel: Some(&query),
+                ..crate::BuildContext::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(polled.canonical_keys, reference.canonical_keys);
+        assert_eq!(polled.group_offsets, reference.group_offsets);
+        assert_eq!(polled.group_input_indices, reference.group_input_indices);
+        assert_eq!(polled.input_to_canonical, reference.input_to_canonical);
+        assert_eq!(*polled.components, *reference.components);
+        let total = never.polls();
+        let mut phases = std::collections::BTreeSet::new();
+        for stop in (0..total).step_by((total / 300).max(1)).chain([total - 1]) {
+            let cancel = StopAt::at(Some(stop));
+            let query = || cancel.query();
+            match PreparedLaplacianTopology::prepare_with(
+                3001,
+                &endpoints,
+                crate::BuildContext {
+                    cancel: Some(&query),
+                    ..crate::BuildContext::default()
+                },
+            ) {
+                Err(CmgError::Cancelled { phase }) => {
+                    phases.insert(phase);
+                }
+                other => panic!("poll {stop} of {total}: {:?}", other.err()),
+            }
+        }
+        for phase in [
+            "prepared endpoint validation",
+            "prepared endpoint sort",
+            "prepared duplicate grouping",
+            "prepared topology publication",
+        ] {
+            assert!(phases.contains(phase), "{phase} not in {phases:?}");
+        }
+    }
 }

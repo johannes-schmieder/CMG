@@ -29,8 +29,6 @@ crate::storage::storage_fields!(PcgBatchWorkspace, pcg, rhs, guess);
 crate::storage::storage_fields!(PcgBatchWorkspace, pcg, rhs, guess, outcome);
 #[cfg(feature = "parallel")]
 use crate::ParallelCmgPlan;
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 #[cfg(feature = "profiling")]
 use std::time::Instant;
 
@@ -126,12 +124,19 @@ impl PcgBatchWorkspace {
     /// Requested heap layouts for one new batch workspace, including all nested
     /// descriptor banks. Excludes the inline root and the borrowed preconditioner.
     pub fn allocation_bytes(preconditioner: &CmgPreconditioner) -> Result<usize, CmgError> {
+        Self::allocation_bytes_metered(preconditioner, &mut crate::cancel::Unmetered)
+    }
+
+    fn allocation_bytes_metered<M: Meter>(
+        preconditioner: &CmgPreconditioner,
+        meter: &mut M,
+    ) -> Result<usize, CmgError> {
         use crate::storage::{add, bytes};
         let n = preconditioner.hierarchy().levels()[0]
             .graph()
             .vertex_count();
         add(
-            PcgWorkspace::allocation_bytes(preconditioner)?,
+            PcgWorkspace::allocation_bytes_metered(preconditioner, meter)?,
             bytes::<[f64; 2]>(n)?,
         )
     }
@@ -152,7 +157,26 @@ impl PcgBatchWorkspace {
         preconditioner: &CmgPreconditioner,
         count: usize,
     ) -> Result<usize, CmgError> {
-        let payload = Self::allocation_bytes(preconditioner)?
+        Self::bank_allocation_bytes_with(preconditioner, count, None)
+    }
+
+    /// [`Self::bank_allocation_bytes`] with an optional cancellation query:
+    /// the same value and errors, polling between bounded layout steps and
+    /// once before returning. A true query returns [`CmgError::Cancelled`].
+    pub fn bank_allocation_bytes_with(
+        preconditioner: &CmgPreconditioner,
+        count: usize,
+        cancel: Option<crate::Cancellation<'_>>,
+    ) -> Result<usize, CmgError> {
+        with_meter!(cancel, meter => Self::bank_allocation_bytes_metered(preconditioner, count, meter))
+    }
+
+    fn bank_allocation_bytes_metered<M: Meter>(
+        preconditioner: &CmgPreconditioner,
+        count: usize,
+        meter: &mut M,
+    ) -> Result<usize, CmgError> {
+        let payload = Self::allocation_bytes_metered(preconditioner, meter)?
             .checked_mul(count)
             .ok_or(CmgError::AllocationFailed {
                 context: "PCG bank size overflows",
@@ -167,41 +191,60 @@ impl PcgBatchWorkspace {
         count: usize,
         budget_bytes: usize,
     ) -> Result<Vec<Self>, CmgError> {
-        crate::storage::admit(
-            Self::bank_allocation_bytes(preconditioner, count)?,
-            budget_bytes,
-        )?;
-        let mut bank = Vec::new();
-        bank.try_reserve_exact(count)
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "PCG batch workspace bank",
-            })?;
-        for _ in 0..count {
-            bank.push(Self::new(preconditioner)?);
-        }
-        Ok(bank)
+        Self::new_bank_with(
+            preconditioner,
+            count,
+            crate::BuildContext {
+                budget_bytes: Some(budget_bytes),
+                ..crate::BuildContext::default()
+            },
+        )
+    }
+
+    /// Prepare a fixed bank under a context; its team is unused. A budget
+    /// admits [`Self::bank_allocation_bytes`] before the first allocation.
+    /// With a cancellation query every vector, component, centering and CMG
+    /// level bank polls before allocating and while it is zero-filled, and
+    /// the query is polled once more before the bank is returned. A true query
+    /// drops every partial workspace and returns [`CmgError::Cancelled`].
+    /// Layout, contents and other errors never depend on the context.
+    pub fn new_bank_with(
+        preconditioner: &CmgPreconditioner,
+        count: usize,
+        context: crate::BuildContext<'_>,
+    ) -> Result<Vec<Self>, CmgError> {
+        with_meter!(context.cancel, meter => (|| {
+            if let Some(budget) = context.budget_bytes {
+                crate::storage::admit(
+                    Self::bank_allocation_bytes_metered(preconditioner, count, meter)?,
+                    budget,
+                )?;
+            }
+            let mut bank = crate::cancel::try_reserved(meter, count, "PCG batch workspace bank")?;
+            for _ in 0..count {
+                meter.work("PCG batch workspace bank", 16)?;
+                bank.push(Self::new_metered(preconditioner, meter)?);
+            }
+            Ok(bank)
+        })())
     }
 
     /// Allocate a workspace for contiguous or strided batch solves.
     pub fn new(preconditioner: &CmgPreconditioner) -> Result<Self, CmgError> {
+        Self::new_metered(preconditioner, &mut crate::cancel::Unmetered)
+    }
+
+    fn new_metered<M: Meter>(
+        preconditioner: &CmgPreconditioner,
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
         let dimension = preconditioner.hierarchy().levels()[0]
             .graph()
             .vertex_count();
-        let mut rhs = Vec::new();
-        rhs.try_reserve_exact(dimension)
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "PCG batch RHS staging",
-            })?;
-        rhs.resize(dimension, 0.0);
-        let mut guess = Vec::new();
-        guess
-            .try_reserve_exact(dimension)
-            .map_err(|_| CmgError::AllocationFailed {
-                context: "PCG batch guess staging",
-            })?;
-        guess.resize(dimension, 0.0);
+        let rhs = crate::cancel::try_filled(meter, dimension, 0.0, "PCG batch RHS staging")?;
+        let guess = crate::cancel::try_filled(meter, dimension, 0.0, "PCG batch guess staging")?;
         Ok(Self {
-            pcg: PcgWorkspace::try_new(preconditioner)?,
+            pcg: PcgWorkspace::try_new_metered(preconditioner, meter)?,
             rhs,
             guess,
             #[cfg(feature = "parallel")]
@@ -554,18 +597,16 @@ fn batch_required_len(
         })
 }
 
-fn try_zeroed(len: usize, context: &'static str) -> Result<Vec<f64>, CmgError> {
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(len)
-        .map_err(|_| CmgError::AllocationFailed { context })?;
-    values.resize(len, 0.0);
-    Ok(values)
-}
-
 impl PcgWorkspace {
     /// Requested heap layouts including CMG/component scratch and descriptor banks.
     pub fn allocation_bytes(preconditioner: &CmgPreconditioner) -> Result<usize, CmgError> {
+        Self::allocation_bytes_metered(preconditioner, &mut crate::cancel::Unmetered)
+    }
+
+    fn allocation_bytes_metered<M: Meter>(
+        preconditioner: &CmgPreconditioner,
+        meter: &mut M,
+    ) -> Result<usize, CmgError> {
         use crate::storage::{add, bytes};
         let n = preconditioner.hierarchy().levels()[0]
             .graph()
@@ -575,7 +616,7 @@ impl PcgWorkspace {
                 bytes::<[f64; 6]>(n)?,
                 ComponentWorkspace::allocation_bytes(preconditioner.finest_components().count())?,
             )?,
-            preconditioner.workspace_allocation_bytes()?,
+            preconditioner.workspace_allocation_bytes_metered(meter)?,
         )
     }
     #[cfg(feature = "parallel")]
@@ -610,20 +651,28 @@ impl PcgWorkspace {
 
     /// Fallibly allocate a solver workspace for a fixed preconditioner.
     pub fn try_new(preconditioner: &CmgPreconditioner) -> Result<Self, CmgError> {
+        Self::try_new_metered(preconditioner, &mut crate::cancel::Unmetered)
+    }
+
+    /// The one fallible preparation; a polling meter polls before every
+    /// allocation and while zero-filling, layout and contents unchanged.
+    fn try_new_metered<M: Meter>(
+        preconditioner: &CmgPreconditioner,
+        meter: &mut M,
+    ) -> Result<Self, CmgError> {
         let dimension = preconditioner.hierarchy().levels()[0]
             .graph()
             .vertex_count();
+        let mut zero = |context| crate::cancel::try_filled(meter, dimension, 0.0, context);
         Ok(Self {
-            projected_rhs: try_zeroed(dimension, "PCG projected RHS")?,
-            solution: try_zeroed(dimension, "PCG solution")?,
-            residual: try_zeroed(dimension, "PCG residual")?,
-            preconditioned: try_zeroed(dimension, "PCG preconditioned vector")?,
-            direction: try_zeroed(dimension, "PCG direction")?,
-            matrix_direction: try_zeroed(dimension, "PCG matrix direction")?,
-            component: preconditioner
-                .finest_components()
-                .try_workspace(&mut crate::cancel::Unmetered)?,
-            cmg: preconditioner.try_workspace()?,
+            projected_rhs: zero("PCG projected RHS")?,
+            solution: zero("PCG solution")?,
+            residual: zero("PCG residual")?,
+            preconditioned: zero("PCG preconditioned vector")?,
+            direction: zero("PCG direction")?,
+            matrix_direction: zero("PCG matrix direction")?,
+            component: preconditioner.finest_components().try_workspace(meter)?,
+            cmg: preconditioner.try_workspace_metered(meter)?,
         })
     }
 
@@ -937,24 +986,28 @@ pub(crate) fn solve_owned_concurrently(
 ) -> Result<Vec<PcgResult>, CmgError> {
     let mut results = Vec::with_capacity(right_hand_sides.len());
     for rhs_chunk in right_hand_sides.chunks(workspaces.len()) {
-        let chunk_results: Vec<Result<PcgResult, CmgError>> = team.install(|| {
-            workspaces[..rhs_chunk.len()]
-                .par_iter_mut()
-                .zip(rhs_chunk.par_iter())
-                .map(|(workspace, rhs)| {
-                    solve_pcg_with(
-                        graph,
-                        preconditioner,
-                        rhs,
-                        options,
-                        workspace,
-                        SolveContext::default(),
-                    )
-                })
-                .collect()
-        });
-        for result in chunk_results {
-            results.push(result?);
+        // At most `worker_ceiling` lanes claim the group's solves.
+        let mut slots: Vec<(&mut PcgWorkspace, Option<Result<PcgResult, CmgError>>)> = workspaces
+            [..rhs_chunk.len()]
+            .iter_mut()
+            .map(|workspace| (workspace, None))
+            .collect();
+        team.chunks_mut(&mut slots, 1, None, |index, slot, _| {
+            let (workspace, outcome) = &mut slot[0];
+            *outcome = Some(solve_pcg_with(
+                graph,
+                preconditioner,
+                &rhs_chunk[index],
+                options,
+                workspace,
+                SolveContext::default(),
+            ));
+            Ok(())
+        })?;
+        for (_, outcome) in slots {
+            results.push(outcome.ok_or(CmgError::InvalidHierarchy {
+                context: "parallel PCG group has no outcome",
+            })??);
         }
     }
     Ok(results)
@@ -1183,49 +1236,56 @@ fn solve_concurrently(
         .batch_concurrency(workspaces[0].byte_len(), right_hand_sides.rhs_count)?
         .min(workspaces.len());
     let cancel = context.cancel;
-    for start in (0..right_hand_sides.rhs_count).step_by(concurrency) {
-        let count = concurrency.min(right_hand_sides.rhs_count - start);
-        team.install(|| {
-            workspaces[..count]
-                .par_iter_mut()
-                .enumerate()
-                .for_each(|(local_index, workspace)| {
-                    let rhs_index = start + local_index;
-                    let PcgBatchWorkspace {
-                        pcg,
-                        rhs: rhs_staging,
-                        guess: guess_staging,
-                        outcome,
-                    } = workspace;
-                    *outcome = Some(with_meter!(cancel, meter => (|| {
-                        let rhs = right_hand_sides.gather(rhs_index, rhs_staging, meter)?;
-                        let guess = match initial_guesses {
-                            Some(guesses) => {
-                                Some(guesses.gather(rhs_index, guess_staging, meter)?)
-                            }
-                            None => None,
-                        };
-                        lane.run(rhs, guess, options, pcg, meter, &mut ())
-                    })()));
-                });
-        });
-        for (local_index, workspace) in workspaces[..count].iter_mut().enumerate() {
-            let rhs_index = start + local_index;
-            let result = workspace
-                .outcome
-                .take()
-                .ok_or(CmgError::InvalidHierarchy {
-                    context: "parallel PCG batch workspace has no outcome",
-                })??;
-            diagnostics[rhs_index] = result;
-            solutions.scatter(
-                rhs_index,
-                &workspace.pcg.solution,
-                &mut crate::cancel::Unmetered,
-            )?;
+    with_meter!(cancel, meter => (|| {
+        for start in (0..right_hand_sides.rhs_count).step_by(concurrency) {
+            let count = concurrency.min(right_hand_sides.rhs_count - start);
+            // At most `worker_ceiling` lanes claim the group's solves; each
+            // solve meters itself and all lanes join before any publication.
+            team.chunks_mut(&mut workspaces[..count], 1, None, |local_index, slot, _| {
+                let rhs_index = start + local_index;
+                let PcgBatchWorkspace {
+                    pcg,
+                    rhs: rhs_staging,
+                    guess: guess_staging,
+                    outcome,
+                } = &mut slot[0];
+                *outcome = Some(with_meter!(cancel, meter => (|| {
+                    let rhs = right_hand_sides.gather(rhs_index, rhs_staging, meter)?;
+                    let guess = match initial_guesses {
+                        Some(guesses) => Some(guesses.gather(rhs_index, guess_staging, meter)?),
+                        None => None,
+                    };
+                    lane.run(rhs, guess, options, pcg, meter, &mut ())
+                })()));
+                Ok(())
+            })?;
+            // A lane that stopped on the sticky query makes cancellation the
+            // group's outcome; otherwise the first failing RHS in input order.
+            meter.joined("concurrent PCG join")?;
+            let mut first_error = None;
+            for (local_index, workspace) in workspaces[..count].iter_mut().enumerate() {
+                match workspace.outcome.take() {
+                    Some(Ok(result)) => diagnostics[start + local_index] = result,
+                    Some(Err(error)) => {
+                        first_error.get_or_insert(error);
+                    }
+                    None => {
+                        first_error.get_or_insert(CmgError::InvalidHierarchy {
+                            context: "parallel PCG batch workspace has no outcome",
+                        });
+                    }
+                }
+            }
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+            // Publication is bounded and polled; the final poll precedes success.
+            for (local_index, workspace) in workspaces[..count].iter().enumerate() {
+                solutions.scatter(start + local_index, &workspace.pcg.solution, meter)?;
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })())
 }
 
 fn validate_batch_buffers(
@@ -1946,7 +2006,7 @@ impl<'a> Pcg<'a> {
         {
             let query = meter.query();
             let chunk_size = team.options().reduction_chunk_size;
-            let value = team.install(|| fixed_chunk_dot(left, right, chunk_size, query));
+            let value = fixed_chunk_dot(left, right, chunk_size, team, query);
             meter.joined("PCG dot product")?;
             return Ok(value);
         }
@@ -1971,21 +2031,25 @@ impl<'a> Pcg<'a> {
                 .saturating_mul(options.threads)
                 .saturating_mul(2);
             let scale = if team.should_parallel(values.len()) && values.len() >= parallel_floor {
-                let query = meter.query();
-                let scale = team.install(|| {
-                    values
-                        .par_chunks(options.reduction_chunk_size)
-                        .map(|chunk| {
-                            if query.is_some_and(|cancel| cancel()) {
-                                return 0.0;
+                let chunk_size = options.reduction_chunk_size;
+                // A maximum is exact in any order: lanes reduce fixed chunks.
+                let scale = team.reduce(
+                    values.len().div_ceil(chunk_size),
+                    meter.query(),
+                    |chunk, poll| {
+                        let start = chunk * chunk_size;
+                        let end = values.len().min(start + chunk_size);
+                        let mut scale = 0.0_f64;
+                        let counted = chunked(poll, "PCG norm scale", end - start, 1, |range| {
+                            for value in &values[start + range.start..start + range.end] {
+                                scale = scale.max(value.abs());
                             }
-                            chunk
-                                .iter()
-                                .map(|value| value.abs())
-                                .fold(0.0_f64, f64::max)
-                        })
-                        .reduce(|| 0.0_f64, f64::max)
-                });
+                            Ok(())
+                        });
+                        if counted.is_err() { 0.0 } else { scale }
+                    },
+                    f64::max,
+                );
                 meter.joined("PCG norm scale")?;
                 scale
             } else {
@@ -1995,15 +2059,13 @@ impl<'a> Pcg<'a> {
                 return Ok(0.0);
             }
             let sum = if values.len() >= options.reduction_floor() {
-                let query = meter.query();
-                let sum = team.install(|| {
-                    fixed_chunk_scaled_square_sum(
-                        values,
-                        scale,
-                        options.reduction_chunk_size,
-                        query,
-                    )
-                });
+                let sum = fixed_chunk_scaled_square_sum(
+                    values,
+                    scale,
+                    options.reduction_chunk_size,
+                    team,
+                    meter.query(),
+                );
                 meter.joined("PCG norm sum")?;
                 sum
             } else {
@@ -2180,11 +2242,39 @@ fn original_residual_norm<M: Meter>(
     Ok(scale * sum.value().sqrt())
 }
 
+/// One leaf of a fixed-chunk compensated reduction: the leaf's terms in index
+/// order, counted in segments through the lane's poll. The running sum and
+/// correction cross segments unchanged, so the leaf equals `compensated_sum`
+/// over the whole chunk. A cancelled lane returns zero; its caller polls.
+#[cfg(feature = "parallel")]
+fn compensated_leaf(
+    poll: &mut crate::cancel::LanePoll<'_>,
+    phase: &'static str,
+    range: core::ops::Range<usize>,
+    term: impl Fn(usize) -> f64,
+) -> f64 {
+    let mut sum = 0.0;
+    let mut correction = 0.0;
+    let start = range.start;
+    let counted = chunked(poll, phase, range.len(), 1, |segment| {
+        for index in start + segment.start..start + segment.end {
+            compensated_add(&mut sum, &mut correction, term(index));
+        }
+        Ok(())
+    });
+    if counted.is_err() {
+        0.0
+    } else {
+        sum + correction
+    }
+}
+
 #[cfg(feature = "parallel")]
 fn fixed_chunk_dot(
     left: &[f64],
     right: &[f64],
     chunk_size: usize,
+    team: Team<'_>,
     query: Option<Cancellation<'_>>,
 ) -> f64 {
     debug_assert_eq!(left.len(), right.len());
@@ -2192,37 +2282,18 @@ fn fixed_chunk_dot(
     if chunk_count == 0 {
         return 0.0;
     }
-
-    fn reduce_range(
-        left: &[f64],
-        right: &[f64],
-        chunk_size: usize,
-        first_chunk: usize,
-        last_chunk: usize,
-        query: Option<Cancellation<'_>>,
-    ) -> f64 {
-        if last_chunk - first_chunk == 1 {
-            if query.is_some_and(|cancel| cancel()) {
-                return 0.0;
-            }
-            let start = first_chunk * chunk_size;
+    team.reduce(
+        chunk_count,
+        query,
+        |chunk, poll| {
+            let start = chunk * chunk_size;
             let end = left.len().min(start + chunk_size);
-            return compensated_sum(
-                left[start..end]
-                    .iter()
-                    .zip(&right[start..end])
-                    .map(|(left, right)| left * right),
-            );
-        }
-        let middle = first_chunk + (last_chunk - first_chunk) / 2;
-        let (left_sum, right_sum) = rayon::join(
-            || reduce_range(left, right, chunk_size, first_chunk, middle, query),
-            || reduce_range(left, right, chunk_size, middle, last_chunk, query),
-        );
-        compensated_sum([left_sum, right_sum])
-    }
-
-    reduce_range(left, right, chunk_size, 0, chunk_count, query)
+            compensated_leaf(poll, "PCG dot product", start..end, |index| {
+                left[index] * right[index]
+            })
+        },
+        |left_sum, right_sum| compensated_sum([left_sum, right_sum]),
+    )
 }
 
 #[cfg(feature = "parallel")]
@@ -2230,41 +2301,26 @@ fn fixed_chunk_scaled_square_sum(
     values: &[f64],
     scale: f64,
     chunk_size: usize,
+    team: Team<'_>,
     query: Option<Cancellation<'_>>,
 ) -> f64 {
     let chunk_count = values.len().div_ceil(chunk_size);
     if chunk_count == 0 {
         return 0.0;
     }
-
-    fn reduce_range(
-        values: &[f64],
-        scale: f64,
-        chunk_size: usize,
-        first_chunk: usize,
-        last_chunk: usize,
-        query: Option<Cancellation<'_>>,
-    ) -> f64 {
-        if last_chunk - first_chunk == 1 {
-            if query.is_some_and(|cancel| cancel()) {
-                return 0.0;
-            }
-            let start = first_chunk * chunk_size;
+    team.reduce(
+        chunk_count,
+        query,
+        |chunk, poll| {
+            let start = chunk * chunk_size;
             let end = values.len().min(start + chunk_size);
-            return compensated_sum(values[start..end].iter().map(|value| {
-                let scaled = *value / scale;
+            compensated_leaf(poll, "PCG norm sum", start..end, |index| {
+                let scaled = values[index] / scale;
                 scaled * scaled
-            }));
-        }
-        let middle = first_chunk + (last_chunk - first_chunk) / 2;
-        let (left_sum, right_sum) = rayon::join(
-            || reduce_range(values, scale, chunk_size, first_chunk, middle, query),
-            || reduce_range(values, scale, chunk_size, middle, last_chunk, query),
-        );
-        compensated_sum([left_sum, right_sum])
-    }
-
-    reduce_range(values, scale, chunk_size, 0, chunk_count, query)
+            })
+        },
+        |left_sum, right_sum| compensated_sum([left_sum, right_sum]),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2800,7 +2856,24 @@ mod cancellation_tests {
         };
         let mut workspace = PcgWorkspace::try_new(&preconditioner).unwrap();
         let expected = solve(&graph, &preconditioner, &rhs, &mut workspace, planned).unwrap();
-        for threshold in [1, 25, 400, 5_000] {
+        let total = {
+            let calls = AtomicUsize::new(0);
+            let query = || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                false
+            };
+            let context = SolveContext {
+                cancel: Some(&query),
+                ..planned
+            };
+            assert_eq!(
+                solve(&graph, &preconditioner, &rhs, &mut workspace, context).unwrap(),
+                expected
+            );
+            calls.load(Ordering::SeqCst)
+        };
+        assert!(total > 50, "{total} queries");
+        for threshold in [1, total / 8, total / 2, total - 1] {
             let calls = AtomicUsize::new(0);
             let query = || calls.fetch_add(1, Ordering::SeqCst) >= threshold;
             let context = SolveContext {
@@ -2852,7 +2925,24 @@ mod cancellation_tests {
             })
         };
         let reference = run(concurrent).unwrap();
-        for threshold in [1, 300, 3_000] {
+        let total = {
+            let calls = AtomicUsize::new(0);
+            let query = || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                false
+            };
+            assert_eq!(
+                run(SolveContext {
+                    cancel: Some(&query),
+                    ..concurrent
+                })
+                .unwrap(),
+                reference
+            );
+            calls.load(Ordering::SeqCst)
+        };
+        assert!(total > 50, "{total} queries");
+        for threshold in [1, total / 8, total / 2, total - 1] {
             let calls = AtomicUsize::new(0);
             let query = || calls.fetch_add(1, Ordering::SeqCst) >= threshold;
             assert!(matches!(
@@ -2866,6 +2956,73 @@ mod cancellation_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             assert_eq!(calls.load(Ordering::SeqCst), settled);
             assert_eq!(run(concurrent).unwrap(), reference);
+        }
+    }
+}
+
+/// One huge reduction leaf is counted while it runs: its lane polls the query
+/// at the fixed cadence inside the leaf, and the fixed tree is independent of
+/// the worker ceiling.
+#[cfg(all(test, feature = "parallel"))]
+mod reduction_leaf_tests {
+    use super::*;
+    use crate::{ParallelExecutor, ParallelOptions};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn single_huge_leaf_polls_inside_and_tree_bits_are_ceiling_independent() {
+        let len = 1 << 20;
+        let left: Vec<f64> = (0..len)
+            .map(|i| ((i * 7 % 101) as f64 - 50.0) * 1e-3)
+            .collect();
+        let right: Vec<f64> = (0..len).map(|i| ((i * 13 % 89) as f64).sin()).collect();
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 4,
+            ..ParallelOptions::default()
+        })
+        .unwrap();
+        let team = executor.team();
+        let polls = AtomicUsize::new(0);
+        let count = || {
+            polls.fetch_add(1, Ordering::SeqCst);
+            false
+        };
+        // One leaf spanning the whole vector.
+        let whole = fixed_chunk_dot(&left, &right, len, team, Some(&count));
+        assert_eq!(
+            whole.to_bits(),
+            compensated_sum(left.iter().zip(&right).map(|(a, b)| a * b)).to_bits()
+        );
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            len / crate::cancel::POLL_UNITS as usize
+        );
+        let squares = fixed_chunk_scaled_square_sum(&right, 3.0, len, team, Some(&count));
+        assert_eq!(
+            squares.to_bits(),
+            compensated_sum(right.iter().map(|v| (v / 3.0) * (v / 3.0))).to_bits()
+        );
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            2 * (len / crate::cancel::POLL_UNITS as usize)
+        );
+        // The cancelled lane stops inside the leaf at its third poll.
+        let stopped = AtomicUsize::new(0);
+        let stop = || stopped.fetch_add(1, Ordering::SeqCst) >= 2;
+        assert_eq!(fixed_chunk_dot(&left, &right, len, team, Some(&stop)), 0.0);
+        assert_eq!(stopped.load(Ordering::SeqCst), 3);
+        // Small leaves: the same balanced tree at every worker ceiling.
+        let reference = fixed_chunk_dot(&left, &right, 4096, team, None).to_bits();
+        for threads in [1, 2, 3] {
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                ..ParallelOptions::default()
+            })
+            .unwrap();
+            assert_eq!(
+                fixed_chunk_dot(&left, &right, 4096, executor.team(), None).to_bits(),
+                reference
+            );
         }
     }
 }

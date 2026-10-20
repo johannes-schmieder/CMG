@@ -11,6 +11,13 @@ dispatches on its pool, from the coordinator or from a foreign pool alike.
 ceiling and thresholds) and reject a differently shaped team; CMG never
 creates a pool during construction, application or a solve.
 
+Every parallel stage runs on at most `worker_ceiling` lanes of the borrowed
+pool, even when the pool is larger. Row and item kernels claim fixed chunks
+through one dispatcher that forks exactly `min(ceiling, chunks)` lanes;
+reductions use one fixed balanced tree over fixed leaves whose forks stop once
+the lane budget is spent, so the tree, and every bit, is independent of the
+ceiling. No other CMG code forks or installs work on the pool.
+
 Owned-executor destruction joins every worker and its TLS destructors. If a
 misbehaving detached callback retains the final executor owner on its own
 worker, defensive destruction signals termination and detaches the handles to
@@ -84,10 +91,24 @@ concurrent_right_hand_sides, retained_preconditioner, cancel }` drive the one
 cycle recursion and the one PCG recurrence. With a cancellation query every
 edge, row, transfer entry, centering value and factor entry visited counts
 toward the same fixed cadence, carried across row, level and iteration
-boundaries; each PCG iteration polls once more. Parallel lanes poll between
-bounded sub-ranges of 4,096 items and stop early; all lanes join before
-`CmgError::Cancelled` is returned. Outputs are then unspecified, workspaces
-stay reusable, and no context changes a result bit.
+boundaries; each PCG iteration polls once more. Long traversals (a CSR row,
+a terminal-factor row, a reduction leaf) are counted in segments of at most
+1024 units while they run, never once before an unpolled loop. Each parallel
+lane keeps its own count and polls the sticky query every 65,536 units, also
+inside a row or leaf, and stops early; all lanes join, the coordinator polls,
+and only then is `CmgError::Cancelled` returned. Concurrent solves poll after
+the join before choosing errors, publish through the bounded meter and poll
+once more before success. Outputs are then unspecified, workspaces stay
+reusable, and no context changes a result bit. Plan construction
+(`ParallelCmgPlan::build_with`, `ParallelPcgSolver::try_plan_with`) and PCG
+workspace banks (`PcgBatchWorkspace::new_bank_with`) take the same context.
+
+Team construction stages are bounded too: contraction maps edges in fixed
+logical chunks and fills and compacts its slot bank in counted segments, and
+team canonicalization sorts in place with a counted introsort whose lanes poll
+inside every partition and fork only within the worker ceiling. The
+initial-graph constructor from a borrowed slice keeps its bounded insertion-run
+and merge stages and admitted spare bank.
 
 ## Cancellation contract
 

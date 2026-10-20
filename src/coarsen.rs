@@ -7,8 +7,6 @@ use crate::execution::Team;
 use crate::preconditioner::Width;
 use crate::storage::StoredIndex;
 use crate::{CmgError, Edge, Laplacian};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 use std::sync::OnceLock;
 
 crate::storage::storage_fields!(Aggregation, labels, native_labels, sizes);
@@ -404,8 +402,10 @@ impl Aggregation {
     }
 
     /// Fixed slot and edge banks belong to the admitted parallel bound. Workers
-    /// only write disjoint slots; no worker-side growing collection or CMG
-    /// allocation is needed.
+    /// only write disjoint slots in bounded logical chunks capped at the worker
+    /// ceiling; the slot bank is filled and compacted in counted segments and
+    /// released before the in-place team sort. Every stage polls the meter's
+    /// query; allocations are those of the earlier in-place parallel sort.
     #[cfg(feature = "parallel")]
     fn contract_parallel<M: Meter>(
         &self,
@@ -413,24 +413,24 @@ impl Aggregation {
         team: Team<'_>,
         meter: &mut M,
     ) -> Result<Laplacian, CmgError> {
-        meter.allocation(
+        const CHUNK: usize = 16;
+        let mut mapped: Vec<Option<Edge>> = crate::cancel::try_filled(
+            meter,
+            graph.edge_count(),
+            None,
             "parallel contracted edge slots",
-            crate::storage::bytes::<Option<Edge>>(graph.edge_count())?,
-        )?;
-        let mut mapped =
-            crate::storage::try_filled(graph.edge_count(), None, "parallel contracted edge slots")?;
-        meter.allocation(
-            "parallel contracted edges",
-            crate::storage::bytes::<Edge>(graph.edge_count())?,
         )?;
         let mut coarse_edges =
-            crate::storage::try_capacity(graph.edge_count(), "parallel contracted edges")?;
-        meter.checkpoint("parallel contracted edge mapping")?;
-        team.install(|| {
-            mapped
-                .par_iter_mut()
-                .zip(graph.edges().par_iter())
-                .try_for_each(|(slot, edge)| {
+            meter.try_capacity(graph.edge_count(), "parallel contracted edges")?;
+        crate::graph::stage(
+            "parallel contracted edge mapping",
+            CHUNK,
+            team,
+            &mut mapped,
+            meter.query(),
+            |chunk, slots| {
+                for (offset, slot) in slots.iter_mut().enumerate() {
+                    let edge = graph.edges()[chunk * CHUNK + offset];
                     let (left, right) = match &self.labels {
                         LabelStorage::Compact(labels) => {
                             (labels[edge.u()] as usize, labels[edge.v()] as usize)
@@ -440,14 +440,23 @@ impl Aggregation {
                     if left != right {
                         *slot = Some(Edge::from_internal_parts(left, right, edge.weight())?);
                     }
-                    Ok::<_, CmgError>(())
-                })
-        })?;
+                }
+                Ok(())
+            },
+        )?;
         // Preserve input order before the unchanged canonical sort. At most m
         // items are appended to capacity m; this cannot grow.
-        for edge in mapped.into_iter().flatten() {
-            coarse_edges.push(edge);
-        }
+        crate::cancel::chunked(
+            meter,
+            "parallel contracted edge compaction",
+            mapped.len(),
+            8,
+            |range| {
+                coarse_edges.extend(mapped[range].iter().flatten().copied());
+                Ok(())
+            },
+        )?;
+        drop(mapped);
         Laplacian::canonical_parallel(self.coarse_dimension(), coarse_edges, team, meter)
     }
 
@@ -502,8 +511,10 @@ fn prolong_lanes<L: StoredIndex, M: Meter>(
     };
     #[cfg(feature = "parallel")]
     if let Some(team) = team.filter(|team| team.should_parallel(fine.len())) {
-        crate::preconditioner::rows_parallel(team, meter.query(), fine, columns, operation);
-        return meter.joined("CMG prolongation");
+        let rows =
+            crate::preconditioner::rows_parallel(team, meter.query(), fine, columns, operation);
+        meter.joined("CMG prolongation")?;
+        return rows;
     }
     crate::cancel::chunked(meter, "CMG prolongation", labels.len(), columns, |range| {
         for row in range {

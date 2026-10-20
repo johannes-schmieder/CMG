@@ -4,12 +4,14 @@ use crate::cancel::{CancelMeter, Meter, Unmetered};
 #[cfg(feature = "parallel")]
 use crate::execution::PARALLEL_SETUP_MIN_ITEMS;
 use crate::{CmgError, Components};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 use std::sync::Arc;
 
 #[cfg(feature = "parallel")]
 mod hosted;
+#[cfg(feature = "parallel")]
+pub(crate) use hosted::stage;
+#[cfg(feature = "parallel")]
+mod team_sort;
 
 crate::storage::storage_fields!(
     Laplacian,
@@ -196,16 +198,11 @@ impl Laplacian {
         }
         #[cfg(feature = "parallel")]
         if let Some(team) = context.team.filter(|_| edges.len() >= hosted::MIN_EDGES) {
-            let cancelled = context.cancel.unwrap_or(&|| false);
             return match context.cancel {
-                Some(cancel) => hosted::build(
-                    vertex_count,
-                    edges,
-                    team,
-                    cancelled,
-                    &mut CancelMeter::new(cancel),
-                ),
-                None => hosted::build(vertex_count, edges, team, cancelled, &mut Unmetered),
+                Some(cancel) => {
+                    hosted::build(vertex_count, edges, team, &mut CancelMeter::new(cancel))
+                }
+                None => hosted::build(vertex_count, edges, team, &mut Unmetered),
             };
         }
         match context.cancel {
@@ -291,7 +288,9 @@ impl Laplacian {
         }
     }
 
-    /// Canonicalize with the deterministic in-place parallel sort of a team.
+    /// Canonicalize with the team's in-place bounded introsort: polled inside
+    /// every partition, capped at the worker ceiling and allocation-free. The
+    /// total comparator makes the order identical to the serial sort.
     #[cfg(feature = "parallel")]
     pub(crate) fn canonical_parallel<M: Meter>(
         vertex_count: usize,
@@ -299,11 +298,7 @@ impl Laplacian {
         team: crate::Team<'_>,
         meter: &mut M,
     ) -> Result<Self, CmgError> {
-        // Rayon's unstable sort is in place. A total comparator makes the result
-        // independent of scheduling; its runtime storage is outside CMG admission.
-        meter.checkpoint("parallel edge sorting")?;
-        team.install(|| raw.par_sort_unstable_by(compare_raw_edges));
-        meter.checkpoint("parallel edge sorting")?;
+        team_sort::sort(&mut raw, team, meter)?;
         Self::from_sorted_edges(vertex_count, raw, true, meter)
     }
 

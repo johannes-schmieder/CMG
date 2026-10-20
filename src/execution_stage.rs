@@ -67,8 +67,8 @@ impl AdmittedStage {
             });
         }
         let lanes = team.worker_ceiling().min(self.chunks).max(1);
-        let result =
-            team.install(|| self.dispatch(values, 0, self.chunks, lanes, &cancelled, &kernel));
+        let result = team
+            .install(|| self.dispatch(team, values, 0, self.chunks, lanes, &cancelled, &kernel));
         if cancelled() {
             return Err(self.interrupted());
         }
@@ -81,8 +81,12 @@ impl AdmittedStage {
         }
     }
 
+    // The team is read only by the test-build concurrency gauge.
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(test), allow(clippy::only_used_in_recursion))]
     fn dispatch<T: Send, C: Fn() -> bool + Sync, F>(
         &self,
+        #[cfg_attr(not(test), allow(unused_variables))] team: Team<'_>,
         values: &mut [T],
         first: usize,
         chunks: usize,
@@ -94,6 +98,8 @@ impl AdmittedStage {
         F: Fn(usize, &mut [T]) -> Result<(), CmgError> + Sync,
     {
         if lanes <= 1 || chunks <= 1 {
+            #[cfg(test)]
+            let _lane = team.gauge_lane();
             let mut error = None;
             for (offset, chunk) in values.chunks_mut(self.chunk_len).enumerate() {
                 if cancelled() {
@@ -112,9 +118,20 @@ impl AdmittedStage {
         // Every left chunk is full; the potentially short chunk is rightmost.
         let (left, right) = values.split_at_mut(left_chunks * self.chunk_len);
         let (a, b) = rayon::join(
-            || self.dispatch(left, first, left_chunks, left_lanes, cancelled, kernel),
             || {
                 self.dispatch(
+                    team,
+                    left,
+                    first,
+                    left_chunks,
+                    left_lanes,
+                    cancelled,
+                    kernel,
+                )
+            },
+            || {
+                self.dispatch(
+                    team,
                     right,
                     first + left_chunks,
                     chunks - left_chunks,

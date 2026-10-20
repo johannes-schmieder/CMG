@@ -98,6 +98,51 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   `profile_apply_compatible_into`, `profile_pcg*`) record the production
   kernels instead of maintaining separate copies.
 
+- Bounded cancellation inside every traversal (M3b review repair). Long CSR
+  rows, terminal-factor rows (scalar and interleaved, forward and backward)
+  and fixed-chunk reduction leaves (PCG dot, norm scale, scaled squares,
+  centering sums) are counted in segments of at most 1024 units while they
+  run, serially through the meter and in parallel lanes through a lane-local
+  poll of the sticky query every 65,536 units; accumulators cross segments
+  unchanged, so every bit is preserved. Lanes no longer count rows before an
+  unpolled traversal.
+- Every parallel CMG stage runs on at most the team's `worker_ceiling` lanes:
+  row kernels claim fixed blocks through one capped dispatcher, reductions use
+  one fixed balanced tree whose forks are limited by the ceiling, concurrent
+  right-hand sides are claimed by at most that many lanes, and no kernel forks
+  or installs work on the pool outside these dispatchers and `ControlledStage`.
+- Team construction is bounded: contraction maps edges in fixed logical
+  chunks and fills and compacts its slot bank in counted segments, and team
+  canonicalization (contraction and `Laplacian::from_edges_with`) sorts with an
+  in-place introsort (three-way partitions, median-of-three pivots, heapsort
+  fallback) that counts every partition, insertion and heap step, polls in its
+  lanes and forks only within the worker ceiling, instead of Rayon's opaque
+  parallel sort. It allocates nothing, so allocations, admission and bounds
+  are those of the earlier in-place sort; graphs and hierarchies are
+  bit-identical.
+- Cancellable plan and PCG workspace preparation: `ParallelCmgPlan::build_with`
+  and `ParallelPcgSolver::try_plan_with` take a `BuildContext` (team, budget,
+  cancellation) and meter row-operator construction including its parallel
+  fill; `PcgBatchWorkspace::bank_allocation_bytes_with` and `new_bank_with`
+  share one metered layout and preparation with the existing entry points;
+  `CmgBatchWorkspace::allocation_bytes_controlled` is the metered layout that
+  `try_new_controlled` now uses.
+- `PreparedLaplacianTopology::assemble_with` assembles a numeric frame under
+  a `BuildContext` (budget, cancellation): weight validation, duplicate
+  gathering, the counted heapsort and compensated sum of each duplicate group
+  and the diagonal are polled; frames are bit-identical to
+  `assemble_with_workspace`, which shares the implementation.
+  `PreparedLaplacianTopology::prepare_with` prepares a topology the same way
+  (validation, counted heapsort of the unique indexed keys, grouping and
+  components polled); `prepare_with_budget` and `prepare` share it.
+- Concurrent PCG polls the sticky query after its lanes join and before
+  choosing errors, publishes solutions through the bounded meter and polls
+  once more before success, so a cancellation is never masked by an earlier
+  numerical error or lost during publication.
+- Profiled hierarchy and preconditioner builds reserve their phase-record and
+  profile banks fallibly under the build's meter and include them in budget
+  admission.
+
 ### Removed
 
 - The construction-work accounting interface: `BuildControl`, `BuildBoundary`,

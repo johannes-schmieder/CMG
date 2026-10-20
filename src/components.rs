@@ -1143,69 +1143,71 @@ fn center_single_component<M: Meter>(
         return Ok(());
     };
     let chunk_size = team.options().reduction_chunk_size;
-    let query = meter.query();
-    let sum = team.install(|| fixed_chunk_sum(values, chunk_size, query))?;
+    let sum = fixed_chunk_sum(values, chunk_size, team, meter.query());
     meter.joined("CMG fixed-chunk centering sums")?;
-    let mean = sum / size as f64;
+    let mean = sum? / size as f64;
     means[0] = mean;
-    let query = meter.query();
-    crate::preconditioner::rows_parallel(team, query, values, 1, |_, value| value[0] -= mean);
-    meter.joined("CMG fixed-chunk centering")
+    let rows = crate::preconditioner::rows_parallel(team, meter.query(), values, 1, |_, value| {
+        value[0] -= mean;
+    });
+    meter.joined("CMG fixed-chunk centering")?;
+    rows
 }
 
-/// Fixed-chunk compensated sum: chunk partials combined by a balanced join
-/// tree. Leaves check the query every 16 chunks and stop with a neutral sum
-/// once it is true; the joined caller then reports cancellation.
+/// Fixed-chunk compensated sum: chunk partials combined by the team's fixed
+/// balanced tree. Each leaf counts its chunk in segments through its lane's
+/// poll; a cancelled lane stops, and the joined caller reports cancellation.
+/// Otherwise the leftmost non-finite value is reported.
 #[cfg(feature = "parallel")]
 fn fixed_chunk_sum(
     values: &[f64],
     chunk_size: usize,
+    team: Team<'_>,
     query: Option<crate::Cancellation<'_>>,
 ) -> Result<f64, CmgError> {
     let chunk_count = values.len().div_ceil(chunk_size);
     if chunk_count == 0 {
         return Ok(0.0);
     }
-
-    fn reduce_range(
-        values: &[f64],
-        chunk_size: usize,
-        first_chunk: usize,
-        last_chunk: usize,
-        query: Option<crate::Cancellation<'_>>,
-    ) -> Result<f64, CmgError> {
-        if last_chunk - first_chunk == 1 {
-            if first_chunk % 16 == 0 && query.is_some_and(|cancel| cancel()) {
-                return Ok(0.0);
-            }
-            let start = first_chunk * chunk_size;
+    team.reduce(
+        chunk_count,
+        query,
+        |chunk, poll| {
+            let start = chunk * chunk_size;
             let end = values.len().min(start + chunk_size);
             let mut sum = 0.0;
             let mut correction = 0.0;
-            for (offset, &value) in values[start..end].iter().enumerate() {
-                if !value.is_finite() {
-                    return Err(CmgError::NonFiniteMatrixValue {
-                        row: start + offset,
-                        column: 0,
-                        value,
-                    });
-                }
-                neumaier_add(&mut sum, &mut correction, value);
-            }
-            return Ok(sum + correction);
-        }
-        let middle = first_chunk + (last_chunk - first_chunk) / 2;
-        let (left, right) = rayon::join(
-            || reduce_range(values, chunk_size, first_chunk, middle, query),
-            || reduce_range(values, chunk_size, middle, last_chunk, query),
-        );
-        let mut sum = left?;
-        let mut correction = 0.0;
-        neumaier_add(&mut sum, &mut correction, right?);
-        Ok(sum + correction)
-    }
-
-    reduce_range(values, chunk_size, 0, chunk_count, query)
+            chunked(
+                poll,
+                "CMG fixed-chunk centering sums",
+                end - start,
+                1,
+                |range| {
+                    for (offset, &value) in values[start + range.start..start + range.end]
+                        .iter()
+                        .enumerate()
+                    {
+                        if !value.is_finite() {
+                            return Err(CmgError::NonFiniteMatrixValue {
+                                row: start + range.start + offset,
+                                column: 0,
+                                value,
+                            });
+                        }
+                        neumaier_add(&mut sum, &mut correction, value);
+                    }
+                    Ok(())
+                },
+            )?;
+            Ok(sum + correction)
+        },
+        |left: Result<f64, CmgError>, right| {
+            let mut sum = left?;
+            let mut correction = 0.0;
+            neumaier_add(&mut sum, &mut correction, right?);
+            Ok(sum + correction)
+        },
+    )
 }
 
 fn neumaier_add(sum: &mut f64, correction: &mut f64, value: f64) {
@@ -1610,5 +1612,62 @@ mod controlled_component_tests {
             root_walk += usize::from(phase == "component root walk");
         }
         assert!(root_walk >= 8);
+    }
+}
+
+#[cfg(all(test, feature = "parallel"))]
+mod fixed_chunk_sum_tests {
+    use super::*;
+    use crate::{ParallelExecutor, ParallelOptions};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn huge_centering_leaf_polls_inside_and_keeps_leftmost_error() {
+        let len = 1 << 20;
+        let values: Vec<f64> = (0..len).map(|i| ((i * 11 % 103) as f64).cos()).collect();
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 4,
+            ..ParallelOptions::default()
+        })
+        .unwrap();
+        let team = executor.team();
+        let polls = AtomicUsize::new(0);
+        let count = || {
+            polls.fetch_add(1, Ordering::SeqCst);
+            false
+        };
+        let whole = fixed_chunk_sum(&values, len, team, Some(&count)).unwrap();
+        let (mut sum, mut correction) = (0.0, 0.0);
+        for &value in &values {
+            neumaier_add(&mut sum, &mut correction, value);
+        }
+        assert_eq!(whole.to_bits(), (sum + correction).to_bits());
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            len / crate::cancel::POLL_UNITS as usize
+        );
+        let reference = fixed_chunk_sum(&values, 4096, team, None)
+            .unwrap()
+            .to_bits();
+        for threads in [1, 2, 3] {
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                ..ParallelOptions::default()
+            })
+            .unwrap();
+            assert_eq!(
+                fixed_chunk_sum(&values, 4096, executor.team(), None)
+                    .unwrap()
+                    .to_bits(),
+                reference
+            );
+        }
+        let mut bad = values;
+        bad[70_000] = f64::NAN;
+        bad[900_000] = f64::INFINITY;
+        assert!(matches!(
+            fixed_chunk_sum(&bad, 4096, team, None),
+            Err(CmgError::NonFiniteMatrixValue { row: 70_000, .. })
+        ));
     }
 }

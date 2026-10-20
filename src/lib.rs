@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(all(test, feature = "parallel"))]
+mod bounded_team_tests;
 mod build;
 mod cancel;
 mod cmg_profile;
