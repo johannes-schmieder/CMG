@@ -737,8 +737,10 @@ impl CmgPreconditioner {
     /// query is polled at the fixed cadence and before every allocation, and a
     /// true query returns [`CmgError::Cancelled`] with no partial state. With a
     /// team, edge sets above the parallel setup threshold contract and sort on
-    /// the team's pool; forest grouping and factorization stay serial and no
-    /// pool is created. Hierarchy, factor, repeats and cycle bits never depend
+    /// the team's pool, and dense enough levels select their heavy forest edges
+    /// in row-owned lanes (within the admitted contraction slot bank); forest
+    /// splitting, labeling and factorization stay serial and no pool is
+    /// created. Hierarchy, factor, repeats and cycle bits never depend
     /// on the context.
     pub fn build_with(
         graph: &Laplacian,

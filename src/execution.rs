@@ -464,11 +464,62 @@ impl<'a> Team<'a> {
     ) -> Result<(), CmgError> {
         let chunk_len = chunk_len.max(1);
         let chunks = values.len().div_ceil(chunk_len);
+        self.claim(
+            chunks,
+            values.chunks_mut(chunk_len).enumerate(),
+            query,
+            |index, chunk, poll| kernel(index, chunk, poll),
+        )
+    }
+
+    /// [`Self::chunks_mut`] over two equally long slices split at the same
+    /// fixed chunk boundaries; each chunk receives both disjoint parts.
+    pub(crate) fn chunks_mut_pair<A: Send, B: Send>(
+        &self,
+        first: &mut [A],
+        second: &mut [B],
+        chunk_len: usize,
+        query: Option<crate::Cancellation<'_>>,
+        kernel: impl Fn(
+            usize,
+            &mut [A],
+            &mut [B],
+            &mut crate::cancel::LanePoll<'_>,
+        ) -> Result<(), CmgError>
+        + Sync,
+    ) -> Result<(), CmgError> {
+        if first.len() != second.len() {
+            return Err(CmgError::InvalidHierarchy {
+                context: "paired chunk slices differ in length",
+            });
+        }
+        let chunk_len = chunk_len.max(1);
+        let chunks = first.len().div_ceil(chunk_len);
+        self.claim(
+            chunks,
+            first
+                .chunks_mut(chunk_len)
+                .zip(second.chunks_mut(chunk_len))
+                .enumerate(),
+            query,
+            |index, (left, right), poll| kernel(index, left, right, poll),
+        )
+    }
+
+    /// The one claiming loop: at most `worker_ceiling` lanes take `chunks`
+    /// items in ascending order, each lane stopping at its first error.
+    fn claim<X: Send>(
+        &self,
+        chunks: usize,
+        items: impl Iterator<Item = (usize, X)> + Send,
+        query: Option<crate::Cancellation<'_>>,
+        kernel: impl Fn(usize, X, &mut crate::cancel::LanePoll<'_>) -> Result<(), CmgError> + Sync,
+    ) -> Result<(), CmgError> {
         if chunks == 0 {
             return Ok(());
         }
         let lanes = self.worker_ceiling().min(chunks);
-        let pending = std::sync::Mutex::new(values.chunks_mut(chunk_len).enumerate());
+        let pending = std::sync::Mutex::new(items);
         let failure: std::sync::Mutex<Option<(usize, CmgError)>> = std::sync::Mutex::new(None);
         let lane = || {
             #[cfg(test)]

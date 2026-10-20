@@ -1,6 +1,9 @@
 //! Heavy-edge forests and the CMG forest-partitioning heuristics.
 
+#[cfg(feature = "parallel")]
+use crate::cancel::chunked;
 use crate::cancel::{Meter, Unmetered};
+use crate::execution::Team;
 use crate::{CmgError, Laplacian};
 
 /// The complete diagnostic result of one CMG Steiner-group construction.
@@ -62,7 +65,7 @@ pub fn build_forest_grouping(
 ) -> Result<ForestGrouping, CmgError> {
     validate_low_effective_degree_threshold(low_effective_degree_threshold)?;
     let meter = &mut Unmetered;
-    let (heavy_parent, selected_weight) = heavy_forest(graph, meter)?;
+    let (heavy_parent, selected_weight) = heavy_forest(graph, None, meter)?;
     let split_parent = split_forest(&heavy_parent)?;
     let mut final_parent = split_parent.clone();
     low_effective_degree_correction(
@@ -91,11 +94,12 @@ pub fn build_forest_grouping(
 pub(crate) fn build_forest_aggregation_labels<M: Meter>(
     graph: &Laplacian,
     threshold: f64,
+    team: Option<Team<'_>>,
     meter: &mut M,
 ) -> Result<(Vec<usize>, usize), CmgError> {
     meter.work("forest threshold", 16)?;
     validate_low_effective_degree_threshold(threshold)?;
-    let (parent, weights) = heavy_forest(graph, meter)?;
+    let (parent, weights) = heavy_forest(graph, team, meter)?;
     let mut split = if parent.len() <= u32::MAX as usize {
         split_forest_with::<u32, M>(&parent, meter)?
     } else {
@@ -113,10 +117,29 @@ pub(crate) fn build_forest_aggregation_labels<M: Meter>(
 /// isolated vertex.
 #[must_use]
 pub fn maximum_weight_forest(graph: &Laplacian) -> (Vec<usize>, Vec<f64>) {
-    heavy_forest(graph, &mut Unmetered).expect("heavy forest allocation")
+    heavy_forest(graph, None, &mut Unmetered).expect("heavy forest allocation")
 }
 
+/// Each vertex's maximum-weight incident edge, ties to the lowest neighbor.
+/// The selection is a maximum over a total order, so the row-owned team path
+/// returns the serial edge scan's parents and weights exactly.
 fn heavy_forest<M: Meter>(
+    graph: &Laplacian,
+    #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
+    meter: &mut M,
+) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
+    #[cfg(feature = "parallel")]
+    if let Some(team) = team.filter(|team| team_forest_applies(graph, *team)) {
+        return if graph.edge_count() <= u32::MAX as usize {
+            heavy_forest_team::<u32, M>(graph, team, meter)
+        } else {
+            heavy_forest_team::<usize, M>(graph, team, meter)
+        };
+    }
+    heavy_forest_serial(graph, meter)
+}
+
+fn heavy_forest_serial<M: Meter>(
     graph: &Laplacian,
     meter: &mut M,
 ) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
@@ -133,6 +156,165 @@ fn heavy_forest<M: Meter>(
         consider_parent(edge.v(), edge.u(), edge.weight(), &mut parent, &mut weights);
     }
     Ok((parent, weights))
+}
+
+/// Incoming-edge index entries of the row-owned team selection.
+#[cfg(feature = "parallel")]
+trait IncomingEdge: crate::storage::StoredIndex + Default {
+    fn from_edge(index: usize) -> Self;
+}
+
+#[cfg(feature = "parallel")]
+impl IncomingEdge for u32 {
+    #[inline(always)]
+    fn from_edge(index: usize) -> Self {
+        index as u32
+    }
+}
+
+#[cfg(feature = "parallel")]
+impl IncomingEdge for usize {
+    #[inline(always)]
+    fn from_edge(index: usize) -> Self {
+        index
+    }
+}
+
+/// Bytes of the team selection's transient incoming-edge index.
+#[cfg(feature = "parallel")]
+fn incoming_index_bytes(vertices: usize, edges: usize) -> Option<usize> {
+    let entry = if edges <= u32::MAX as usize { 4 } else { 8 };
+    vertices
+        .checked_add(1)?
+        .checked_mul(core::mem::size_of::<usize>())?
+        .checked_add(edges.checked_mul(entry)?)
+}
+
+/// The team path runs only where it can use parallel lanes, on dense enough
+/// levels, and where its transient index fits within the contraction slot
+/// bank that a team build's admitted bound already reserves. That bank is not
+/// yet live during forest selection, so no admission or peak changes.
+#[cfg(feature = "parallel")]
+fn team_forest_applies(graph: &Laplacian, team: Team<'_>) -> bool {
+    let n = graph.vertex_count();
+    let m = graph.edge_count();
+    let directed = m.saturating_mul(2);
+    directed >= crate::execution::PARALLEL_SETUP_MIN_ITEMS
+        && directed > n.saturating_mul(3)
+        && team.should_parallel(directed)
+        && incoming_index_bytes(n, m).is_some_and(|bytes| {
+            m.checked_mul(core::mem::size_of::<Option<crate::Edge>>())
+                .is_some_and(|slots| bytes <= slots)
+        })
+}
+
+/// Row-owned heavy-edge selection on the team. A vertex's outgoing edges are
+/// contiguous in canonical (u, v) order; its incoming edges are gathered once
+/// into a counted transient index. Lanes own fixed vertex blocks and count
+/// every scanned entry, inside a hub row too.
+#[cfg(feature = "parallel")]
+fn heavy_forest_team<I: IncomingEdge, M: Meter>(
+    graph: &Laplacian,
+    team: Team<'_>,
+    meter: &mut M,
+) -> Result<(Vec<usize>, Vec<f64>), CmgError> {
+    const BLOCK: usize = 4096;
+    let n = graph.vertex_count();
+    let edges = graph.edges();
+    let mut starts = crate::cancel::try_filled(meter, n + 1, 0_usize, "forest incoming offsets")?;
+    chunked(meter, "forest incoming counts", edges.len(), 4, |range| {
+        for edge in &edges[range] {
+            starts[edge.v() + 1] += 1;
+        }
+        Ok(())
+    })?;
+    chunked(meter, "forest incoming offsets", n, 2, |range| {
+        for vertex in range {
+            starts[vertex + 1] += starts[vertex];
+        }
+        Ok(())
+    })?;
+    let mut incoming =
+        crate::cancel::try_filled(meter, edges.len(), I::default(), "forest incoming edges")?;
+    // Each vertex's start serves as its cursor and ends at the next start.
+    chunked(meter, "forest incoming edges", edges.len(), 4, |range| {
+        let first = range.start;
+        for (offset, edge) in edges[range].iter().enumerate() {
+            let cursor = &mut starts[edge.v()];
+            incoming[*cursor] = I::from_edge(first + offset);
+            *cursor += 1;
+        }
+        Ok(())
+    })?;
+    let mut vertex = n;
+    while vertex > 0 {
+        let low = vertex.saturating_sub(512);
+        for current in (low + 1..=vertex).rev() {
+            starts[current] = starts[current - 1];
+        }
+        meter.items("forest incoming offsets", 2 * (vertex - low))?;
+        vertex = low;
+    }
+    starts[0] = 0;
+
+    let mut parent = meter.try_capacity(n, "forest heavy parents")?;
+    crate::cancel::chunked(meter, "forest heavy parents", n, 1, |range| {
+        parent.extend(range);
+        Ok(())
+    })?;
+    let mut weights = meter.try_filled(n, 0.0, "forest selected weights")?;
+    let selected = team.chunks_mut_pair(
+        &mut parent,
+        &mut weights,
+        BLOCK,
+        meter.query(),
+        |block, parents, selected, poll| {
+            let first = block * BLOCK;
+            let mut out = edges.partition_point(|edge| edge.u() < first);
+            for (offset, (parent, weight)) in
+                parents.iter_mut().zip(selected.iter_mut()).enumerate()
+            {
+                let vertex = first + offset;
+                let out_end = out + edges[out..].partition_point(|edge| edge.u() <= vertex);
+                chunked(poll, "forest heavy edges", out_end - out, 4, |range| {
+                    for edge in &edges[out + range.start..out + range.end] {
+                        #[cfg(test)]
+                        crate::execution::visits::visit(graph.diagonal().as_ptr());
+                        consider(edge.v(), edge.weight(), parent, weight);
+                    }
+                    Ok(())
+                })?;
+                out = out_end;
+                let (start, end) = (starts[vertex], starts[vertex + 1]);
+                chunked(poll, "forest heavy edges", end - start, 4, |range| {
+                    for &index in &incoming[start + range.start..start + range.end] {
+                        let edge = &edges[index.index()];
+                        #[cfg(test)]
+                        crate::execution::visits::visit(graph.diagonal().as_ptr());
+                        consider(edge.u(), edge.weight(), parent, weight);
+                    }
+                    Ok(())
+                })?;
+                crate::cancel::Progress::advance(poll, "forest heavy edges", 1)?;
+            }
+            Ok(())
+        },
+    );
+    meter.joined("forest heavy edges")?;
+    selected?;
+    drop(incoming);
+    drop(starts);
+    Ok((parent, weights))
+}
+
+/// [`consider_parent`] for one owned row.
+#[cfg(feature = "parallel")]
+#[inline(always)]
+fn consider(neighbor: usize, weight: f64, parent: &mut usize, selected: &mut f64) {
+    if weight > *selected || (weight == *selected && neighbor < *parent) {
+        *selected = weight;
+        *parent = neighbor;
+    }
 }
 
 fn consider_parent(
@@ -513,7 +695,8 @@ mod tests {
             for threshold in [0.0, 0.125, 0.9, 1.0] {
                 let complete = build_forest_grouping(&graph, threshold).unwrap();
                 let (labels, count) =
-                    build_forest_aggregation_labels(&graph, threshold, &mut Unmetered).unwrap();
+                    build_forest_aggregation_labels(&graph, threshold, None, &mut Unmetered)
+                        .unwrap();
                 assert_eq!(labels, complete.labels());
                 assert_eq!(count, complete.aggregate_count());
                 let split = split_forest(complete.heavy_parent()).unwrap();
@@ -542,12 +725,14 @@ mod tests {
     }
 
     fn counting_run(graph: &Laplacian, threshold: f64) -> usize {
-        let expected = build_forest_aggregation_labels(graph, threshold, &mut Unmetered).unwrap();
+        let expected =
+            build_forest_aggregation_labels(graph, threshold, None, &mut Unmetered).unwrap();
         let count = StopAt::never();
         let query = || count.query();
         let actual = build_forest_aggregation_labels(
             graph,
             threshold,
+            None,
             &mut CancelMeter::every_operation(&query),
         )
         .unwrap();
@@ -588,11 +773,168 @@ mod tests {
             let error = build_forest_aggregation_labels(
                 &graph,
                 0.9,
+                None,
                 &mut CancelMeter::every_operation(&query),
             )
             .unwrap_err();
             assert_eq!(cancel.polls(), stop + 1);
             assert!(matches!(error, CmgError::Cancelled { .. }));
+        }
+    }
+}
+
+/// The row-owned team selection returns the serial scan's parents and weights
+/// bit for bit at every worker ceiling, including tied weights and a hub row;
+/// after a lane observes cancellation the entries it and its siblings scan are
+/// bounded by one poll interval plus one segment per lane; the hierarchy built
+/// on a team equals the one built without.
+#[cfg(all(test, feature = "parallel"))]
+mod team_forest_tests {
+    use super::*;
+    use crate::execution::{gauge, visits};
+    use crate::{CmgOptions, CmgPreconditioner, ParallelOptions};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn fixture(n: usize, hub: usize) -> Laplacian {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut edges: Vec<(usize, usize, f64)> =
+            (1..n).map(|v| (v - 1, v, [0.5, 1.0, 2.0][v % 3])).collect();
+        for _ in 0..4 * n {
+            let (u, v) = ((next() % n as u64) as usize, (next() % n as u64) as usize);
+            if u != v {
+                edges.push((u, v, [0.5, 1.0, 2.0, 1.0][(next() % 4) as usize]));
+            }
+        }
+        // A hub row: vertex 0 adjacent to `hub` vertices with tied weights.
+        edges.extend((1..=hub.min(n - 1)).map(|v| (0, v, 2.0)));
+        Laplacian::from_edges(n, edges).unwrap()
+    }
+
+    fn pool(threads: usize) -> rayon::ThreadPool {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn team_selection_matches_the_serial_scan_at_every_ceiling() {
+        let graph = fixture(20_000, 19_999);
+        let (parent, weights) = heavy_forest_serial(&graph, &mut Unmetered).unwrap();
+        let pool = pool(8);
+        for ceiling in 1..=8 {
+            let team = Team::new(&pool, ceiling, ParallelOptions::default()).unwrap();
+            let (team_parent, team_weights) =
+                heavy_forest_team::<u32, _>(&graph, team, &mut Unmetered).unwrap();
+            assert_eq!(team_parent, parent, "ceiling {ceiling}");
+            assert_eq!(
+                team_weights.iter().map(|w| w.to_bits()).collect::<Vec<_>>(),
+                weights.iter().map(|w| w.to_bits()).collect::<Vec<_>>()
+            );
+            let wide = heavy_forest_team::<usize, _>(&graph, team, &mut Unmetered).unwrap();
+            assert_eq!(wide.0, parent);
+        }
+        let team = Team::new(&pool, 4, ParallelOptions::default()).unwrap();
+        assert!(team_forest_applies(&graph, team));
+        let (selected, _) = heavy_forest(&graph, Some(team), &mut Unmetered).unwrap();
+        assert_eq!(selected, parent);
+    }
+
+    #[test]
+    fn hub_rows_stop_after_cancellation_and_lanes_join() {
+        let _witness = gauge::WITNESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let graph = fixture(200_000, 199_999);
+        let pool = pool(4);
+        let team = Team::new(&pool, 2, ParallelOptions::default()).unwrap();
+        let (parent, _) = heavy_forest_serial(&graph, &mut Unmetered).unwrap();
+        // Four units per scanned entry: one poll interval covers 16,384 entries.
+        let interval = crate::cancel::POLL_UNITS as usize / 4;
+        let entries = 2 * graph.edge_count();
+        for stop in [0, 1, 3] {
+            let calls = AtomicUsize::new(0);
+            let at = AtomicUsize::new(usize::MAX);
+            let query = || {
+                if calls.fetch_add(1, Ordering::SeqCst) < stop {
+                    return false;
+                }
+                let _ = at.compare_exchange(
+                    usize::MAX,
+                    visits::count(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+                true
+            };
+            visits::watch(graph.diagonal());
+            let result = heavy_forest_team::<u32, _>(
+                &graph,
+                team,
+                &mut crate::cancel::CancelMeter::new(&query),
+            );
+            let total = visits::count();
+            visits::unwatch();
+            assert!(
+                matches!(result, Err(CmgError::Cancelled { .. })),
+                "stop {stop}"
+            );
+            let settled = calls.load(Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert_eq!(calls.load(Ordering::SeqCst), settled, "every lane joined");
+            let at = at.load(Ordering::SeqCst);
+            if at != usize::MAX {
+                assert!(
+                    total - at <= team.worker_ceiling() * (interval + 256 + 4096),
+                    "{} entries scanned after the observation",
+                    total - at
+                );
+            }
+            assert!(total < entries / 2, "{total} of {entries} entries scanned");
+        }
+        visits::watch(graph.diagonal());
+        let (again, _) = heavy_forest_team::<u32, _>(&graph, team, &mut Unmetered).unwrap();
+        assert_eq!(visits::count(), entries);
+        visits::unwatch();
+        assert_eq!(again, parent);
+    }
+
+    #[test]
+    fn team_hierarchies_equal_serial_hierarchies() {
+        let graph = fixture(40_000, 30_000);
+        let options = CmgOptions {
+            direct_threshold: 64,
+            ..CmgOptions::default()
+        };
+        let serial = CmgPreconditioner::build(&graph, options).unwrap();
+        let pool = pool(4);
+        for ceiling in [2, 4] {
+            let team = Team::new(&pool, ceiling, ParallelOptions::default()).unwrap();
+            let teamed = CmgPreconditioner::build_with(
+                &graph,
+                options.into(),
+                crate::BuildContext {
+                    team: Some(team),
+                    budget_bytes: Some(
+                        CmgPreconditioner::construction_allocation_bound(
+                            graph.vertex_count(),
+                            graph.edge_count(),
+                            options.into(),
+                            true,
+                        )
+                        .unwrap(),
+                    ),
+                    ..crate::BuildContext::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(teamed, serial, "ceiling {ceiling}");
         }
     }
 }

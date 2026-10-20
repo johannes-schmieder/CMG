@@ -509,6 +509,7 @@ impl CmgHierarchy {
                     build_forest_aggregation_labels(
                         &current,
                         options.low_effective_degree_threshold,
+                        team,
                         meter,
                     )
                 },

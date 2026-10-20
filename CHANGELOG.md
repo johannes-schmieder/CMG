@@ -178,6 +178,14 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   value so a polled serial loop does not reload it after each segment. Counts,
   polls, tiles, operation order and every bit are unchanged.
 
+- Heavy-forest selection runs on the build's team (M3c). With a team, a level
+  with at least 65,536 directed entries and more than 1.5 edges per vertex
+  gathers each vertex's incoming edges into a counted transient index that
+  fits within the contraction slot bank the parallel bound already admits,
+  and lanes select each row's maximum (weight, then lowest neighbor) in fixed
+  vertex blocks, counting every scanned entry inside hub rows. Parents,
+  weights, hierarchies and every bit equal the serial scan's.
+
 ### Removed
 
 - The construction-work accounting interface: `BuildControl`, `BuildBoundary`,

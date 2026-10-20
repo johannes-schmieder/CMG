@@ -59,7 +59,8 @@ every context: graph canonicalization, the hierarchy loop (forest grouping,
 aggregation, stopping rules, contraction, optional isolate pruning),
 finalization (finest components, coarse centering plans, terminal factor and
 repeat adjustment). A team only selects the existing deterministic parallel
-kernels above their fixed thresholds (initial sorting and contraction); a
+kernels above their fixed thresholds (initial sorting, contraction and
+heavy-forest selection); a
 budget only admits `construction_allocation_bound` before the first allocation
 and makes every bank fallible; a cancellation query only replaces opaque
 traversals with fallible bounded ones and sorting with deterministic heapsort.
@@ -117,7 +118,15 @@ scratch.
 Team construction stages are bounded too: contraction maps edges in fixed
 logical chunks and fills and compacts its slot bank in counted segments, and
 team canonicalization sorts in place with a counted introsort whose lanes poll
-inside every partition and fork only within the worker ceiling. The
+inside every partition and fork only within the worker ceiling. Heavy-forest
+selection on a level with at least 65,536 directed entries and more than 1.5
+edges per vertex gathers incoming edges into a counted transient index (row
+starts plus one `u32` or `usize` per edge), used only when it is no larger
+than the contraction slot bank that the parallel bound already adds to the
+serial forest scratch; lanes own fixed 4,096-vertex blocks and count every
+scanned entry, so a hub row polls inside itself. The selection is a maximum
+under a total order (weight, then lowest neighbor), so parents and selected
+weights equal the serial edge scan's. The
 initial-graph constructor from a borrowed slice keeps its bounded insertion-run
 and merge stages and admitted spare bank.
 
