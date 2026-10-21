@@ -52,10 +52,12 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 - The canonical edge introsort takes Tukey's ninther (nine evenly spaced
   samples) as pivot for partitions of more than 40 records, keeping the
   median of first, middle and last records below. Pivot selection is now
-  counted (at most 192 units, within one 1,024-unit segment), so query
-  positions move only by that counted work. Structured orderings no longer
-  exhaust the depth limit; the heapsort fallback remains for adversarial
-  input. Order, duplicate reduction and every bit are unchanged.
+  conservatively charged at 48 or 192 units for at most three or twelve
+  comparisons, within one 1,024-unit segment. Sampling and the resulting
+  partition tree can change work counts and query positions; the cadence,
+  boundedness and worker-ceiling independence remain. The tested structured
+  orderings avoid the depth fallback; it remains for adversarial input.
+  Order, duplicate reduction and every successful scientific bit are unchanged.
 
 - Team-carrying solves and applications are bit-identical at every worker
   ceiling, one included, and in every `ParallelPcgSolver` execution mode. PCG
