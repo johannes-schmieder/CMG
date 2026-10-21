@@ -22,6 +22,40 @@ const FORK_MIN: usize = 1 << 14;
 #[cfg(feature = "parallel")]
 const PHASE: &str = "team edge sort";
 
+/// Test-only probe: the partition this thread is running, as (classified
+/// records, length), so a witness can fire cancellation at a poll inside
+/// actual partition work and see what that partition leaves untouched.
+#[cfg(all(test, feature = "parallel"))]
+mod probe {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static PARTITION: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    }
+
+    pub(super) struct Partitioning((usize, usize));
+
+    pub(super) fn enter(len: usize) -> Partitioning {
+        Partitioning(PARTITION.with(|state| state.replace((0, len))))
+    }
+
+    impl Drop for Partitioning {
+        fn drop(&mut self) {
+            PARTITION.with(|state| state.set(self.0));
+        }
+    }
+
+    pub(super) fn step() {
+        PARTITION.with(|state| state.set((state.get().0 + 1, state.get().1)));
+    }
+
+    /// Records the running partition has not classified yet, if any runs.
+    pub(super) fn remaining() -> Option<usize> {
+        let (classified, len) = PARTITION.with(Cell::get);
+        (len > 0).then(|| len - classified)
+    }
+}
+
 fn depth_limit(len: usize) -> usize {
     2 * (usize::BITS - len.leading_zeros()) as usize
 }
@@ -30,9 +64,10 @@ fn depth_limit(len: usize) -> usize {
 /// introsort with three-way partitions around a median-of-three pivot, a
 /// heapsort fallback at depth `2 log2(n)` and insertion sort below 17
 /// records. Every partition step, insertion step and heap step is counted on
-/// `meter`, which polls at its fixed cadence, inside a partition too. The
-/// comparator is total and equal records are identical, so the order equals
-/// every other sort's, independent of pivots. Nothing is allocated.
+/// `meter`: a partition advances it by 1,024 units every 64 steps, and the
+/// meter queries every 65,536 units (about 4,096 steps), inside a partition
+/// too. The comparator is total and equal records are identical, so the order
+/// equals every other sort's, independent of pivots. Nothing is allocated.
 pub(crate) fn sort_serial<M: Meter>(
     values: &mut [Edge],
     meter: &mut M,
@@ -73,9 +108,12 @@ fn serial_range<P: Progress>(
 /// lanes remain, so at most the worker ceiling of lanes run, and every started
 /// lane joins before the meter's final poll. Each logical node of the
 /// partition tree (a partition, an insertion leaf or a heapsort fallback)
-/// polls once on entry with its own lane counter and then at the fixed cadence.
-/// The tree depends only on the input, so the poll schedule is the same at
-/// every worker ceiling, and work between two polls of a lane stays bounded.
+/// queries once on entry with its own lane counter and then at the fixed
+/// cadence (every 65,536 counted units, about 4,096 partition steps). The tree
+/// depends only on the input, so a successful run's query total and each
+/// node's logical checkpoints are the same at every worker ceiling, and work
+/// between two queries of a lane stays bounded. The chronological order of
+/// queries across lanes, and where a cancellation stops, are not fixed.
 #[cfg(feature = "parallel")]
 pub(crate) fn sort<M: Meter>(
     values: &mut [Edge],
@@ -152,6 +190,8 @@ fn partition<P: Progress>(
     poll: &mut P,
     phase: &'static str,
 ) -> Result<(usize, usize), CmgError> {
+    #[cfg(all(test, feature = "parallel"))]
+    let _probe = probe::enter(values.len());
     let last = values.len() - 1;
     let middle = last / 2;
     let mut candidates = [values[0], values[middle], values[last]];
@@ -161,7 +201,10 @@ fn partition<P: Progress>(
     let mut steps = 0;
     while index < greater {
         #[cfg(all(test, feature = "parallel"))]
-        crate::execution::visits::visit_within(core::ptr::from_ref(&values[index]).cast());
+        {
+            crate::execution::visits::visit_within(core::ptr::from_ref(&values[index]).cast());
+            probe::step();
+        }
         match compare_raw_edges(&values[index], &pivot) {
             Ordering::Less => {
                 values.swap(less, index);
@@ -200,6 +243,15 @@ mod tests {
                 let u = (j % 997) as u32;
                 Edge::from_compact_parts(u, u + 1 + (j % 13) as u32, weights[i % weights.len()])
             })
+            .collect()
+    }
+
+    /// Endpoints and weight bits: `Edge`'s `PartialEq` equates +0 and -0,
+    /// so every order witness compares these instead.
+    fn bits(values: &[Edge]) -> Vec<(usize, usize, u64)> {
+        values
+            .iter()
+            .map(|edge| (edge.u(), edge.v(), edge.weight().to_bits()))
             .collect()
     }
 
@@ -242,6 +294,17 @@ mod tests {
             ("organ-pipe", organ),
             ("sawtooth", sawtooth),
             ("median-of-three-killer", killer),
+            // Duplicate endpoint groups whose weights differ only in the
+            // sign of zero, interleaved with equal duplicates.
+            (
+                "signed-zero-groups",
+                (0..count)
+                    .map(|i| {
+                        let u = ((i / 2) % 5) as u32;
+                        Edge::from_compact_parts(u, 7, [0.0, -0.0, -0.0, 0.0, 1.0][i % 5])
+                    })
+                    .collect(),
+            ),
         ]
     }
 
@@ -253,11 +316,11 @@ mod tests {
                 expected.sort_by(compare_raw_edges);
                 let mut actual = raw.clone();
                 sort_serial(&mut actual, &mut Unmetered, "sort").unwrap();
-                assert_eq!(actual, expected, "{name} {count}");
+                assert_eq!(bits(&actual), bits(&expected), "{name} {count}");
                 let never = || false;
                 let mut polled = raw;
                 sort_serial(&mut polled, &mut CancelMeter::new(&never), "sort").unwrap();
-                assert_eq!(polled, expected, "{name} {count} polled");
+                assert_eq!(bits(&polled), bits(&expected), "{name} {count} polled");
             }
         }
         // Signed zeros order by total_cmp inside one endpoint group.
@@ -267,6 +330,10 @@ mod tests {
         ];
         sort_serial(&mut zeros, &mut Unmetered, "sort").unwrap();
         assert_eq!(zeros[0].weight().to_bits(), (-0.0_f64).to_bits());
+        // The bitwise comparison discriminates what `PartialEq` cannot.
+        let swapped = [zeros[1], zeros[0]];
+        assert_eq!(swapped, *zeros);
+        assert_ne!(bits(&swapped), bits(&zeros));
     }
 
     #[cfg(feature = "parallel")]
@@ -283,7 +350,7 @@ mod tests {
                 let team = Team::new(&pool, threads, crate::ParallelOptions::default()).unwrap();
                 let mut actual = raw.clone();
                 sort(&mut actual, team, &mut Unmetered).unwrap();
-                assert_eq!(actual, expected, "{name} ceiling {threads}");
+                assert_eq!(bits(&actual), bits(&expected), "{name} ceiling {threads}");
             }
         }
     }
@@ -358,7 +425,141 @@ mod tests {
         }
         let mut again = raw;
         sort_serial(&mut again, &mut CancelMeter::new(&|| false), "sort").unwrap();
-        assert_eq!(again, expected);
+        assert_eq!(bits(&again), bits(&expected));
+    }
+
+    /// Cancellation after the fork, inside started concurrent lanes. A query
+    /// parks every lane at its first poll inside actual partition work past
+    /// the root partition (at the W4 ceiling, the four one-lane leaves after
+    /// the second fork) until all `ceiling` lanes have arrived on distinct
+    /// threads, then fires. Parking is a deterministic barrier with a bounded
+    /// timeout that fails the witness instead of hanging; success depends on
+    /// no sleep or schedule. Every lane stops at its observing poll: no record
+    /// is visited and no later node polls after the firing, all lanes have
+    /// joined on return, nothing moves afterwards, and fresh sorts are exact.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn started_lanes_cancel_inside_partitions_after_the_fork() {
+        use crate::execution::{gauge, visits};
+        use std::collections::BTreeSet;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Condvar, Mutex};
+        use std::time::{Duration, Instant};
+        #[derive(Default)]
+        struct Barrier {
+            threads: BTreeSet<String>,
+            fired: bool,
+            timed_out: bool,
+            visits_at_fire: usize,
+            active_at_fire: usize,
+            calls_at_fire: usize,
+            untouched: usize,
+        }
+        let _witness = gauge::WITNESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let raw = edges(400_000, 3);
+        let mut expected = raw.clone();
+        expected.sort_by(compare_raw_edges);
+        for ceiling in [4, 1] {
+            let label = format!("ceiling {ceiling}");
+            let barrier = Mutex::new(Barrier::default());
+            let arrived = Condvar::new();
+            let calls = AtomicUsize::new(0);
+            let query = || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                let mut state = barrier.lock().unwrap();
+                if state.fired {
+                    return true;
+                }
+                // Only polls in the middle of a partition (records left to
+                // classify) of a one-lane leaf, after the root partition
+                // (400,000 steps) has completed.
+                let remaining = probe::remaining().unwrap_or(0);
+                if !(gauge::inside() && remaining > 0 && visits::count() >= raw.len()) {
+                    return false;
+                }
+                state.untouched += remaining;
+                state
+                    .threads
+                    .insert(format!("{:?}", std::thread::current().id()));
+                if state.threads.len() == ceiling {
+                    state.fired = true;
+                    state.visits_at_fire = visits::count();
+                    state.active_at_fire = gauge::active();
+                    state.calls_at_fire = call + 1;
+                    arrived.notify_all();
+                    return true;
+                }
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !state.fired {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        // Escape: stop every lane and fail after the join.
+                        state.timed_out = true;
+                        state.fired = true;
+                        arrived.notify_all();
+                        break;
+                    }
+                    state = arrived.wait_timeout(state, deadline - now).unwrap().0;
+                }
+                true
+            };
+            gauge::watch(&pool);
+            let mut values = raw.clone();
+            visits::watch_range(&values);
+            let team = Team::new(&pool, ceiling, crate::ParallelOptions::default()).unwrap();
+            let result = sort(&mut values, team, &mut CancelMeter::new(&query));
+            let (total, returned_calls, active) = (
+                visits::count(),
+                calls.load(Ordering::SeqCst),
+                gauge::active(),
+            );
+            // Nothing runs after the return (a sleep cannot make this pass
+            // falsely for a correct join; it only gives a stray lane time).
+            std::thread::sleep(Duration::from_millis(20));
+            let (later_total, later_calls) = (visits::count(), calls.load(Ordering::SeqCst));
+            visits::unwatch();
+            let state = barrier.into_inner().unwrap();
+            assert!(!state.timed_out, "{label}: lanes never all arrived");
+            assert!(
+                matches!(result, Err(CmgError::Cancelled { phase: PHASE })),
+                "{label}: {result:?}"
+            );
+            // Distinct threads were parked inside partitions at once.
+            assert_eq!(state.threads.len(), ceiling, "{label}");
+            assert_eq!(state.active_at_fire, ceiling, "{label}: concurrent lanes");
+            assert_eq!(gauge::max(), ceiling, "{label}: lane ceiling");
+            // No partition step after the observation: each lane stopped at
+            // its observing poll, so later work stayed untouched.
+            assert_eq!(total, state.visits_at_fire, "{label}: steps after firing");
+            assert!(state.untouched >= ceiling, "{label}: parked mid-partition");
+            assert!(total < 3 * raw.len(), "{label}: {total} steps");
+            // The only query after the firing is the coordinator's final
+            // poll after the join: no lane reached another node.
+            assert_eq!(
+                returned_calls,
+                state.calls_at_fire + 1,
+                "{label}: polls after firing"
+            );
+            assert_eq!(active, 0, "{label}: every lane joined");
+            assert_eq!(
+                (later_total, later_calls),
+                (total, returned_calls),
+                "{label}"
+            );
+            // Fresh exact sorts on the same team and serially.
+            let mut again = raw.clone();
+            sort(&mut again, team, &mut CancelMeter::new(&|| false)).unwrap();
+            assert_eq!(bits(&again), bits(&expected), "{label}: fresh team sort");
+            let mut serial = raw.clone();
+            sort_serial(&mut serial, &mut Unmetered, "sort").unwrap();
+            assert_eq!(bits(&serial), bits(&expected), "{label}: fresh serial sort");
+        }
     }
 
     /// Work between two consecutive polls stays bounded on every path: at
@@ -441,7 +642,7 @@ mod tests {
             };
             let mut values = raw.clone();
             sort(&mut values, team, &mut CancelMeter::new(&count)).unwrap();
-            assert_eq!(values, sorted, "ceiling {threads}");
+            assert_eq!(bits(&values), bits(&sorted), "ceiling {threads}");
             assert_eq!(
                 polls.load(std::sync::atomic::Ordering::SeqCst),
                 total,
@@ -459,6 +660,6 @@ mod tests {
         }
         let mut again = raw;
         sort(&mut again, team, &mut Unmetered).unwrap();
-        assert_eq!(again, sorted);
+        assert_eq!(bits(&again), bits(&sorted));
     }
 }

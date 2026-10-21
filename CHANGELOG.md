@@ -38,10 +38,16 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   introsort (`graph/edge_sort.rs`) on every path. Serial initial graphs and
   contraction no longer use the counted heapsort, and the hosted initial
   graph no longer runs insertion-run and merge passes through a spare bank.
-  On a team every logical partition node polls on entry with its own lane
-  counter, so the poll schedule is identical at every worker ceiling.
-  Order, duplicate reduction, hierarchies, factors, repeats and every bit
-  are unchanged. The public construction bound still reserves the spare bank.
+  Partitions advance the meter by 1,024 units every 64 steps, so a query
+  falls about every 4,096 steps (65,536 units). On a team every logical
+  partition node also queries on entry with its own lane counter, so a
+  successful run's query total and per-node checkpoints are identical at
+  every worker ceiling; the chronological order of queries and where a
+  cancellation stops are not. Order, duplicate reduction, hierarchies,
+  factors, repeats and every bit are unchanged. Only the spare sort bank is
+  gone; the unchanged public construction bound still counts two edge banks,
+  the second covering the transient compaction copy after duplicate
+  reduction.
 
 - Team-carrying solves and applications are bit-identical at every worker
   ceiling, one included, and in every `ParallelPcgSolver` execution mode. PCG

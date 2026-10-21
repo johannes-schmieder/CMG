@@ -3,7 +3,7 @@
 //! concurrency on a pool larger than the ceiling.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::execution::gauge;
 use crate::{
@@ -101,6 +101,60 @@ fn sweep<T>(
     (ordered, phases)
 }
 
+/// Cancel `operation` at the first meter poll of `phase` (immediately after
+/// a meter poll of `after`, when given): the caller's sticky query turns true
+/// when the test-only probe around the production query (`cancel::probe`)
+/// names `phase` and stays true. Unlike a query ordinal, this reaches the
+/// phase whatever the lanes' chunk claiming. `after` tells checkpoints apart
+/// that share a phase name (the parallel CSR finish directly follows the
+/// parallel fill's join poll; the serial one never does). The production query
+/// decides and the meter reports it, so the run must fail with exactly
+/// `phase`, publish nothing, and never poll `publication` afterwards.
+fn latch<T>(
+    phase: &'static str,
+    after: Option<&str>,
+    publication: Option<&str>,
+    operation: impl Fn(crate::Cancellation<'_>) -> Result<T, CmgError>,
+) {
+    let latched = AtomicBool::new(false);
+    let published = AtomicBool::new(false);
+    // Meter polls are the coordinator's and run in sequence; lane polls
+    // carry no probe phase and are ignored here.
+    let previous = std::sync::Mutex::new(None::<&'static str>);
+    let query = || {
+        let current = crate::cancel::probe::phase();
+        if latched.load(Ordering::SeqCst) {
+            if current.is_some() && current == publication {
+                published.store(true, Ordering::SeqCst);
+            }
+            return true;
+        }
+        let Some(current) = current else {
+            return false;
+        };
+        let before = previous.lock().unwrap().replace(current);
+        if current == phase && (after.is_none() || before == after) {
+            latched.store(true, Ordering::SeqCst);
+            return true;
+        }
+        false
+    };
+    let result = operation(&query);
+    assert!(
+        latched.load(Ordering::SeqCst),
+        "{phase} (after {after:?}) was never polled"
+    );
+    match result {
+        Err(CmgError::Cancelled { phase: reported }) => assert_eq!(reported, phase),
+        Ok(_) => panic!("{phase}: published after cancellation"),
+        Err(error) => panic!("{phase}: {error}"),
+    }
+    assert!(
+        !published.load(Ordering::SeqCst),
+        "{phase}: publication polled after cancellation"
+    );
+}
+
 /// Cancel at every query between the samples bracketing `phase`'s first and
 /// last sampled occurrence, collecting the phases met there.
 fn around<T>(
@@ -140,7 +194,19 @@ fn team_construction_cancels_inside_mapping_compaction_and_sort() {
             },
         )
     });
-    assert!(phases.contains("team edge sort"), "{phases:?}");
+    assert!(!phases.is_empty());
+    let initial = |cancel: crate::Cancellation<'_>| {
+        Laplacian::from_edges_with(
+            30_000,
+            edges.iter().copied(),
+            BuildContext {
+                team: Some(team),
+                cancel: Some(cancel),
+                ..BuildContext::default()
+            },
+        )
+    };
+    latch("team edge sort", None, None, initial);
     let never = || false;
     let graph = Laplacian::from_edges_with(
         30_000,
@@ -170,13 +236,19 @@ fn team_construction_cancels_inside_mapping_compaction_and_sort() {
     };
     let (ordered, mut phases) = sweep(400, build);
     phases.extend(around(&ordered, "parallel contracted edge mapping", build));
+    // The mapping stage polls the raw query on its lanes (no meter phase),
+    // so it stays covered by the bracketing sweep; the coordinator's phases
+    // are latched exactly.
+    assert!(
+        phases.contains("parallel contracted edge mapping"),
+        "{phases:?}"
+    );
     for phase in [
         "parallel contracted edge slots",
-        "parallel contracted edge mapping",
         "parallel contracted edge compaction",
         "team edge sort",
     ] {
-        assert!(phases.contains(phase), "{phase} not in {phases:?}");
+        latch(phase, None, None, build);
     }
     let hosted = CmgHierarchy::build_with(
         &graph,
@@ -208,7 +280,7 @@ fn plan_and_workspace_preparation_cancel_at_every_stage_and_rebuild_exactly() {
     .unwrap();
     let reference_plan = ParallelCmgPlan::build(&preconditioner, team).unwrap();
     assert!(reference_plan.operator_count() > 0);
-    let (_, phases) = sweep(300, |cancel| {
+    let plan_with = |cancel: crate::Cancellation<'_>| {
         ParallelCmgPlan::build_with(
             &preconditioner,
             BuildContext {
@@ -217,17 +289,29 @@ fn plan_and_workspace_preparation_cancel_at_every_stage_and_rebuild_exactly() {
                 budget_bytes: Some(usize::MAX),
             },
         )
-    });
-    for phase in [
-        "plan operators",
-        "CSR row counts",
-        "CSR row offsets",
-        "CSR incoming scatter",
-        "parallel CSR fill",
-        "CSR construction finish",
+    };
+    // Every required caller phase, the single CSR finish checkpoint
+    // included, cancels exactly there: latched by phase, not by a sampled
+    // query ordinal (lanes claim CSR fill blocks dynamically and keep
+    // per-lane counters, so ordinals move between runs).
+    for (phase, after) in [
+        ("plan operators", None),
+        ("CSR row counts", None),
+        ("CSR row offsets", None),
+        ("CSR incoming scatter", None),
+        ("parallel CSR fill", None),
+        ("CSR construction finish", Some("parallel CSR fill")),
     ] {
-        assert!(phases.contains(phase), "{phase} not in {phases:?}");
+        latch(phase, after, Some("plan publication"), plan_with);
     }
+    // Supplementary coverage: sampled ordinals land in plan preparation.
+    let (_, phases) = sweep(300, plan_with);
+    assert!(
+        phases.iter().all(|phase| phase.starts_with("CSR")
+            || phase.starts_with("parallel CSR")
+            || phase.starts_with("plan")),
+        "{phases:?}"
+    );
     // Without eligible levels the plan's polls are deterministic; the last
     // one precedes publication.
     let path = Laplacian::from_edges(2_000, (1..2_000).map(|v| (v - 1, v, 1.0))).unwrap();

@@ -800,6 +800,16 @@ pub(crate) mod gauge {
     pub(crate) fn max() -> usize {
         state().max
     }
+
+    /// Lanes of the watched pool running now.
+    pub(crate) fn active() -> usize {
+        state().active
+    }
+
+    /// Whether this thread is inside a one-lane leaf of the watched pool.
+    pub(crate) fn inside() -> bool {
+        DEPTH.with(|depth| depth.get() > 0)
+    }
 }
 
 /// Test-only traversal counter: entries visited in one watched slice, so a

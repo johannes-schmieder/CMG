@@ -163,8 +163,9 @@ impl Laplacian {
     /// Requested layouts admitted by [`Self::build`] and
     /// [`Self::from_edges_with`]: two compact edge banks, the diagonal and three
     /// Arc owners, including modeled control blocks. Borrowed input and
-    /// allocator overhead are excluded. Every path now sorts in place, so the
-    /// second bank is a conservative reserve that no path allocates.
+    /// allocator overhead are excluded. Sorting is in place on every path; the
+    /// second bank covers the transient compaction copy that
+    /// `from_sorted_edges` allocates while the merged bank is still live.
     pub fn construction_allocation_bound(vertices: usize, edges: usize) -> Result<usize, CmgError> {
         use crate::storage::{add, arc_bytes, bytes};
         let edge_bytes = bytes::<Edge>(edges)?;

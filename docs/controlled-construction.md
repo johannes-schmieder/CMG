@@ -139,20 +139,28 @@ scanned entry, so a hub row polls inside itself. The selection is a maximum
 under a total order (weight, then lowest neighbor), so parents and selected
 weights equal the serial edge scan's. The
 initial-graph constructor from a borrowed slice maps edges in fixed logical
-chunks and then sorts them in place with the same team introsort. Its admitted
-bound still reserves a spare edge bank that no path allocates any more.
+chunks and then sorts them in place with the same team introsort, which needs
+no spare sort bank. Its admitted bound is unchanged and still counts two edge
+banks: the second covers the transient compaction copy that duplicate
+reduction (`from_sorted_edges`) allocates while the merged bank is live.
 
 Every canonical edge sort (initial graph, contraction, owned compact edges) is
 the one introsort in `graph/edge_sort.rs`: three-way partitions around a
 median-of-three pivot, insertion below 17 records and a heapsort fallback at
-depth `2 log2(n)`, counting 16 units per partition step and polling every 64
-steps. Serially it counts on the caller's meter. On a team, partitions of at
-least 16,384 records fork within the ceiling, and every logical node of the
-partition tree polls on entry with its own lane counter. The tree depends
-only on the input, so the poll schedule is identical at every ceiling, and
-work between two polls of a lane stays bounded deep in the tree. The total
-comparator (endpoint key, then `total_cmp` weight) makes the result equal to
-any other sort's.
+depth `2 log2(n)`. A partition advances its meter by 1,024 units (16 per
+step) after every 64 steps; the meter queries cancellation once 65,536 units
+have accumulated, so inside a partition a query falls about every 4,096 steps,
+plus at most one bounded segment of slack. Serially it counts on the caller's
+meter. On a team, partitions of at least 16,384 records fork within the
+ceiling, every logical node of the partition tree (partition, insertion leaf
+or heapsort fallback) additionally queries on entry with its own lane
+counter, and the coordinator queries once more after the join. The tree
+depends only on the input, so a successful run's total query count and each
+node's logical checkpoints are identical at every ceiling, and work between
+two queries of a lane stays bounded deep in the tree. The chronological order
+of queries across lanes, and therefore where a cancellation stops, may differ
+between runs and ceilings. The total comparator (endpoint key, then
+`total_cmp` weight) makes the result equal to any other sort's.
 
 ## Cancellation contract
 

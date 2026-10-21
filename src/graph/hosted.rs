@@ -14,8 +14,9 @@ const CHUNK: usize = 8;
 /// The mapping chunks are identical at every worker ceiling, including one;
 /// the total comparator makes the sorted order independent of the ceiling.
 /// Successful graph bits match the serial construction. The borrowed input and
-/// team runtime are outside the caller's admitted bound, which still reserves
-/// a spare edge bank that the in-place sort no longer allocates. Mapping
+/// team runtime are outside the caller's admitted bound. The in-place sort
+/// allocates nothing; the bound's second edge bank covers the transient
+/// compaction copy after duplicate reduction. Mapping
 /// workers poll the meter's query before every logical chunk and after each
 /// join; sorting lanes poll inside every partition; the coordinator's meter
 /// polls between its bounded serial operations. Cancellation dominates worker

@@ -51,6 +51,8 @@ impl<'a> CancelMeter<'a> {
     #[inline]
     fn poll(&mut self, phase: &'static str) -> Result<(), CmgError> {
         self.pending = 0;
+        #[cfg(test)]
+        let _probe = probe::enter(phase);
         if (self.cancel)() {
             Err(Self::cancelled(phase))
         } else {
@@ -109,6 +111,38 @@ impl<'a> CancelMeter<'a> {
         phase: &'static str,
     ) -> Result<(), CmgError> {
         heapsort(self, values, compare, phase)
+    }
+}
+
+/// Test-only probe: the phase of the [`CancelMeter`] poll whose query runs on
+/// this thread, so a witness can latch the caller's sticky query on a named
+/// phase instead of a schedule-dependent query ordinal. Lane polls
+/// ([`LanePoll`]) leave it unset. Allocation-free; restored on return and
+/// unwind. It only observes: the production query still decides.
+#[cfg(test)]
+pub(crate) mod probe {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static PHASE: Cell<Option<&'static str>> = const { Cell::new(None) };
+    }
+
+    pub(super) struct Polling(Option<&'static str>);
+
+    pub(super) fn enter(phase: &'static str) -> Polling {
+        Polling(PHASE.with(|current| current.replace(Some(phase))))
+    }
+
+    impl Drop for Polling {
+        fn drop(&mut self) {
+            PHASE.with(|current| current.set(self.0));
+        }
+    }
+
+    /// The phase of the meter poll querying on this thread, if any.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn phase() -> Option<&'static str> {
+        PHASE.with(Cell::get)
     }
 }
 
