@@ -565,11 +565,14 @@ mod tests {
     /// Work between two consecutive polls stays bounded on every path: at
     /// most one cadence (4,096 partition steps) plus one 64-step segment per
     /// lane, also across the many small nodes deep in the partition tree.
+    /// Each query reads the step counter and records the gap under one lock,
+    /// so consecutive reads are ordered: a lane preempted between reading and
+    /// recording cannot store a stale reading that inflates the next gap.
     #[cfg(feature = "parallel")]
     #[test]
     fn work_between_polls_is_bounded_deep_in_the_partition_tree() {
         use crate::execution::{gauge, visits};
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Mutex;
         let _witness = gauge::WITNESS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -580,12 +583,13 @@ mod tests {
         let raw = edges(1 << 20, 1);
         let interval = crate::cancel::POLL_UNITS as usize / 16;
         for ceiling in [0, 1, 4] {
-            let last = AtomicUsize::new(0);
-            let widest = AtomicUsize::new(0);
+            // (last reading, widest gap)
+            let state = Mutex::new((0_usize, 0_usize));
             let query = || {
+                let mut state = state.lock().unwrap();
                 let now = visits::count();
-                let previous = last.swap(now, Ordering::SeqCst);
-                widest.fetch_max(now.saturating_sub(previous), Ordering::SeqCst);
+                state.1 = state.1.max(now - state.0);
+                state.0 = now;
                 false
             };
             let mut values = raw.clone();
@@ -598,9 +602,8 @@ mod tests {
             }
             let total = visits::count();
             visits::unwatch();
-            let gap = widest
-                .load(Ordering::SeqCst)
-                .max(total - last.load(Ordering::SeqCst));
+            let (last, widest) = state.into_inner().unwrap();
+            let gap = widest.max(total - last);
             assert!(
                 gap <= ceiling.max(1) * (interval + 64),
                 "ceiling {ceiling}: {gap} partition steps between polls"
