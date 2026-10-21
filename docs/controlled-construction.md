@@ -145,12 +145,23 @@ banks: the second covers the transient compaction copy that duplicate
 reduction (`from_sorted_edges`) allocates while the merged bank is live.
 
 Every canonical edge sort (initial graph, contraction, owned compact edges) is
-the one introsort in `graph/edge_sort.rs`: three-way partitions around a
-median-of-three pivot, insertion below 17 records and a heapsort fallback at
-depth `2 log2(n)`. A partition advances its meter by 1,024 units (16 per
-step) after every 64 steps; the meter queries cancellation once 65,536 units
-have accumulated, so inside a partition a query falls about every 4,096 steps,
-plus at most one bounded segment of slack. Serially it counts on the caller's
+the one introsort in `graph/edge_sort.rs`: three-way partitions, insertion
+below 17 records and a heapsort fallback at depth `2 log2(n)`. Partitions of
+more than 40 records take Tukey's ninther as pivot (Bentley and McIlroy): with
+`s = len / 8`, `last = len - 1` and `m = last / 2`, the median of the medians
+of positions (0, s, 2s), (m - s, m, m + s) and (last - 2s, last - s, last).
+Smaller partitions take the median of the first, middle and last records.
+Pivot selection is counted after it runs, 16 units per comparison (192 for a
+ninther, 48 for a median of three). A partition then advances its meter by
+1,024 units (16 per step) after every 64 steps; the meter queries
+cancellation once 65,536 units have accumulated, so inside a partition a
+query falls about every 4,096 steps. Work between two queries is at most
+65,535 + 1,024 counted units plus one uncounted bounded segment: 64
+partition steps, one pivot selection (12 comparisons and nine record copies),
+one insertion record or one heap step. The ninther avoids the depth fallback
+on sorted, reversed, organ-pipe and block-structured orderings that defeat
+first/middle/last sampling after three-way partitioning; an adaptive
+adversary still reaches the fallback. Serially it counts on the caller's
 meter. On a team, partitions of at least 16,384 records fork within the
 ceiling, every logical node of the partition tree (partition, insertion leaf
 or heapsort fallback) additionally queries on entry with its own lane

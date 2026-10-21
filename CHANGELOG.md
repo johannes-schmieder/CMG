@@ -49,6 +49,14 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   the second covering the transient compaction copy after duplicate
   reduction.
 
+- The canonical edge introsort takes Tukey's ninther (nine evenly spaced
+  samples) as pivot for partitions of more than 40 records, keeping the
+  median of first, middle and last records below. Pivot selection is now
+  counted (at most 192 units, within one 1,024-unit segment), so query
+  positions move only by that counted work. Structured orderings no longer
+  exhaust the depth limit; the heapsort fallback remains for adversarial
+  input. Order, duplicate reduction and every bit are unchanged.
+
 - Team-carrying solves and applications are bit-identical at every worker
   ceiling, one included, and in every `ParallelPcgSolver` execution mode. PCG
   dot products, norm sums and single-component centering (finest PCG level and

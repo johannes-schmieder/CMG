@@ -16,6 +16,14 @@ use core::cmp::Ordering;
 
 /// Ranges at most this long are insertion-sorted.
 const SMALL: usize = 16;
+/// Partitions longer than this take Tukey's ninther as pivot (Bentley and
+/// McIlroy, "Engineering a Sort Function", 1993); shorter ones take the
+/// median of their first, middle and last records.
+const NINTHER_MIN: usize = 41;
+/// Counted units of pivot selection: 16 per comparison (as a partition
+/// step), at most 3 comparisons for a median of three and 12 for a ninther.
+const MEDIAN_UNITS: usize = 3 * 16;
+const NINTHER_UNITS: usize = 4 * MEDIAN_UNITS;
 /// Partitions shorter than this are not forked.
 #[cfg(feature = "parallel")]
 const FORK_MIN: usize = 1 << 14;
@@ -56,15 +64,37 @@ mod probe {
     }
 }
 
+/// Test-only count of depth-limit heapsort fallbacks and their records on
+/// this thread (serial sorts), for operation-count regression witnesses.
+#[cfg(test)]
+mod fallbacks {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static FALLBACKS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    }
+
+    pub(super) fn record(len: usize) {
+        FALLBACKS.with(|state| state.set((state.get().0 + 1, state.get().1 + len)));
+    }
+
+    /// (fallbacks, records) since the last call, then reset.
+    pub(super) fn take() -> (usize, usize) {
+        FALLBACKS.with(|state| state.replace((0, 0)))
+    }
+}
+
 fn depth_limit(len: usize) -> usize {
     2 * (usize::BITS - len.leading_zeros()) as usize
 }
 
 /// Sort `values` by the total raw-edge order in place on the calling lane: an
-/// introsort with three-way partitions around a median-of-three pivot, a
-/// heapsort fallback at depth `2 log2(n)` and insertion sort below 17
-/// records. Every partition step, insertion step and heap step is counted on
-/// `meter`: a partition advances it by 1,024 units every 64 steps, and the
+/// introsort with three-way partitions around a ninther pivot above 40
+/// records and a median-of-three pivot below (see [`pivot`]), a heapsort
+/// fallback at depth `2 log2(n)` and insertion sort below 17 records. Every
+/// pivot selection, partition step, insertion step and heap step is counted on
+/// `meter`: pivot selection after it runs (at most 192 units), a partition
+/// every 64 steps (1,024 units), and the
 /// meter queries every 65,536 units (about 4,096 steps), inside a partition
 /// too. The comparator is total and equal records are identical, so the order
 /// equals every other sort's, independent of pivots. Nothing is allocated.
@@ -73,32 +103,44 @@ pub(crate) fn sort_serial<M: Meter>(
     meter: &mut M,
     phase: &'static str,
 ) -> Result<(), CmgError> {
-    serial_range(values, depth_limit(values.len()), meter, phase)
+    serial_range(
+        values,
+        depth_limit(values.len()),
+        meter,
+        phase,
+        compare_raw_edges,
+    )
 }
 
-fn serial_range<P: Progress>(
+/// The serial introsort over any total order on edges. Production passes the
+/// canonical comparator; tests also drive the identical algorithm with an
+/// adaptive adversary to construct inputs that defeat its pivot rule.
+fn serial_range<P: Progress, C: Fn(&Edge, &Edge) -> Ordering + Copy>(
     mut values: &mut [Edge],
     mut depth: usize,
     poll: &mut P,
     phase: &'static str,
+    compare: C,
 ) -> Result<(), CmgError> {
     loop {
         if values.len() <= SMALL {
-            return insertion(values, poll, phase);
+            return insertion(values, poll, phase, compare);
         }
         if depth == 0 {
-            return heapsort(poll, values, compare_raw_edges, phase);
+            #[cfg(test)]
+            fallbacks::record(values.len());
+            return heapsort(poll, values, compare, phase);
         }
         depth -= 1;
-        let (less, greater) = partition(values, poll, phase)?;
+        let (less, greater) = partition(values, poll, phase, compare)?;
         let (left, rest) = values.split_at_mut(less);
         let right = &mut rest[greater - less..];
         // Recurse into the shorter side and continue with the longer one.
         if left.len() < right.len() {
-            serial_range(left, depth, poll, phase)?;
+            serial_range(left, depth, poll, phase, compare)?;
             values = right;
         } else {
-            serial_range(right, depth, poll, phase)?;
+            serial_range(right, depth, poll, phase, compare)?;
             values = left;
         }
     }
@@ -138,13 +180,13 @@ fn team_range(
         let mut node = LanePoll::new(query);
         node.advance(PHASE, crate::cancel::POLL_UNITS as usize)?;
         if values.len() <= SMALL {
-            return insertion(values, &mut node, PHASE);
+            return insertion(values, &mut node, PHASE, compare_raw_edges);
         }
         if depth == 0 {
             return heapsort(&mut node, values, compare_raw_edges, PHASE);
         }
         depth -= 1;
-        let (less, greater) = partition(values, &mut node, PHASE)?;
+        let (less, greater) = partition(values, &mut node, PHASE, compare_raw_edges)?;
         let total = values.len();
         let (left, rest) = values.split_at_mut(less);
         let right = &mut rest[greater - less..];
@@ -166,14 +208,15 @@ fn team_range(
     }
 }
 
-fn insertion<P: Progress>(
+fn insertion<P: Progress, C: Fn(&Edge, &Edge) -> Ordering>(
     values: &mut [Edge],
     poll: &mut P,
     phase: &'static str,
+    compare: C,
 ) -> Result<(), CmgError> {
     for index in 1..values.len() {
         let mut current = index;
-        while current > 0 && compare_raw_edges(&values[current], &values[current - 1]).is_lt() {
+        while current > 0 && compare(&values[current], &values[current - 1]).is_lt() {
             values.swap(current, current - 1);
             current -= 1;
         }
@@ -182,21 +225,64 @@ fn insertion<P: Progress>(
     Ok(())
 }
 
-/// Dijkstra three-way partition around the median of the first, middle and
-/// last records. Returns `(less, greater)`: `values[..less] < pivot`,
+/// The median of three records under a total order, in at most three
+/// comparisons. Equal records are identical, so the value is unique.
+fn median_of_three(a: Edge, b: Edge, c: Edge, compare: impl Fn(&Edge, &Edge) -> Ordering) -> Edge {
+    if compare(&a, &b).is_lt() {
+        if compare(&b, &c).is_lt() {
+            b
+        } else if compare(&a, &c).is_lt() {
+            c
+        } else {
+            a
+        }
+    } else if compare(&a, &c).is_lt() {
+        a
+    } else if compare(&b, &c).is_lt() {
+        c
+    } else {
+        b
+    }
+}
+
+/// The pivot of a partition of at least 17 records and its counted units.
+/// Up to 40 records: the median of the first, middle and last records. Above:
+/// Tukey's ninther, the median of the medians of three evenly spaced triples
+/// around the first, middle and last records, with spacing `len / 8`.
+fn pivot(values: &[Edge], compare: impl Fn(&Edge, &Edge) -> Ordering + Copy) -> (Edge, usize) {
+    let last = values.len() - 1;
+    let middle = last / 2;
+    if values.len() < NINTHER_MIN {
+        let pivot = median_of_three(values[0], values[middle], values[last], compare);
+        return (pivot, MEDIAN_UNITS);
+    }
+    // len >= 41 gives s >= 5 and nine distinct ordered positions.
+    let s = values.len() / 8;
+    let at =
+        |a: usize, b: usize, c: usize| median_of_three(values[a], values[b], values[c], compare);
+    let pivot = median_of_three(
+        at(0, s, 2 * s),
+        at(middle - s, middle, middle + s),
+        at(last - 2 * s, last - s, last),
+        compare,
+    );
+    (pivot, NINTHER_UNITS)
+}
+
+/// Dijkstra three-way partition around [`pivot`]. Pivot selection is counted
+/// after it runs (at most 12 comparisons, 192 units), then every 64
+/// classified records. Returns `(less, greater)`: `values[..less] < pivot`,
 /// `values[less..greater] == pivot` and `values[greater..] > pivot`.
-fn partition<P: Progress>(
+fn partition<P: Progress, C: Fn(&Edge, &Edge) -> Ordering + Copy>(
     values: &mut [Edge],
     poll: &mut P,
     phase: &'static str,
+    compare: C,
 ) -> Result<(usize, usize), CmgError> {
     #[cfg(all(test, feature = "parallel"))]
     let _probe = probe::enter(values.len());
-    let last = values.len() - 1;
-    let middle = last / 2;
-    let mut candidates = [values[0], values[middle], values[last]];
-    candidates.sort_unstable_by(compare_raw_edges);
-    let pivot = candidates[1];
+    let (pivot, units) = pivot(values, compare);
+    poll.advance(phase, units)?;
     let (mut less, mut index, mut greater) = (0, 0, values.len());
     let mut steps = 0;
     while index < greater {
@@ -205,7 +291,7 @@ fn partition<P: Progress>(
             crate::execution::visits::visit_within(core::ptr::from_ref(&values[index]).cast());
             probe::step();
         }
-        match compare_raw_edges(&values[index], &pivot) {
+        match compare(&values[index], &pivot) {
             Ordering::Less => {
                 values.swap(less, index);
                 less += 1;
@@ -294,6 +380,29 @@ mod tests {
             ("organ-pipe", organ),
             ("sawtooth", sawtooth),
             ("median-of-three-killer", killer),
+            // Generic structured orderings: one small record moved to the end,
+            // eight sorted blocks in descending block order, eight
+            // interleaved ascending runs, and an adaptive adversary.
+            (
+                "push-front",
+                (0..count)
+                    .map(|i| key(if i + 1 == count { 0 } else { i + 1 }))
+                    .collect(),
+            ),
+            (
+                "descending-blocks",
+                (0..count)
+                    .map(|i| {
+                        let block = count.div_ceil(8).max(1);
+                        key((7 - (i / block).min(7)) * block + i % block)
+                    })
+                    .collect(),
+            ),
+            (
+                "interleaved-runs",
+                (0..count).map(|i| key(i % 8 * count + i / 8)).collect(),
+            ),
+            ("mcilroy-adversary", adversary(count)),
             // Duplicate endpoint groups whose weights differ only in the
             // sign of zero, interleaved with equal duplicates.
             (
@@ -306,6 +415,222 @@ mod tests {
                     .collect(),
             ),
         ]
+    }
+
+    /// McIlroy's killer adversary ("A Killer Adversary for Quicksort",
+    /// 1999) run against this exact serial algorithm: records start as
+    /// unknown "gas" and are frozen to the next smallest value only when two
+    /// gas records meet, so every pivot is as small as the answers so far
+    /// allow. Replaying the frozen order makes the sort take the same
+    /// decisions, so the introsort exhausts its depth and falls back.
+    fn adversary(count: usize) -> Vec<Edge> {
+        use core::cell::{Cell, RefCell};
+        let gas = count;
+        let values = RefCell::new(vec![gas; count]);
+        let (solid, candidate) = (Cell::new(0), Cell::new(0));
+        let compare = |a: &Edge, b: &Edge| {
+            let (x, y) = (a.u(), b.u());
+            let mut values = values.borrow_mut();
+            if values[x] == gas && values[y] == gas {
+                values[if x == candidate.get() { x } else { y }] = solid.get();
+                solid.set(solid.get() + 1);
+            }
+            if values[x] == gas {
+                candidate.set(x);
+            } else if values[y] == gas {
+                candidate.set(y);
+            }
+            values[x].cmp(&values[y])
+        };
+        let mut identities: Vec<Edge> = (0..count)
+            .map(|i| Edge::from_compact_parts(i as u32, (count + i) as u32, 1.0))
+            .collect();
+        serial_range(
+            &mut identities,
+            depth_limit(count),
+            &mut Unmetered,
+            "adversary",
+            compare,
+        )
+        .unwrap();
+        let mut values = values.into_inner();
+        for value in values.iter_mut().filter(|value| **value == gas) {
+            *value = solid.get();
+            solid.set(solid.get() + 1);
+        }
+        values.into_iter().map(key).collect()
+    }
+
+    /// Sort serially, recording counted units, the widest single advance and
+    /// the depth-limit fallbacks (calls, records).
+    fn counted(raw: &[Edge]) -> (Vec<Edge>, crate::cancel::Recorder, (usize, usize)) {
+        let mut values = raw.to_vec();
+        let mut recorder = crate::cancel::Recorder {
+            advances: 0,
+            units: 0,
+            max_units: 0,
+            stop_at: None,
+        };
+        let _ = fallbacks::take();
+        serial_range(
+            &mut values,
+            depth_limit(raw.len()),
+            &mut recorder,
+            "sort",
+            compare_raw_edges,
+        )
+        .unwrap();
+        (values, recorder, fallbacks::take())
+    }
+
+    /// Generic operation-count regression: on structured orderings (sorted,
+    /// reversed, organ pipe, one record moved, descending blocks, interleaved
+    /// runs, sawtooth, few distinct values and Musser's median-of-three
+    /// killer) the ninther never exhausts the depth limit and the counted
+    /// work stays within 32 units per record per level (two partition steps;
+    /// first/middle/last sampling falls back on most of these and exceeds
+    /// this). Every advance stays within one 1,024-unit segment.
+    #[test]
+    fn ninther_pivots_avoid_fallback_on_structured_orderings() {
+        let count: usize = 1 << 16;
+        let levels = (usize::BITS - count.leading_zeros()) as usize;
+        for (name, raw) in inputs(count) {
+            if name == "mcilroy-adversary" {
+                continue;
+            }
+            let (values, recorder, fallen) = counted(&raw);
+            let mut expected = raw;
+            expected.sort_by(compare_raw_edges);
+            assert_eq!(bits(&values), bits(&expected), "{name}");
+            assert_eq!(fallen, (0, 0), "{name}: depth-limit fallbacks");
+            assert!(
+                recorder.units <= 32 * count * levels,
+                "{name}: {} counted units",
+                recorder.units
+            );
+            assert!(recorder.max_units <= 1024, "{name}: {}", recorder.max_units);
+        }
+    }
+
+    /// The pivot is exactly the declared sample rule, computed independently:
+    /// below 41 records the median of the first, middle and last; above, the
+    /// median of the medians of positions (0, s, 2s), (m - s, m, m + s) and
+    /// (last - 2s, last - s, last) with `s = len / 8` and `m = last / 2`.
+    #[test]
+    fn pivot_is_the_declared_sample_rule() {
+        let median = |mut triple: [usize; 3]| {
+            triple.sort_unstable();
+            triple[1]
+        };
+        for len in [17, 23, 40, 41, 47, 64, 100, 1000, 1001, 4097] {
+            for seed in 0..8_u64 {
+                // Distinct ranks in a seeded order: every sample decides.
+                let mut ranks: Vec<usize> = (0..len).collect();
+                ranks
+                    .sort_by_key(|&rank| (rank as u64 * 2_654_435_761 + seed * 40_503) % 1_000_003);
+                let values: Vec<Edge> = ranks.iter().map(|&rank| key(rank)).collect();
+                let (last, middle, s) = (len - 1, (len - 1) / 2, len / 8);
+                let expected = if len < NINTHER_MIN {
+                    median([ranks[0], ranks[middle], ranks[last]])
+                } else {
+                    median([
+                        median([ranks[0], ranks[s], ranks[2 * s]]),
+                        median([ranks[middle - s], ranks[middle], ranks[middle + s]]),
+                        median([ranks[last - 2 * s], ranks[last - s], ranks[last]]),
+                    ])
+                };
+                let (pivot, units) = pivot(&values, compare_raw_edges);
+                assert_eq!(
+                    bits(&[pivot]),
+                    bits(&[key(expected)]),
+                    "len {len}, seed {seed}"
+                );
+                let expected_units = if len < NINTHER_MIN {
+                    MEDIAN_UNITS
+                } else {
+                    NINTHER_UNITS
+                };
+                assert_eq!(units, expected_units, "len {len}");
+            }
+        }
+    }
+
+    /// The ninther is not adversary-proof: an adaptive adversary built
+    /// against this algorithm still exhausts the depth limit, and the
+    /// heapsort fallback keeps the result exact and the counted work within
+    /// O(n log n), serially and on the team.
+    #[test]
+    fn adaptive_adversary_still_reaches_the_depth_fallback() {
+        let count: usize = 1 << 14;
+        let levels = (usize::BITS - count.leading_zeros()) as usize;
+        let raw = adversary(count);
+        let mut expected = raw.clone();
+        expected.sort_by(compare_raw_edges);
+        let (values, recorder, (calls, records)) = counted(&raw);
+        assert_eq!(bits(&values), bits(&expected));
+        assert!(calls > 0 && records > 0, "no fallback: {calls} / {records}");
+        assert!(
+            recorder.units <= 256 * count * levels,
+            "{} units",
+            recorder.units
+        );
+        assert!(recorder.max_units <= 1024);
+        #[cfg(feature = "parallel")]
+        {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(4)
+                .build()
+                .unwrap();
+            for threads in [1, 4] {
+                let team = Team::new(&pool, threads, crate::ParallelOptions::default()).unwrap();
+                let mut values = raw.clone();
+                sort(&mut values, team, &mut Unmetered).unwrap();
+                assert_eq!(bits(&values), bits(&expected), "ceiling {threads}");
+            }
+        }
+    }
+
+    /// Pivot selection is counted after it runs and before any record is
+    /// classified: cancelling at a partition's first advance stops it with
+    /// no classification, after exactly the ninther's (above 40 records) or
+    /// the median of three's counted units.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn pivot_selection_is_counted_before_classification() {
+        use crate::execution::{gauge, visits};
+        let _witness = gauge::WITNESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (count, units) in [
+            (1000, NINTHER_UNITS),
+            (41, NINTHER_UNITS),
+            (40, MEDIAN_UNITS),
+            (17, MEDIAN_UNITS),
+        ] {
+            let mut values = edges(count, 1);
+            let mut recorder = crate::cancel::Recorder {
+                advances: 0,
+                units: 0,
+                max_units: 0,
+                stop_at: Some(1),
+            };
+            visits::watch_range(&values);
+            let result = serial_range(
+                &mut values,
+                depth_limit(count),
+                &mut recorder,
+                "sort",
+                compare_raw_edges,
+            );
+            let classified = visits::count();
+            visits::unwatch();
+            assert!(matches!(result, Err(CmgError::Cancelled { .. })), "{count}");
+            assert_eq!((recorder.advances, recorder.units), (1, units), "{count}");
+            assert_eq!(
+                classified, 0,
+                "{count}: classified before the pivot was counted"
+            );
+        }
     }
 
     #[test]
