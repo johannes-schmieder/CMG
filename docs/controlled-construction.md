@@ -73,7 +73,8 @@ kernels above their fixed thresholds (initial sorting, contraction and
 heavy-forest selection); a
 budget only admits `construction_allocation_bound` before the first allocation
 and makes every bank fallible; a cancellation query only replaces opaque
-traversals with fallible bounded ones and sorting with deterministic heapsort.
+traversals with fallible bounded ones. Edge sorting then uses one counted
+in-place introsort (heapsort fallback) and other key sorts a counted heapsort.
 Edge ordering remains endpoint pair then total-ordered weight; terminal
 permutation keys include the original vertex as the final tie-break. Thus
 hierarchies, factors, repeats and cycle bits never depend on the context. The
@@ -137,8 +138,21 @@ serial forest scratch; lanes own fixed 4,096-vertex blocks and count every
 scanned entry, so a hub row polls inside itself. The selection is a maximum
 under a total order (weight, then lowest neighbor), so parents and selected
 weights equal the serial edge scan's. The
-initial-graph constructor from a borrowed slice keeps its bounded insertion-run
-and merge stages and admitted spare bank.
+initial-graph constructor from a borrowed slice maps edges in fixed logical
+chunks and then sorts them in place with the same team introsort. Its admitted
+bound still reserves a spare edge bank that no path allocates any more.
+
+Every canonical edge sort (initial graph, contraction, owned compact edges) is
+the one introsort in `graph/edge_sort.rs`: three-way partitions around a
+median-of-three pivot, insertion below 17 records and a heapsort fallback at
+depth `2 log2(n)`, counting 16 units per partition step and polling every 64
+steps. Serially it counts on the caller's meter. On a team, partitions of at
+least 16,384 records fork within the ceiling, and every logical node of the
+partition tree polls on entry with its own lane counter. The tree depends
+only on the input, so the poll schedule is identical at every ceiling, and
+work between two polls of a lane stays bounded deep in the tree. The total
+comparator (endpoint key, then `total_cmp` weight) makes the result equal to
+any other sort's.
 
 ## Cancellation contract
 

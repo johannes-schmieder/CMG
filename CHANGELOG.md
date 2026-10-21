@@ -34,6 +34,15 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Changed
 
+- Canonical edge sorting under a cancellation query uses one counted in-place
+  introsort (`graph/edge_sort.rs`) on every path. Serial initial graphs and
+  contraction no longer use the counted heapsort, and the hosted initial
+  graph no longer runs insertion-run and merge passes through a spare bank.
+  On a team every logical partition node polls on entry with its own lane
+  counter, so the poll schedule is identical at every worker ceiling.
+  Order, duplicate reduction, hierarchies, factors, repeats and every bit
+  are unchanged. The public construction bound still reserves the spare bank.
+
 - Team-carrying solves and applications are bit-identical at every worker
   ceiling, one included, and in every `ParallelPcgSolver` execution mode. PCG
   dot products, norm sums and single-component centering (finest PCG level and

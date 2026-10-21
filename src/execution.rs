@@ -809,6 +809,7 @@ pub(crate) mod visits {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static WATCHED: AtomicUsize = AtomicUsize::new(0);
+    static WATCHED_END: AtomicUsize = AtomicUsize::new(0);
     static COUNT: AtomicUsize = AtomicUsize::new(0);
 
     /// Start counting visits of `data`'s entries (hold `gauge::WITNESS`).
@@ -819,6 +820,28 @@ pub(crate) mod visits {
 
     pub(crate) fn unwatch() {
         WATCHED.store(0, Ordering::SeqCst);
+        WATCHED_END.store(0, Ordering::SeqCst);
+    }
+
+    /// Start counting visits of any entry inside `data` (hold
+    /// `gauge::WITNESS`), for kernels that work on subslices.
+    pub(crate) fn watch_range<T>(data: &[T]) {
+        COUNT.store(0, Ordering::SeqCst);
+        WATCHED_END.store(
+            data.as_ptr() as usize + core::mem::size_of_val(data),
+            Ordering::SeqCst,
+        );
+        WATCHED.store(data.as_ptr() as usize, Ordering::SeqCst);
+    }
+
+    /// Count one visited entry if it lies inside the range of `watch_range`.
+    #[inline]
+    pub(crate) fn visit_within(entry: *const u8) {
+        let entry = entry as usize;
+        let start = WATCHED.load(Ordering::Relaxed);
+        if start != 0 && start <= entry && entry < WATCHED_END.load(Ordering::Relaxed) {
+            COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Count one visited entry of the slice starting at `data`.

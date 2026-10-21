@@ -10,8 +10,7 @@ use std::sync::Arc;
 mod hosted;
 #[cfg(feature = "parallel")]
 pub(crate) use hosted::stage;
-#[cfg(feature = "parallel")]
-mod team_sort;
+mod edge_sort;
 
 crate::storage::storage_fields!(
     Laplacian,
@@ -164,7 +163,8 @@ impl Laplacian {
     /// Requested layouts admitted by [`Self::build`] and
     /// [`Self::from_edges_with`]: two compact edge banks, the diagonal and three
     /// Arc owners, including modeled control blocks. Borrowed input and
-    /// allocator overhead are excluded.
+    /// allocator overhead are excluded. Every path now sorts in place, so the
+    /// second bank is a conservative reserve that no path allocates.
     pub fn construction_allocation_bound(vertices: usize, edges: usize) -> Result<usize, CmgError> {
         use crate::storage::{add, arc_bytes, bytes};
         let edge_bytes = bytes::<Edge>(edges)?;
@@ -182,9 +182,10 @@ impl Laplacian {
     /// allocation. With a cancellation query every bounded operation is counted,
     /// the query is polled at the fixed cadence and before every allocation, and
     /// a true query returns [`CmgError::Cancelled`] with no graph. With a team,
-    /// edge sets of at least 65,536 records are validated, mapped and sorted in
-    /// fixed logical chunks (cancellation polled before every chunk); duplicate
-    /// reduction and the diagonal keep the serial canonical order.
+    /// edge sets of at least 65,536 records are validated and mapped in fixed
+    /// logical chunks (cancellation polled before every chunk) and sorted in
+    /// place on the team (polled inside every partition); duplicate reduction
+    /// and the diagonal keep the serial canonical order.
     pub fn build(
         vertex_count: usize,
         edges: &[(usize, usize, f64)],
@@ -271,7 +272,9 @@ impl Laplacian {
     }
 
     /// Canonicalize owned compact edges: total-order sort, then compensated
-    /// duplicate reduction with the diagonal in canonical edge order.
+    /// duplicate reduction with the diagonal in canonical edge order. A
+    /// polling meter sorts with the counted in-place introsort (polled inside
+    /// every partition); the ordinary path uses the standard endpoint sort.
     pub(crate) fn canonical<M: Meter>(
         vertex_count: usize,
         mut raw: Vec<Edge>,
@@ -280,7 +283,7 @@ impl Laplacian {
         if M::POLLS {
             // Sorting by the full comparator gives precisely the order of the
             // endpoint sort followed by each duplicate group's weight sort.
-            meter.sort_by(&mut raw, compare_raw_edges, "coarse edge sorting")?;
+            edge_sort::sort_serial(&mut raw, meter, "coarse edge sorting")?;
             Self::from_sorted_edges(vertex_count, raw, true, meter)
         } else {
             sort_compact_edge_endpoints(&mut raw);
@@ -298,7 +301,7 @@ impl Laplacian {
         team: crate::Team<'_>,
         meter: &mut M,
     ) -> Result<Self, CmgError> {
-        team_sort::sort(&mut raw, team, meter)?;
+        edge_sort::sort(&mut raw, team, meter)?;
         Self::from_sorted_edges(vertex_count, raw, true, meter)
     }
 
