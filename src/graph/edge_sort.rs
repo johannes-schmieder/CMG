@@ -428,6 +428,175 @@ mod tests {
         assert_eq!(bits(&again), bits(&expected));
     }
 
+    /// What the post-fork witness observed at the firing and after the join.
+    #[cfg(feature = "parallel")]
+    #[derive(Default)]
+    struct Barrier {
+        threads: std::collections::BTreeSet<String>,
+        fired: bool,
+        timed_out: bool,
+        visits_at_fire: usize,
+        active_at_fire: usize,
+        /// Queries counted under this lock, so the count at the firing
+        /// includes every query that has entered the barrier.
+        calls: usize,
+        calls_at_fire: usize,
+        /// The firing query's pre-lock ordinal plus one: the original
+        /// snapshot, kept to show that an ordinal inversion makes it stale.
+        ordinal_at_fire: usize,
+        untouched: usize,
+    }
+
+    /// Run the post-fork cancellation witness at `ceiling` and check it. With
+    /// `invert`, the first qualifying lane takes its pre-lock ordinal and is
+    /// held before the barrier lock until every other lane has parked, so it
+    /// arrives last carrying the oldest ordinal; the witness must still count
+    /// every query. Returns the barrier state.
+    #[cfg(feature = "parallel")]
+    fn started_lanes_witness(ceiling: usize, invert: bool) -> Barrier {
+        use crate::execution::{gauge, visits};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Condvar, Mutex};
+        use std::time::{Duration, Instant};
+        let _witness = gauge::WITNESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let raw = edges(400_000, 3);
+        let mut expected = raw.clone();
+        expected.sort_by(compare_raw_edges);
+        let label = format!("ceiling {ceiling}, invert {invert}");
+        let barrier = Mutex::new(Barrier::default());
+        let arrived = Condvar::new();
+        let ordinals = AtomicUsize::new(0);
+        // Serializes qualifying queries' ordinals while choosing the held
+        // lane, so every other lane's parking ordinal follows the held one.
+        let selection = Mutex::new(false);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        // Wait on `arrived` until `done`, or fire the escape at the deadline.
+        fn wait<'a>(
+            arrived: &Condvar,
+            deadline: Instant,
+            mut state: std::sync::MutexGuard<'a, Barrier>,
+            done: impl Fn(&Barrier) -> bool,
+        ) -> std::sync::MutexGuard<'a, Barrier> {
+            while !done(&state) && !state.fired {
+                let now = Instant::now();
+                if now >= deadline {
+                    // Escape: stop every lane and fail after the join.
+                    state.timed_out = true;
+                    state.fired = true;
+                    arrived.notify_all();
+                    break;
+                }
+                state = arrived.wait_timeout(state, deadline - now).unwrap().0;
+            }
+            state
+        }
+        let query = || {
+            // Only polls in the middle of a partition (records left to
+            // classify) of a one-lane leaf, after the root partition
+            // (400,000 steps) has completed. Each part is thread-local or
+            // monotone, so it holds as well under the lock below.
+            let remaining = probe::remaining().unwrap_or(0);
+            let qualifies = gauge::inside() && remaining > 0 && visits::count() >= raw.len();
+            let (ordinal, held) = if invert && qualifies {
+                let mut chosen = selection.lock().unwrap();
+                let ordinal = ordinals.fetch_add(1, Ordering::SeqCst);
+                (ordinal, !std::mem::replace(&mut *chosen, true))
+            } else {
+                (ordinals.fetch_add(1, Ordering::SeqCst), false)
+            };
+            if held {
+                // The ordinal is taken; hold before the lock until every
+                // other lane has parked with a later ordinal.
+                let state = barrier.lock().unwrap();
+                drop(wait(&arrived, deadline, state, |state| {
+                    state.threads.len() + 1 == ceiling
+                }));
+            }
+            let mut state = barrier.lock().unwrap();
+            state.calls += 1;
+            if state.fired {
+                return true;
+            }
+            if !qualifies {
+                return false;
+            }
+            state.untouched += remaining;
+            state
+                .threads
+                .insert(format!("{:?}", std::thread::current().id()));
+            if state.threads.len() == ceiling {
+                state.fired = true;
+                state.visits_at_fire = visits::count();
+                state.active_at_fire = gauge::active();
+                state.calls_at_fire = state.calls;
+                state.ordinal_at_fire = ordinal + 1;
+                arrived.notify_all();
+                return true;
+            }
+            arrived.notify_all();
+            drop(wait(&arrived, deadline, state, |_| false));
+            true
+        };
+        gauge::watch(&pool);
+        let mut values = raw.clone();
+        visits::watch_range(&values);
+        let team = Team::new(&pool, ceiling, crate::ParallelOptions::default()).unwrap();
+        let result = sort(&mut values, team, &mut CancelMeter::new(&query));
+        let (total, returned_calls, active) = (
+            visits::count(),
+            barrier.lock().unwrap().calls,
+            gauge::active(),
+        );
+        // Nothing runs after the return (a sleep cannot make this pass
+        // falsely for a correct join; it only gives a stray lane time).
+        std::thread::sleep(Duration::from_millis(20));
+        let (later_total, later_calls) = (visits::count(), barrier.lock().unwrap().calls);
+        visits::unwatch();
+        let state = barrier.into_inner().unwrap();
+        assert!(!state.timed_out, "{label}: lanes never all arrived");
+        assert!(
+            matches!(result, Err(CmgError::Cancelled { phase: PHASE })),
+            "{label}: {result:?}"
+        );
+        // Distinct threads were parked inside partitions at once.
+        assert_eq!(state.threads.len(), ceiling, "{label}");
+        assert_eq!(state.active_at_fire, ceiling, "{label}: concurrent lanes");
+        assert_eq!(gauge::max(), ceiling, "{label}: lane ceiling");
+        // No partition step after the observation: each lane stopped at its
+        // observing poll, so later work stayed untouched.
+        assert_eq!(total, state.visits_at_fire, "{label}: steps after firing");
+        assert!(state.untouched >= ceiling, "{label}: parked mid-partition");
+        assert!(total < 3 * raw.len(), "{label}: {total} steps");
+        // The only query after the firing is the coordinator's final poll
+        // after the join: no lane reached another node.
+        assert_eq!(
+            returned_calls,
+            state.calls_at_fire + 1,
+            "{label}: polls after firing"
+        );
+        assert_eq!(ordinals.load(Ordering::SeqCst), returned_calls, "{label}");
+        assert_eq!(active, 0, "{label}: every lane joined");
+        assert_eq!(
+            (later_total, later_calls),
+            (total, returned_calls),
+            "{label}"
+        );
+        // Fresh exact sorts on the same team and serially.
+        let mut again = raw.clone();
+        sort(&mut again, team, &mut CancelMeter::new(&|| false)).unwrap();
+        assert_eq!(bits(&again), bits(&expected), "{label}: fresh team sort");
+        let mut serial = raw;
+        sort_serial(&mut serial, &mut Unmetered, "sort").unwrap();
+        assert_eq!(bits(&serial), bits(&expected), "{label}: fresh serial sort");
+        state
+    }
+
     /// Cancellation after the fork, inside started concurrent lanes. A query
     /// parks every lane at its first poll inside actual partition work past
     /// the root partition (at the W4 ceiling, the four one-lane leaves after
@@ -440,126 +609,28 @@ mod tests {
     #[cfg(feature = "parallel")]
     #[test]
     fn started_lanes_cancel_inside_partitions_after_the_fork() {
-        use crate::execution::{gauge, visits};
-        use std::collections::BTreeSet;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::{Condvar, Mutex};
-        use std::time::{Duration, Instant};
-        #[derive(Default)]
-        struct Barrier {
-            threads: BTreeSet<String>,
-            fired: bool,
-            timed_out: bool,
-            visits_at_fire: usize,
-            active_at_fire: usize,
-            calls_at_fire: usize,
-            untouched: usize,
-        }
-        let _witness = gauge::WITNESS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap();
-        let raw = edges(400_000, 3);
-        let mut expected = raw.clone();
-        expected.sort_by(compare_raw_edges);
         for ceiling in [4, 1] {
-            let label = format!("ceiling {ceiling}");
-            let barrier = Mutex::new(Barrier::default());
-            let arrived = Condvar::new();
-            let calls = AtomicUsize::new(0);
-            let query = || {
-                let call = calls.fetch_add(1, Ordering::SeqCst);
-                let mut state = barrier.lock().unwrap();
-                if state.fired {
-                    return true;
-                }
-                // Only polls in the middle of a partition (records left to
-                // classify) of a one-lane leaf, after the root partition
-                // (400,000 steps) has completed.
-                let remaining = probe::remaining().unwrap_or(0);
-                if !(gauge::inside() && remaining > 0 && visits::count() >= raw.len()) {
-                    return false;
-                }
-                state.untouched += remaining;
-                state
-                    .threads
-                    .insert(format!("{:?}", std::thread::current().id()));
-                if state.threads.len() == ceiling {
-                    state.fired = true;
-                    state.visits_at_fire = visits::count();
-                    state.active_at_fire = gauge::active();
-                    state.calls_at_fire = call + 1;
-                    arrived.notify_all();
-                    return true;
-                }
-                let deadline = Instant::now() + Duration::from_secs(30);
-                while !state.fired {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        // Escape: stop every lane and fail after the join.
-                        state.timed_out = true;
-                        state.fired = true;
-                        arrived.notify_all();
-                        break;
-                    }
-                    state = arrived.wait_timeout(state, deadline - now).unwrap().0;
-                }
-                true
-            };
-            gauge::watch(&pool);
-            let mut values = raw.clone();
-            visits::watch_range(&values);
-            let team = Team::new(&pool, ceiling, crate::ParallelOptions::default()).unwrap();
-            let result = sort(&mut values, team, &mut CancelMeter::new(&query));
-            let (total, returned_calls, active) = (
-                visits::count(),
-                calls.load(Ordering::SeqCst),
-                gauge::active(),
-            );
-            // Nothing runs after the return (a sleep cannot make this pass
-            // falsely for a correct join; it only gives a stray lane time).
-            std::thread::sleep(Duration::from_millis(20));
-            let (later_total, later_calls) = (visits::count(), calls.load(Ordering::SeqCst));
-            visits::unwatch();
-            let state = barrier.into_inner().unwrap();
-            assert!(!state.timed_out, "{label}: lanes never all arrived");
-            assert!(
-                matches!(result, Err(CmgError::Cancelled { phase: PHASE })),
-                "{label}: {result:?}"
-            );
-            // Distinct threads were parked inside partitions at once.
-            assert_eq!(state.threads.len(), ceiling, "{label}");
-            assert_eq!(state.active_at_fire, ceiling, "{label}: concurrent lanes");
-            assert_eq!(gauge::max(), ceiling, "{label}: lane ceiling");
-            // No partition step after the observation: each lane stopped at
-            // its observing poll, so later work stayed untouched.
-            assert_eq!(total, state.visits_at_fire, "{label}: steps after firing");
-            assert!(state.untouched >= ceiling, "{label}: parked mid-partition");
-            assert!(total < 3 * raw.len(), "{label}: {total} steps");
-            // The only query after the firing is the coordinator's final
-            // poll after the join: no lane reached another node.
-            assert_eq!(
-                returned_calls,
-                state.calls_at_fire + 1,
-                "{label}: polls after firing"
-            );
-            assert_eq!(active, 0, "{label}: every lane joined");
-            assert_eq!(
-                (later_total, later_calls),
-                (total, returned_calls),
-                "{label}"
-            );
-            // Fresh exact sorts on the same team and serially.
-            let mut again = raw.clone();
-            sort(&mut again, team, &mut CancelMeter::new(&|| false)).unwrap();
-            assert_eq!(bits(&again), bits(&expected), "{label}: fresh team sort");
-            let mut serial = raw.clone();
-            sort_serial(&mut serial, &mut Unmetered, "sort").unwrap();
-            assert_eq!(bits(&serial), bits(&expected), "{label}: fresh serial sort");
+            started_lanes_witness(ceiling, false);
         }
+    }
+
+    /// The witness counts queries under its barrier lock. A query's pre-lock
+    /// ordinal can be older than queries that entered the lock before it; the
+    /// forced inversion holds the first qualifying lane after it took its
+    /// ordinal until the three other lanes have parked with later ordinals.
+    /// The original snapshot (firing ordinal plus one) is then stale by at
+    /// least those three queries and would reject a correct join, while the
+    /// count under the lock is exact.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn started_lanes_witness_counts_queries_under_the_lock_despite_ordinal_inversion() {
+        let state = started_lanes_witness(4, true);
+        assert!(
+            state.ordinal_at_fire + 3 <= state.calls_at_fire,
+            "inversion not forced: ordinal {} calls {}",
+            state.ordinal_at_fire,
+            state.calls_at_fire
+        );
     }
 
     /// Work between two consecutive polls stays bounded on every path: at
