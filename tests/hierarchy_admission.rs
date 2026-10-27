@@ -706,3 +706,137 @@ fn controlled_scalar_workspace_allocations_are_gated_bounded_and_released() {
         }
     }
 }
+
+// Two equal-weight 264-cliques. The low-effective-degree correction keeps all
+// but one pair of each clique as singletons, so each level removes only two
+// vertices and an unrestricted hierarchy needs 34 levels. The direct
+// threshold and fill guard are lowered/raised so that neither stops it first.
+fn deep_two_clique_graph() -> Laplacian {
+    const K: usize = 264;
+    Laplacian::from_edges(
+        2 * K,
+        (0..2).flat_map(|c| {
+            (0..K).flat_map(move |v| (0..v).map(move |u| (c * K + u, c * K + v, 1.0)))
+        }),
+    )
+    .unwrap()
+}
+
+fn deep_options() -> CmgOptions {
+    CmgOptions {
+        direct_threshold: 1,
+        max_hierarchy_nnz_factor: 64.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn default_level_cap_stops_a_deep_hierarchy_inside_its_admitted_bound() {
+    let graph = deep_two_clique_graph();
+    let options = deep_options();
+    assert_eq!(options.max_levels, 32);
+    let deep = CmgHierarchy::build(
+        &graph,
+        CmgOptions {
+            max_levels: 64,
+            ..options
+        },
+    )
+    .unwrap();
+    assert_eq!(deep.levels().len(), 34);
+    assert_eq!(
+        deep.report().terminal_reason(),
+        TerminalReason::StagnatedVertexReduction
+    );
+    let capped = CmgHierarchy::build(&graph, options).unwrap();
+    assert_eq!(capped.levels().len(), 32);
+    assert_eq!(
+        capped.report().terminal_reason(),
+        TerminalReason::MaximumLevels
+    );
+    let terminal = &capped.levels()[31];
+    assert_eq!(
+        terminal.terminal_reason(),
+        Some(TerminalReason::MaximumLevels)
+    );
+    assert!(terminal.terminal_reason().unwrap().is_iterative());
+    // The cap only replaces the 32nd level's contraction by the terminal; every
+    // earlier level, and the terminal graph and smoother, are the deep build's.
+    assert_eq!(capped.levels()[..31], deep.levels()[..31]);
+    assert_eq!(terminal.graph(), deep.levels()[31].graph());
+    assert_eq!(
+        terminal.inverse_diagonal(),
+        deep.levels()[31].inverse_diagonal()
+    );
+    // Admission at the capped bound: one byte short refuses without allocating,
+    // the bound admits a build within it, and the build matches the reference.
+    check_hierarchy(&graph, options);
+    assert_eq!(
+        check(&graph, options, None, false),
+        TerminalReason::MaximumLevels
+    );
+}
+
+#[test]
+fn level_cap_admits_a_budget_the_former_level_assumption_refused() {
+    let graph = deep_two_clique_graph();
+    let capped = deep_options();
+    let former = CmgOptions {
+        max_levels: 128,
+        ..capped
+    };
+    let bound = |options| {
+        CmgPreconditioner::construction_allocation_bound(
+            graph.vertex_count(),
+            graph.edge_count(),
+            cmg::BuildOptions::from(options),
+            false,
+        )
+        .unwrap()
+    };
+    let budget = bound(capped);
+    assert!(budget < bound(former));
+    let construct = |options| {
+        CmgPreconditioner::build_with(
+            &graph,
+            cmg::BuildOptions::from(options),
+            cmg::BuildContext {
+                budget_bytes: Some(budget),
+                ..cmg::BuildContext::default()
+            },
+        )
+    };
+    // An explicit 128-level request keeps its own assumption and is refused
+    // before any allocation under the budget the default cap now admits.
+    let calls = CALLS.with(Cell::get);
+    assert!(matches!(
+        construct(former),
+        Err(CmgError::MemoryBudgetExceeded { required_bytes, budget_bytes })
+            if required_bytes == bound(former) && budget_bytes == budget
+    ));
+    assert_eq!(CALLS.with(Cell::get), calls, "refused build allocated");
+    let admitted = construct(capped).unwrap();
+    assert_eq!(
+        admitted.hierarchy().report().terminal_reason(),
+        TerminalReason::MaximumLevels
+    );
+    // Below the cap both assumptions build the identical preconditioner.
+    let shallow = Laplacian::from_edges(4096, (1..4096).map(|v| (v - 1, v, 1.0))).unwrap();
+    let shallow_options = CmgOptions {
+        direct_threshold: 4,
+        ..Default::default()
+    };
+    let reference = CmgPreconditioner::build(&shallow, shallow_options).unwrap();
+    assert!(reference.hierarchy().levels().len() < 32);
+    assert_eq!(
+        CmgPreconditioner::build(
+            &shallow,
+            CmgOptions {
+                max_levels: 128,
+                ..shallow_options
+            }
+        )
+        .unwrap(),
+        reference
+    );
+}

@@ -34,6 +34,17 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Changed
 
+- `CmgOptions::default().max_levels` is 32 instead of 128. The value is both
+  the hard stop of hierarchy construction (a level that would contract further
+  at that depth becomes the iterative `MaximumLevels` terminal) and the level
+  count every pre-build admission bound assumes, so default construction,
+  scalar-workspace and solver memory bounds no longer provision 127 coarse
+  graph copies that ordinary 3-6-level hierarchies never build; they admit
+  budgets the former assumption refused. Every hierarchy of at most 32
+  levels is bit-identical; one that would need more levels now stops at level
+  32 inside the admitted bytes, its first 31 levels unchanged. Explicit `max_levels` values
+  keep their own stop and admission. No terminal reason is added.
+
 - The row-operator (CSR) matvec gates team dispatch on its work, directed
   entries times lanes (at least the row count), instead of its row count,
   against the team's `min_parallel_len`. A planned level always has at least

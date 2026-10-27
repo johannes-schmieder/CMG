@@ -203,7 +203,7 @@ terminal-factor selection and repeat-count finalization. It changes provisioning
 not the coarsening or numerical policy. Prepared numeric graphs reuse their
 existing component Arc. No duplicate topology, worker pool or setup is built.
 
-Let `L=options.max_levels`, `G=m*sizeof(Edge)+8*n+A`, where `A` is the reviewed
+Let `L=options.max_levels` (default 32, also the hard construction stop), `G=m*sizeof(Edge)+8*n+A`, where `A` is the reviewed
 sum of `Arc<Vec<Edge>>`, `Arc<Vec<f64>>` and lineage `Arc<()>` allocations.
 Every current/coarse graph has at most `n` vertices and `m` edges. Define the
 retained hierarchy ceiling `H` as:

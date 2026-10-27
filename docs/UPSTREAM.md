@@ -86,6 +86,9 @@ The Rust package supports several behaviors beyond the original MATLAB-facing in
 - repeated and batched right-hand sides;
 - deterministic compact storage and memory accounting;
 - optional package-owned parallel execution and automatic routing.
+- a hierarchy depth limit (`CmgOptions::max_levels`, default 32) that stops
+  construction with an iterative `MaximumLevels` terminal and bounds every
+  pre-build memory admission; upstream has no level limit.
 
 ## Attribution
 

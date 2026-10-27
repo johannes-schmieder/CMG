@@ -41,7 +41,12 @@ pub struct CmgOptions {
     /// Use a direct terminal when the current level has fewer vertices than
     /// this value. The upstream default is 700.
     pub direct_threshold: usize,
-    /// Maximum number of stored hierarchy levels.
+    /// Maximum number of stored hierarchy levels, a hard stop: a level that
+    /// would otherwise contract further at this depth becomes the iterative
+    /// [`crate::TerminalReason::MaximumLevels`] terminal. Every pre-build
+    /// admission bound assumes this many levels. The default of 32 is far
+    /// above the depth of ordinary hierarchies; one that stops earlier is
+    /// unaffected by this value except through that admitted bound.
     pub max_levels: usize,
     /// Stop coarsening when cumulative matrix nonzeros exceed this multiple of
     /// the initial matrix nonzeros. The upstream default is 5.
@@ -55,7 +60,7 @@ impl Default for CmgOptions {
     fn default() -> Self {
         Self {
             direct_threshold: 700,
-            max_levels: 128,
+            max_levels: 32,
             max_hierarchy_nnz_factor: 5.0,
             low_effective_degree_threshold: 0.125,
         }
