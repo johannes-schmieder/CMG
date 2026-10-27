@@ -162,6 +162,24 @@ fn grid_edges(rows: usize, columns: usize) -> (usize, Vec<(usize, usize, f64)>) 
     (rows * columns, edges)
 }
 
+/// Workers with three spells at skewed firms plus a firm path: planned coarse
+/// levels of 700 to 1,100 vertices carry more than 20,000 edges each, so they
+/// have fewer rows than the default `min_parallel_len` but more entries.
+#[cfg(feature = "parallel")]
+fn worker_firm_edges() -> (usize, Vec<(usize, usize, f64)>) {
+    let (workers, firms) = (12_000, 1_500);
+    let mut rng = Lcg(7);
+    let mut edges = Vec::new();
+    for worker in 0..workers {
+        for _ in 0..3 {
+            let firm = rng.below(firms).min(rng.below(firms));
+            edges.push((worker, workers + firm, 1.0 + rng.below(4) as f64));
+        }
+    }
+    edges.extend((1..firms).map(|firm| (workers + firm - 1, workers + firm, 0.5)));
+    (workers + firms, edges)
+}
+
 fn graph_digest(digest: &mut Digest, graph: &Laplacian) {
     digest.usize(graph.vertex_count());
     digest.usize(graph.edge_count());
@@ -919,6 +937,126 @@ fn measure() -> BTreeMap<String, u64> {
         }
     }
     cases
+}
+
+/// Planned cycles reproduce the one-lane cycle bit for bit at 1, 2, 4 and 8
+/// lanes, scalar and interleaved, under the production `ParallelOptions` and
+/// the frozen executor shape, on every frozen fixture and on a worker-firm
+/// hierarchy whose planned coarse levels straddle the matvec gate (fewer rows
+/// than `min_parallel_len`, more entries). Row operators and their team
+/// dispatch are a resource choice, never an arithmetic one.
+#[cfg(feature = "parallel")]
+#[test]
+fn planned_cycles_reproduce_one_lane_bits_at_every_lane_count() {
+    let mut fixtures = vec![
+        ("chain", chain_edges(), 2),
+        ("chain_direct", chain_edges(), 128),
+        ("random", random_edges(3000, 12_000, 7), 64),
+        ("worker_firm", worker_firm_edges(), 700),
+    ];
+    if !cfg!(debug_assertions) {
+        fixtures.push(("grid", grid_edges(260, 262), 700));
+    }
+    let threshold = ParallelOptions::default().min_parallel_len;
+    let shapes = [
+        ParallelOptions::default(),
+        ParallelOptions {
+            min_parallel_len: 64,
+            reduction_chunk_size: 256,
+            ..ParallelOptions::default()
+        },
+    ];
+    let bits = |values: &[f64]| {
+        values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    };
+    for (name, (vertices, edges), direct_threshold) in fixtures {
+        let graph = Laplacian::from_edges(vertices, edges).unwrap();
+        let preconditioner = CmgPreconditioner::build(&graph, options(direct_threshold)).unwrap();
+        let levels = preconditioner.hierarchy().levels();
+        if name == "worker_firm" {
+            let straddling = levels
+                .iter()
+                .filter(|level| {
+                    let graph = level.graph();
+                    level.terminal_reason().is_none()
+                        && graph.vertex_count() < threshold
+                        && graph.edge_count() >= threshold
+                        && 4 * graph.edge_count() >= 5 * graph.vertex_count()
+                })
+                .count();
+            assert!(straddling >= 2, "{straddling} straddling levels");
+        }
+        let n = vertices;
+        let columns = 3;
+        let scalar_rhs: Vec<Vec<f64>> = [1, 2].map(|seed| compatible_rhs(&graph, seed)).into();
+        let mut batch_rhs = vec![0.0; n * columns];
+        for lane in 0..columns {
+            for (row, value) in compatible_rhs(&graph, 10 + lane as u64)
+                .into_iter()
+                .enumerate()
+            {
+                batch_rhs[row * columns + lane] = value;
+            }
+        }
+        let apply = |context: ApplyContext<'_>| {
+            let mut workspace = preconditioner.try_workspace().unwrap();
+            let mut output = vec![0.0; n];
+            let mut observed = Vec::new();
+            for rhs in &scalar_rhs {
+                preconditioner
+                    .apply_compatible_into_with(rhs, &mut output, &mut workspace, context)
+                    .unwrap();
+                observed.extend(bits(&output));
+            }
+            let mut batch =
+                CmgBatchWorkspace::try_new(&preconditioner, columns, usize::MAX).unwrap();
+            let mut output = vec![0.0; n * columns];
+            preconditioner
+                .apply_compatible_batch_into(&batch_rhs, &mut output, columns, &mut batch, context)
+                .unwrap();
+            observed.extend(bits(&output));
+            observed
+        };
+        for shape in shapes {
+            let one = ParallelExecutor::new(ParallelOptions {
+                threads: 1,
+                ..shape
+            })
+            .unwrap();
+            let reference = apply(ApplyContext {
+                plan: None,
+                team: Some(one.team().single_lane()),
+                cancel: None,
+            });
+            let mut operators = Vec::new();
+            for threads in [1, 2, 4, 8] {
+                let executor = ParallelExecutor::new(ParallelOptions { threads, ..shape }).unwrap();
+                let team = executor.team();
+                let plan =
+                    ParallelCmgPlan::build_with_budget(&preconditioner, team, usize::MAX).unwrap();
+                operators.push(plan.operator_count());
+                let observed = apply(ApplyContext {
+                    plan: Some(&plan),
+                    team: Some(team),
+                    cancel: None,
+                });
+                assert!(
+                    observed == reference,
+                    "{name}, {threads} lanes, min_parallel_len {}",
+                    shape.min_parallel_len
+                );
+            }
+            if name == "worker_firm" {
+                assert!(
+                    operators[1..].iter().all(|&count| count >= 3),
+                    "{operators:?}"
+                );
+            }
+        }
+    }
 }
 
 fn parse(text: &str) -> BTreeMap<String, BTreeMap<String, u64>> {

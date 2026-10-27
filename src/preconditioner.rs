@@ -1452,3 +1452,111 @@ mod profiled_storage_tests {
         }
     }
 }
+
+/// The planned matvec gate counts entries times lanes, not rows: a coarse level
+/// with fewer rows than `min_parallel_len` but many entries runs on the team,
+/// and every lane count reproduces the serial row products bit for bit.
+#[cfg(all(test, feature = "parallel"))]
+mod matvec_gate_tests {
+    use crate::cancel::Unmetered;
+    use crate::{
+        CmgOptions, CmgPreconditioner, Laplacian, ParallelCmgPlan, ParallelExecutor,
+        ParallelOptions,
+    };
+
+    /// Workers with three spells at skewed firms plus a firm path: coarse
+    /// levels of 700 to 1,100 vertices carry more than 20,000 edges each.
+    fn worker_firm() -> Laplacian {
+        let (workers, firms) = (12_000, 1_500);
+        let mut state = 7_u64;
+        let mut below = |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 11) % bound as u64) as usize
+        };
+        let mut edges = Vec::new();
+        for worker in 0..workers {
+            for _ in 0..3 {
+                let firm = below(firms).min(below(firms));
+                edges.push((worker, workers + firm, 1.0 + below(4) as f64));
+            }
+        }
+        edges.extend((1..firms).map(|firm| (workers + firm - 1, workers + firm, 0.5)));
+        Laplacian::from_edges(workers + firms, edges).unwrap()
+    }
+
+    #[test]
+    fn dense_levels_below_the_row_threshold_run_on_the_team_with_serial_bits() {
+        let graph = worker_firm();
+        let preconditioner = CmgPreconditioner::build(&graph, CmgOptions::default()).unwrap();
+        let levels = preconditioner.hierarchy().levels();
+        let threshold = ParallelOptions::default().min_parallel_len;
+        for threads in [2, 4, 8] {
+            let executor = ParallelExecutor::new(ParallelOptions {
+                threads,
+                ..ParallelOptions::default()
+            })
+            .unwrap();
+            let team = executor.team();
+            let plan = ParallelCmgPlan::build(&preconditioner, team).unwrap();
+            let mut straddling = 0;
+            for (index, level) in levels.iter().enumerate() {
+                let Some(operator) = plan.level_operator(index) else {
+                    continue;
+                };
+                let rows = operator.vertex_count();
+                for columns in [1, 3] {
+                    // A planned level has at least `min_parallel_len` edges, so
+                    // its entries open the gate; a one-lane view stays serial.
+                    assert!(operator.matvec_uses_team(team, columns));
+                    assert!(!operator.matvec_uses_team(team.single_lane(), columns));
+                    let input: Vec<f64> = (0..rows * columns)
+                        .map(|i| ((i * 37) % 101) as f64 / 8.0 - 6.0)
+                        .collect();
+                    let mut serial = vec![0.0; rows * columns];
+                    let mut parallel = vec![f64::NAN; rows * columns];
+                    // `usize` is the interleaved width; one lane is the scalar layout.
+                    operator
+                        .matvec_lanes(&input, &mut serial, columns, None, &mut Unmetered)
+                        .unwrap();
+                    operator
+                        .matvec_lanes(&input, &mut parallel, columns, Some(team), &mut Unmetered)
+                        .unwrap();
+                    let bits =
+                        |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(
+                        bits(&parallel),
+                        bits(&serial),
+                        "{threads} threads, level {index}"
+                    );
+                }
+                if rows < threshold {
+                    straddling += 1;
+                    assert!(level.graph().edge_count() * 2 >= threshold);
+                }
+            }
+            assert!(levels[0].graph().vertex_count() >= threshold);
+            assert!(
+                straddling >= 2,
+                "{threads} threads: {straddling} straddling levels"
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_operators_stay_serial() {
+        let graph = Laplacian::from_edges(10, (0..9).map(|v| (v, v + 1, 1.0))).unwrap();
+        let operator = crate::CsrLaplacian::from_laplacian(&graph).unwrap();
+        let executor = ParallelExecutor::new(ParallelOptions {
+            threads: 8,
+            ..ParallelOptions::default()
+        })
+        .unwrap();
+        // 18 entries times 64 lanes stay below the default 4,096 units; 228
+        // lanes reach them.
+        assert!(!operator.matvec_uses_team(executor.team(), 1));
+        assert!(!operator.matvec_uses_team(executor.team(), 64));
+        assert!(operator.matvec_uses_team(executor.team(), 228));
+    }
+}

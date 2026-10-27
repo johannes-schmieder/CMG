@@ -592,9 +592,10 @@ impl CsrLaplacian {
     }
 
     /// The one row (gather) kernel for vertex-major lanes: every lane of a row
-    /// sums its neighbors in canonical order from zero. Above the team's
-    /// parallel threshold, fixed row blocks run on the team and poll the
-    /// meter's query; serially, rows are counted by their entries.
+    /// sums its neighbors in canonical order from zero. When its work reaches
+    /// the team's parallel threshold ([`Self::matvec_uses_team`]), fixed row
+    /// blocks run on the team and poll the meter's query; serially, rows are
+    /// counted by their entries.
     pub(crate) fn matvec_lanes<W: Width, M: Meter>(
         &self,
         input: &[f64],
@@ -629,7 +630,7 @@ impl CsrLaplacian {
     ) -> Result<(), CmgError> {
         let columns = width.get();
         #[cfg(feature = "parallel")]
-        if let Some(team) = team.filter(|team| team.should_parallel(self.vertex_count)) {
+        if let Some(team) = team.filter(|&team| self.matvec_uses_team(team, columns)) {
             let rows = crate::preconditioner::rows_parallel_with(
                 team,
                 meter.query(),
@@ -644,6 +645,21 @@ impl CsrLaplacian {
             self.row_product(neighbors, input, columns, row, values, meter)?;
         }
         Ok(())
+    }
+
+    /// Whether a product over `columns` lanes runs on `team`. The gate counts
+    /// the row kernel's work, directed entries times lanes (at least one unit
+    /// per row), against the team's `min_parallel_len`, so a level with few
+    /// dense rows runs on the team while tiny levels stay serial. Rows keep
+    /// their serial arithmetic either way, so the choice never changes bits.
+    #[cfg(feature = "parallel")]
+    #[inline]
+    pub(crate) fn matvec_uses_team(&self, team: Team<'_>, columns: usize) -> bool {
+        team.should_parallel(
+            self.directed_entry_count()
+                .saturating_mul(columns)
+                .max(self.vertex_count),
+        )
     }
 
     /// One row of every lane, summed from zero over its neighbors in canonical

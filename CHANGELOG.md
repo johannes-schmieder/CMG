@@ -34,6 +34,17 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ### Changed
 
+- The row-operator (CSR) matvec gates team dispatch on its work, directed
+  entries times lanes (at least the row count), instead of its row count,
+  against the team's `min_parallel_len`. A planned level always has at least
+  that many edges, so every planned level's matvec now runs on a multi-worker
+  team, including dense coarse levels with fewer rows than the threshold
+  (previously serial); tiny operators and one-lane teams stay serial. Each row
+  keeps its serial canonical-order sum, so the change is arithmetic-preserving:
+  every output bit, plan, eligibility rule, hierarchy and frozen digest is
+  unchanged. Only the dispatch, and with it where a cancellation query lands,
+  differs.
+
 - Canonical edge sorting under a cancellation query uses one counted in-place
   introsort (`graph/edge_sort.rs`) on every path. Serial initial graphs and
   contraction no longer use the counted heapsort, and the hosted initial

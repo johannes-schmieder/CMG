@@ -100,6 +100,8 @@ SGE accounting remain in the isolated run archive.
 
 The default single-RHS planned threshold is **350,000 canonical retained edges**, provided more than one worker thread and either a routed operator or sufficiently large deterministic parallel vector work is available. The vector-only route is limited to connected graphs large enough for fixed-chunk centering and reductions. This is a measured performance heuristic, not a mathematical CMG constant, and can be overridden through `ParallelPcgPolicy`.
 
+Within a plan, a level receives a row operator when it is non-terminal, has at least `1.25 n` edges and at least `min_parallel_len` edges. A row-operator matvec runs on the team when its directed entries times lanes (at least its row count) reach `min_parallel_len`, so every planned level's matvec is team-parallel on a multi-worker team, dense coarse levels with few rows included; each row keeps its serial canonical-order sum, so dispatch never changes bits. Diagonal scaling, Jacobi updates and prolongation gate on rows times lanes.
+
 The retained hosted routing checkpoint is
 `.ci/performance/routing-checkpoint-959f635.json`; its largest dense worker-firm
 case reports roughly 2.2x planned-versus-serial full-PCG speedup with unchanged
