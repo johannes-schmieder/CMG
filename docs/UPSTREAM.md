@@ -23,9 +23,19 @@ This project is an independent Rust port of the official CMG implementation:
 - pinned commit
   [`19752fc102f8cae8e34f66457bfaccb1aaa60375`](https://github.com/ikoutis/cmg-solver/tree/19752fc102f8cae8e34f66457bfaccb1aaa60375)
 - upstream source path `matlab/cmg`
-- upstream license: GNU GPL version 3
+- license: MIT; see the permission below
 
 The pinned commit includes the 2026 correction to the C forest-component workspace initialization.
+
+## MIT permission — 2026-11-03
+
+On 2026-11-03 Johannes Schmieder confirmed that CMG's developers had granted
+official permission, communicated through Ioannis Koutis, to release CMG under
+the MIT license. Johannes selected MIT for CMG, fevc, and fereg on that basis.
+
+The MIT grant covers the Rust port and the adapted CMG benchmark kernels in
+this repository. Preserve the original authors' copyright notices and the
+full text in [`LICENSE`](../LICENSE).
 
 ## Source-of-truth order
 

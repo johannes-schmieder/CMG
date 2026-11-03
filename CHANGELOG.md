@@ -5,6 +5,12 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ## Unreleased
 
+### Changed
+
+- License CMG under MIT following permission from its developers via Ioannis
+  Koutis, confirmed by Johannes Schmieder on 2026-11-03. Preserve upstream
+  attribution and the existing numerical implementation.
+
 ### Added
 
 - Allocation-free fixed-cycle interleaved multi-RHS applications through
