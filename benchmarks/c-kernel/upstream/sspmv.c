@@ -4,7 +4,9 @@
  * Upstream: ikoutis/cmg-solver
  * Commit: 19752fc102f8cae8e34f66457bfaccb1aaa60375
  * Original path: matlab/cmg/mex/sspmv.c
- * License: GNU GPL version 3; see the repository LICENSE.
+ * Copyright (c) 2008-2020 Ioannis Koutis and Gary Miller
+ * SPDX-License-Identifier: MIT
+ * MIT permission confirmed 2026-11-03; see docs/UPSTREAM.md and LICENSE.
  *
  * The arithmetic loop is unchanged. MATLAB-specific headers and type aliases
  * are replaced by fixed-width standalone declarations.

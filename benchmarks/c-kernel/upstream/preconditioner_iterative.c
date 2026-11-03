@@ -4,7 +4,9 @@
  * Upstream: ikoutis/cmg-solver
  * Commit: 19752fc102f8cae8e34f66457bfaccb1aaa60375
  * Original path: matlab/cmg/mex/preconditioner.c
- * License: GNU GPL version 3; see the repository LICENSE.
+ * Copyright (c) 2008-2020 Ioannis Koutis and Gary Miller
+ * SPDX-License-Identifier: MIT
+ * MIT permission confirmed 2026-11-03; see docs/UPSTREAM.md and LICENSE.
  *
  * This benchmark-only adapter removes MATLAB headers and the direct LDL branch.
  * It exercises the same stationary cycle with an iterative terminal, using a
