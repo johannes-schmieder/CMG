@@ -2150,11 +2150,6 @@ pub(crate) fn serial_norm<M: Meter>(values: &[f64], meter: &mut M) -> Result<f64
     }
 }
 
-#[cfg(feature = "experimental-components")]
-pub(crate) fn euclidean_norm(values: &[f64]) -> f64 {
-    serial_norm(values, &mut crate::cancel::Unmetered).unwrap_or_else(|_| unreachable!())
-}
-
 /// Compute two independent scaled norms with interleaved arithmetic chains.
 /// Each maximum and compensated sum retains its original element order.
 #[cfg(feature = "experimental-components")]
@@ -2368,32 +2363,6 @@ fn diagnostics<M: Meter>(
         restarts,
         rhs_projection_norm,
     ))
-}
-
-#[cfg(feature = "experimental-components")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn make_diagnostics(
-    solution: &[f64],
-    iterations: usize,
-    initial_residual_norm: f64,
-    residual_norm: f64,
-    rhs_norm: f64,
-    tolerance: f64,
-    operator_bound: f64,
-    restarts: usize,
-    rhs_projection_norm: f64,
-) -> PcgDiagnostics {
-    diagnostics_with_norm(
-        euclidean_norm(solution),
-        iterations,
-        initial_residual_norm,
-        residual_norm,
-        rhs_norm,
-        tolerance,
-        operator_bound,
-        restarts,
-        rhs_projection_norm,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2633,8 +2602,18 @@ mod tests {
                         .map(|i| right_scale * (((i * 29) % 31) as f64 - 15.0))
                         .collect();
                     let pair = paired(&left, &right);
-                    assert_eq!(pair.0.to_bits(), euclidean_norm(&left).to_bits());
-                    assert_eq!(pair.1.to_bits(), euclidean_norm(&right).to_bits());
+                    assert_eq!(
+                        pair.0.to_bits(),
+                        serial_norm(&left, &mut crate::cancel::Unmetered)
+                            .unwrap()
+                            .to_bits()
+                    );
+                    assert_eq!(
+                        pair.1.to_bits(),
+                        serial_norm(&right, &mut crate::cancel::Unmetered)
+                            .unwrap()
+                            .to_bits()
+                    );
                 }
             }
         }
@@ -2646,8 +2625,18 @@ mod tests {
         ] {
             let right = [f64::from_bits(1), -f64::from_bits(2)];
             let pair = paired(&left, &right);
-            assert_eq!(pair.0.to_bits(), euclidean_norm(&left).to_bits());
-            assert_eq!(pair.1.to_bits(), euclidean_norm(&right).to_bits());
+            assert_eq!(
+                pair.0.to_bits(),
+                serial_norm(&left, &mut crate::cancel::Unmetered)
+                    .unwrap()
+                    .to_bits()
+            );
+            assert_eq!(
+                pair.1.to_bits(),
+                serial_norm(&right, &mut crate::cancel::Unmetered)
+                    .unwrap()
+                    .to_bits()
+            );
         }
     }
 
