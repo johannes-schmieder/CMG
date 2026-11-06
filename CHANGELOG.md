@@ -5,6 +5,21 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-06
+
+### Consolidation
+
+- Adopt one maintained implementation with host-owned teams, unified build,
+  application and solve contexts, checked cancellation and the 32-level default.
+  Consumers can explicitly retain a 128-level cap without a source fork.
+- Remove the unused `ComponentPcgExperiment`, `ComponentPcgWorkspace` and
+  `ComponentPcgDiagnostics` portfolio APIs and their dedicated benchmark.
+  Component pruning and terminal-factor options remain available and opt-in.
+- Replace the superseded controlled work-budget APIs with the unified contexts;
+  controlled scalar and interleaved workspace allocation remain supported.
+- Provide reproducible, byte-verified vendor snapshots for downstream packaging.
+
+
 ### Changed
 
 - License CMG under MIT following permission from its developers via Ioannis

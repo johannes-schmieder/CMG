@@ -113,6 +113,17 @@ Keep the root directory small. User-facing orientation belongs in `README.md`; m
 
 Follow `RELEASING.md` for version changes, tags, GitHub Releases, and future SSC publication. Run `python3 scripts/check_release_metadata.py` whenever release metadata changes.
 
+## Downstream source snapshots
+
+Consumers pin one reviewed full commit SHA reachable from `main`. Offline
+packages may vendor unmodified source from that same commit. Refresh with
+`python3 scripts/vendor.py refresh --source <CMG-checkout> --rev <SHA>
+--destination <vendor/cmg> --record <outside-payload/CMG-SOURCE.json>`.
+Run the same command with `check` to compare against upstream, or omit
+`--source` and `--rev` for a packaging-time byte check against the recorded
+inventory. Consumer adapters and provenance belong outside the CMG payload.
+Do not edit vendored numerical code or Cargo metadata.
+
 When a user-visible implementation constant or routing threshold changes, update its code comment/tests and the maintained documentation in the same checkpoint.
 
 ## Scope boundary

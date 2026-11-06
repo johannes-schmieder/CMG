@@ -867,26 +867,6 @@ fn sddm(cases: &mut BTreeMap<String, u64>) {
     cases.insert("sddm/solve".into(), digest.0);
 }
 
-#[cfg(feature = "experimental-components")]
-fn component_pcg(cases: &mut BTreeMap<String, u64>, name: &str, graph: &Laplacian) {
-    let experiment = ComponentPcgExperiment::build(graph, options(64)).unwrap();
-    let mut workspace = experiment.workspace().unwrap();
-    let rhs = compatible_rhs(graph, 41);
-    let mut solution = vec![0.0; graph.vertex_count()];
-    let diagnostics = experiment
-        .solve_into(&rhs, None, &mut solution, pcg_options(), &mut workspace)
-        .unwrap();
-    let mut digest = Digest::new();
-    digest.values(&solution);
-    digest.diagnostics(diagnostics.original());
-    if let Some(active) = diagnostics.active() {
-        digest.diagnostics(active);
-    }
-    digest.usize(experiment.active_vertices());
-    digest.usize(experiment.direct_vertices());
-    cases.insert(format!("{name}/component_pcg"), digest.0);
-}
-
 fn measure() -> BTreeMap<String, u64> {
     let mut cases = BTreeMap::new();
     let fixtures = [
@@ -919,7 +899,6 @@ fn measure() -> BTreeMap<String, u64> {
             #[cfg(feature = "parallel")]
             planned_cycles(&mut cases, &name, &graph, &component);
             solves(&mut cases, &name, &graph, &stale, &component);
-            component_pcg(&mut cases, &name, &graph);
         }
     }
     sddm(&mut cases);
@@ -1114,7 +1093,11 @@ fn consolidated_paths_reproduce_frozen_pre_consolidation_bits() {
             None => mismatches.push(format!("{case}: not frozen")),
         }
     }
-    for case in expected.keys().filter(|case| !measured.contains_key(*case)) {
+    // Preserve the immutable historical fixture; the removed portfolio is no longer a supported path.
+    for case in expected
+        .keys()
+        .filter(|case| !case.ends_with("/component_pcg") && !measured.contains_key(*case))
+    {
         mismatches.push(format!("{case}: frozen but not measured"));
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));

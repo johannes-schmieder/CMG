@@ -92,20 +92,21 @@ sets, or calculate bias-corrected variance components by itself.
 
 ## Installation
 
-CMG is currently a development crate at version `0.1.0`. It has not yet been
-published on crates.io and does not have a final GitHub release. Install the
-current development version directly from `main`:
+CMG 0.2.0 is distributed from this repository, not crates.io. Pin an exact
+reviewed commit on `main` for reproducible builds; the `v0.2.0` release identifies
+the consolidated API. For example, resolve the tag to its full commit SHA and
+use it as `rev`:
 
 ```toml
 [dependencies]
-cmg = { git = "https://github.com/johannes-schmieder/CMG", branch = "main" }
+cmg = { git = "https://github.com/johannes-schmieder/CMG", rev = "<full-reviewed-commit-sha>" }
 ```
 
 Enable the optional parallel implementation with:
 
 ```toml
 [dependencies]
-cmg = { git = "https://github.com/johannes-schmieder/CMG", branch = "main", features = ["parallel"] }
+cmg = { git = "https://github.com/johannes-schmieder/CMG", rev = "<full-reviewed-commit-sha>", features = ["parallel"] }
 ```
 
 The crate requires Rust 1.85 or newer. See [`RELEASING.md`](RELEASING.md) for
@@ -318,7 +319,7 @@ cargo build --release --manifest-path benchmarks/Cargo.toml --all-targets
 - [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — benchmark evidence, routing
   guidance, bottlenecks, and limitations.
 - [Component-aware experiments](docs/component-aware-cmg.md) — opt-in kernel
-  qualification and the explicit fixed-matrix tiny-component portfolio.
+  options, integration and qualification limits.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — code map, repository policy,
   and performance-change discipline.
 - [CMG teaching supplement](docs/teaching/README.md) — a visual, step-by-step
