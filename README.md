@@ -20,6 +20,13 @@ execution.
 > [upstream commit `19752fc`](https://github.com/ikoutis/cmg-solver/tree/19752fc102f8cae8e34f66457bfaccb1aaa60375).
 > It is not an official upstream release.
 
+## R package
+
+The optional [cmgr R package](cmgr/README.md) lives in this repository alongside
+the Rust solver. It provides two-way fixed-effect projection and an experimental
+fixest backend, including opt-in exact low-degree Schur elimination. The package
+builds a recorded snapshot of the canonical root source for offline R installation.
+
 ## What CMG does
 
 For an undirected graph with nonnegative edge weights, the weighted graph

@@ -35,4 +35,4 @@ rayon = { version = "1.12", optional = true }
 
 # Keep this standalone package independent of an embedding checkout workspace.
 [workspace]
-exclude = ["benchmarks", "benchmarks/c-kernel"]
+exclude = ["benchmarks", "benchmarks/c-kernel", "cmgr/src/rust"]

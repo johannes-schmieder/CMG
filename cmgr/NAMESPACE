@@ -1,0 +1,3 @@
+useDynLib(cmgr, .registration = TRUE)
+export(CmgDemeaner)
+export(demean_fixest)

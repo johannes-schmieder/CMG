@@ -1,0 +1,16 @@
+Package: cmgr
+Type: Package
+Title: Two-Way Fixed-Effect Projection with Combinatorial Multigrid
+Version: 0.0.2
+Authors@R: person("Johannes", "Schmieder", role = c("aut", "cre"), email = "johannes@bu.edu")
+Description: An experimental native interface to the CMG graph solver for
+    weighted projection on two categorical fixed effects. Provides batch
+    residualization and an opt-in adapter for the companion fixest branch.
+License: MIT + file LICENSE
+URL: https://github.com/johannes-schmieder/CMG/tree/main/cmgr
+BugReports: https://github.com/johannes-schmieder/CMG/issues
+Encoding: UTF-8
+Depends: R (>= 4.0.0)
+SystemRequirements: Rust (>= 1.85), Cargo, C compiler
+NeedsCompilation: yes
+Suggests: fixest

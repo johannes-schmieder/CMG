@@ -1,0 +1,12 @@
+src/rust/target/
+src/*.o
+src/*.so
+src/*.dll
+*.tar.gz
+*.Rcheck/
+
+__pycache__/
+*.pyc
+src/rust/vendor/cmg/
+inst/CMG-SOURCE
+inst/CMG-SOURCE.json

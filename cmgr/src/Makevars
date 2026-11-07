@@ -1,0 +1,11 @@
+PKG_LIBS = rust/target/release/libcmgr_native.a -lpthread -ldl -lm
+
+$(SHLIB): rust/target/release/libcmgr_native.a
+
+rust/target/release/libcmgr_native.a: rust/src/lib.rs rust/Cargo.toml rust/Cargo.lock
+	cd rust && cargo build --release --locked --offline
+
+# Let Cargo inspect vendored sources on every R build, including cached checkouts.
+.PHONY: clean rust/target/release/libcmgr_native.a
+clean:
+	rm -f $(OBJECTS) $(SHLIB)

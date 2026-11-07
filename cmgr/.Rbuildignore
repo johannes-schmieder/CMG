@@ -1,0 +1,8 @@
+^\.git$
+^\.gitignore$
+^bench$
+^benchmarks$
+^src/rust/target$
+^src/.*\.(o|so|dll|a)$
+^tools/__pycache__$
+^tools/.*\.pyc$

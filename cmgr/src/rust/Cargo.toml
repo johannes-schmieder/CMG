@@ -1,0 +1,16 @@
+[package]
+name = "cmgr-native"
+version = "0.0.2"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+[lib]
+crate-type = ["staticlib", "rlib"]
+[dependencies]
+cmg = { path = "vendor/cmg", features = ["parallel"] }
+rayon = "1.12"
+[profile.release]
+lto = "thin"
+codegen-units = 1
+[workspace]
+exclude = ["vendor/cmg"]
