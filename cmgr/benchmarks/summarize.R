@@ -47,15 +47,15 @@ summarize_benchmark <- function(out) {
     cells <- vapply(plan$methods,function(method) {
       row <- x[x$method==method,,drop=FALSE]
       if(nrow(row)!=1L) return("missing")
-      paste0(sprintf("%.3f",row$median_seconds),if(row$valid) "" else " †")
+      sprintf("%.3f",row$median_seconds)
     },character(1))
     lines <- c(lines,paste0("| ",paste(c(case,cells),collapse=" | ")," |"))
   }
-  lines <- c(lines,"","† At least one timed run/warmup failed an accuracy/convergence/sample check, or the expected repetitions were incomplete. Timings remain visible but no speedup ratio is reported against configurations that did not meet the shared checks.","",
-             "All methods use the same observations and regression; tolerances are solver-specific and are not mathematically interchangeable. Native tight: fixef.tol=1e-10, fixef.iter=20000. Withinr additive: atol=btol=1e-8, maxiter=10000. CMG without and with elimination both use tol=1e-8, maxiter=10000. With elimination, cmgr first removes workers with at most five distinct firms using exact algebra, solves the smaller system with CMG, and then recovers those workers' effects. The model and observations are the same in both CMG columns.","",
-             "Accuracy gates against independent sparse direct worker-Schur solve: coefficient <1e-7; original residual <1e-5; demeaned-column projection <1e-5; normalized original-FE moment <1e-8. The direct oracle is checked against dense dummy-variable QR on a small disconnected fixture.","",
+  lines <- c(lines,"","Times are at the solver-specific settings below and do not represent equal achieved accuracy. Tightening or loosening a tolerance can change a time.","",
+             "All methods use the same observations and regression; tolerances have different meanings and implementations across the solvers. Native default: fixef.tol=1e-6, fixef.iter=10000. Native tight: fixef.tol=1e-10, fixef.iter=20000. Withinr additive: atol=btol=1e-8, maxiter=10000. CMG without and with elimination both use tol=1e-8, maxiter=10000. With elimination, cmgr first removes workers with at most five distinct firms using exact algebra, solves the smaller system with CMG, and then recovers those workers' effects. The model and observations are the same in both CMG columns.","",
+             "As a simple illustration of achieved accuracy, summary.csv compares each fit with an independent sparse direct worker-Schur solve using ad hoc thresholds, which are not universal requirements: coefficient <1e-7; original residual <1e-5; demeaned column <1e-5; normalized original-FE moment <1e-8. The direct reference is checked against dense dummy-variable QR on a small disconnected fixture.","",
              "Thread budget: fixest nthreads=4, Rayon=4, BLAS thread environment=1. Each backend chooses its own use of that budget. Inputs: synthetic unit-weight panel; 20,000 workers × 6 years, 1,000 firms, four controls. These are not large administrative-data or memory benchmarks.","",
-             plan$memory,"","See identity.R for source revisions/status, installed binary hashes, package versions and host/thread settings; topology.csv for the realized panel graph; timings.csv and warmups.csv for every fit, warning, error, convergence flag and failed gate; ratios.csv for accuracy-qualified same-run comparisons.")
+             plan$memory,"","See identity.R for source revisions/status, installed binary hashes, package versions and host/thread settings; topology.csv for the realized panel graph; timings.csv and warmups.csv for every fit, warning, error, convergence flag and threshold exceeded; ratios.csv for same-run ratios, computed only where both methods met all four thresholds.")
   writeLines(lines,file.path(out,"comparison.md"))
   print(summary,row.names=FALSE)
   invisible(summary)

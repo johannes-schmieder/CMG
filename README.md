@@ -102,10 +102,8 @@ sets, or calculate bias-corrected variance components by itself.
 
 ## Installation
 
-CMG 0.2.0 is distributed from this repository, not crates.io. Pin an exact
-reviewed commit on `main` for reproducible builds; the `v0.2.0` release identifies
-the consolidated API. For example, resolve the tag to its full commit SHA and
-use it as `rev`:
+CMG is distributed from this repository, not crates.io. Pin an exact reviewed
+commit on `main` for reproducible builds, using its full commit SHA as `rev`:
 
 ```toml
 [dependencies]

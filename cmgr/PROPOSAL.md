@@ -51,7 +51,7 @@ cmgr has been tested only on Apple Silicon with Homebrew R 4.6.1, and has no Win
 
 ## Evidence
 
-A [frozen benchmark](benchmarks/results/2026-11-07/README.md) compares native fixest, withinr's additive backend and CMG with and without elimination on six short synthetic panels. It is exploratory, its design favors elimination, and it measures pinned sources rather than this patch. It supports no general speed claim and doesn't identify a bug in fixest. Tests in `tests/cmg_tests.R` and `tests/demeaner_tests.R` compare complete fits against native and dense QR references.
+A [benchmark](benchmarks/results/2026-11-07/README.md) compares native fixest, withinr's additive backend and CMG with and without elimination on six short synthetic panels. Tolerances have different meanings and implementations across these solvers, so its times aren't at equal achieved accuracy. As a simple illustration, it compares each fit with an independent direct solve using ad hoc thresholds. Native fixest is somewhat less accurate on particularly difficult low-mobility graphs in these measures, mainly in residuals and demeaned columns, while slopes agree closely. The comparison is exploratory, its design favors elimination, and it was timed at pinned revisions rather than this patch, so it supports no general speed claim. Tests in `tests/cmg_tests.R` and `tests/demeaner_tests.R` compare complete fits against native and dense QR references.
 
 ## Questions for maintainers
 

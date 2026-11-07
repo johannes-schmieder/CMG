@@ -14,22 +14,22 @@ The two CMG configurations differ in one step. With exact worker elimination, cm
 
 withinr's additive preconditioner applies its own approximate Schur step, so `withinr_additive` is not a method without elimination.
 
-The plan is fixed before the first fit: one warmup and three timed calls per method and case, for 120 fits. There is no calibration, adaptive rerun or exclusion of failed methods. Each timed call covers the whole `feols()` call, including backend setup. Garbage collection and the independent reference solve are outside the timer.
+The plan is fixed before the first fit: one warmup and three timed calls per method and case, for 120 fits. There is no calibration, adaptive rerun or exclusion of any method. Each timed call covers the whole `feols()` call, including backend setup. Garbage collection and the independent reference solve are outside the timer.
 
 ## Exact sources for the published results
 
-The published data came from these revisions. They are **not** the same as the preview release: the measured packages are cmgr 0.0.2 and fixest 0.14.2, and the preview packages are cmgr 0.0.3 and fixest 0.14.2.9000. Both CMG arms set `schur` explicitly, so the preview's constructor default doesn't change either measured configuration.
+The published data came from these revisions, not from the release tarballs.
 
-| Component | Repository | Revision | R package |
-|---|---|---|---|
-| cmgr package | [johannes-schmieder/CMG](https://github.com/johannes-schmieder/CMG) | `1f577d5e030d1f4b5fbeb99967a38f2bc0a66e47` | cmgr 0.0.2 |
-| Harness | [johannes-schmieder/CMG](https://github.com/johannes-schmieder/CMG) | `8d73db3f4221d27bbd2be036383e6e4540200dfd` | n/a |
-| fixest integration | [johannes-schmieder/fixest-cmg](https://github.com/johannes-schmieder/fixest-cmg) | `47b832bd4795927a36f05822c1f062b3f117a2ce` | fixest 0.14.2 |
-| withinr | [py-econometrics/within](https://github.com/py-econometrics/within), [PR #84](https://github.com/py-econometrics/within/pull/84) | `6a85c94b9c42ba6862e1e03e1bb370a067514fcd` | withinr 0.1.0 |
+| Component | Repository | Revision |
+|---|---|---|
+| cmgr package | [johannes-schmieder/CMG](https://github.com/johannes-schmieder/CMG) | `1f577d5e030d1f4b5fbeb99967a38f2bc0a66e47` |
+| Harness | [johannes-schmieder/CMG](https://github.com/johannes-schmieder/CMG) | `8d73db3f4221d27bbd2be036383e6e4540200dfd` |
+| fixest integration | [johannes-schmieder/fixest-cmg](https://github.com/johannes-schmieder/fixest-cmg) | `47b832bd4795927a36f05822c1f062b3f117a2ce` |
+| withinr | [py-econometrics/within](https://github.com/py-econometrics/within), [PR #84](https://github.com/py-econometrics/within/pull/84) | `6a85c94b9c42ba6862e1e03e1bb370a067514fcd` |
 
-The fixest integration is based on upstream fixest `cf9461331033e6f7276ad39d8203751690e619d4`. The withinr revision is the proposed R binding from PR #84, with its paired Rust crates in the same workspace. It is neither latest Rust `main` nor the older R-universe binding, so `install.packages("withinr")` will not reproduce it.
+The fixest integration is based on upstream fixest `cf9461331033e6f7276ad39d8203751690e619d4`. The withinr revision is the proposed R binding from PR #84, with its paired Rust crates in the same workspace. It isn't latest Rust `main` or the R-universe binding, so `install.packages("withinr")` will not reproduce it.
 
-The [`manifest.json`](results/2026-11-07/manifest.json) file records versions, hashes, hardware and settings. Its installed-file hashes identify the timed build; a rebuild on another machine need not match them byte for byte. Its script hashes refer to the pinned harness. Later wording changes to the report text in `summarize.R` don't change the stored data, and the stored results weren't regenerated.
+The [`manifest.json`](results/2026-11-07/manifest.json) file records package versions, hashes, hardware and settings. Its installed-file hashes identify the timed build; a rebuild on another machine need not match them byte for byte. Its script hashes refer to the pinned harness. The `summarize.R` on `main` differs from the pinned one only in the display text of `comparison.md`.
 
 ## Build a fresh library
 
@@ -59,9 +59,10 @@ git -C "$root/within" checkout 6a85c94b9c42ba6862e1e03e1bb370a067514fcd
 # Ordinary dependencies, plus Matrix for the reference solve. CRAN fixest is replaced below.
 Rscript --vanilla -e 'install.packages(c("fixest", "Matrix"), lib = commandArgs(TRUE)[1], repos = "https://cloud.r-project.org")' "$lib"
 
-# cmgr: build a source package, which generates the solver payload from Git, then install it.
+# cmgr: build a source package in the new, empty directory, which generates the
+# solver payload from Git, then install it.
 (cd "$root/pkg" && "$root/CMG-package/cmgr/tools/build.sh")
-R_LIBS_USER="$lib" R CMD INSTALL --library="$lib" "$root/pkg/cmgr_0.0.2.tar.gz"
+R_LIBS_USER="$lib" R CMD INSTALL --library="$lib" "$root/pkg"/cmgr_*.tar.gz
 
 # fixest integration.
 R_LIBS_USER="$lib" R CMD INSTALL --library="$lib" "$root/fixest"
@@ -72,7 +73,7 @@ R_LIBS_USER="$lib" R CMD INSTALL --library="$lib" "$root/fixest"
 
 cmgr compiles offline from its bundled sources. withinr's Rust dependencies are resolved by Cargo, so that step may need network access. If an installer reports a missing R dependency, install it into the same library.
 
-Dependency versions from CRAN aren't pinned by this recipe. The manifest lists the versions in the measured run, and the installed fixest and cmgr should report the versions in the table above.
+Dependency versions from CRAN aren't pinned by this recipe. The manifest lists the package versions in the measured run, and the installed packages should report the same versions for fixest, cmgr and withinr.
 
 ## Run
 
@@ -123,33 +124,35 @@ This overwrites `summary.csv` and `ratios.csv` and writes `comparison.md` in tha
 
 | Output | Contents |
 |---|---|
-| `timings.csv`, `warmups.csv` | Every fit, with elapsed time, errors, flags, warnings and failed gates |
-| `summary.csv` | Median, minimum and maximum time, plus worst-case errors, per case and method |
-| `ratios.csv` | Pairwise ratios of medians, only when both sides qualify |
+| `timings.csv`, `warmups.csv` | Every fit, with elapsed time, errors, flags, warnings and any thresholds exceeded |
+| `summary.csv` | Median, minimum and maximum time, plus largest differences, per case and method |
+| `ratios.csv` | Pairwise ratios of medians, only when both sides met all four thresholds |
 | `topology.csv` | Realized mobility, connected components and graph size per case |
-| `plan.R` | The fixed plan and gates |
+| `plan.R` | The fixed plan and thresholds, named `gates` in the file |
 | `oracle-check.txt` | Reference solve compared with dense QR |
 
 ## Interpreting results
 
-**Accuracy decides whether a time counts.** Each fit is compared with an independent sparse direct solve (R/Matrix, no cmgr calls). A method qualifies in a case only if the warmup and all three timed calls keep the full sample, report no nonconvergence, produce finite metrics, and are strictly below all four gates:
+Tolerances have different meanings and implementations across these solvers, so the same number doesn't mean the same accuracy. As a simple illustration, each fit is compared with an independent sparse direct solve (R/Matrix, no cmgr calls) using ad hoc thresholds. They aren't universal requirements for correct results.
 
-| Metric | Gate | Measures |
+| Metric | Threshold | Measures |
 |---|---|---|
-| Coefficient | `1e-7` | Largest absolute difference from reference coefficients |
-| Residual | `1e-5` | Largest absolute difference from reference regression residuals |
-| Projection | `1e-5` | Largest absolute difference across the demeaned outcome and controls |
+| Coefficients | `1e-7` | Largest absolute difference from reference coefficients |
+| Regression residuals | `1e-5` | Largest absolute difference from reference regression residuals |
+| Demeaned columns | `1e-5` | Largest absolute difference across the demeaned outcome and controls |
 | Normalized FE moment | `1e-8` | Largest value, across worker and firm groups and columns, of abs(sum of the projected column within the group) / (sqrt(observations in that group) × Euclidean norm of the centered original column); weights are all one here |
+
+A result's `valid` flag also requires that the warmup and all three timed calls keep the full sample, report no nonconvergence and produce finite metrics.
 
 When reading the results:
 
-1. **Don't compute a speedup against an unqualified result.** Its time stays visible, but `ratios.csv` gives no ratio for it.
-2. **Read which gate failed, and by how much.** A failed gate doesn't necessarily mean wrong coefficients. These gates are stricter than many applications need, and a failure here is not by itself evidence of a bug in that method.
-3. **Don't equate tolerance numbers.** MAP, LSMR and CMG stop on different criteria. Accepted fits can have quite different achieved errors, so this isn't a time-to-identical-accuracy frontier.
-4. **An absent convergence flag isn't a certificate.** Successful `feols()` calls usually omit `convStatus`, which appears as `NA` in `converged`. The independent gates still apply.
+1. **Times aren't at equal accuracy.** Each time is for that method's settings. Tightening or loosening a tolerance can change it, and this benchmark doesn't measure time to identical accuracy.
+2. **Ratios are limited.** `ratios.csv` gives a ratio only when both sides met all four thresholds. All other times stay visible in `summary.csv`.
+3. **Read the metric and the size of the difference.** Being above a threshold doesn't mean the coefficients are wrong. Slopes can agree closely while residuals or demeaned columns differ more.
+4. **An absent convergence flag isn't a certificate.** Successful `feols()` calls usually omit `convStatus`, which appears as `NA` in `converged`. The independent comparison still applies.
 5. **Don't over-read small differences.** Timer resolution is one millisecond and there are three repeats on one dataset per case. Medians are exploratory, not confidence intervals.
 6. **Thread settings are budgets.** Actual CPU use isn't measured, and each backend uses the budget in its own way.
 7. **Memory isn't measured.** Process-level peak memory can't fairly separate methods that share a process and its runtime pools.
 8. **Report the graph with the times.** Short panels and low mobility are well suited to elimination, so results don't transfer directly to long panels or many high-degree workers.
 
-A run with any other source revision, including the preview packages, is a new experiment. It can use this harness, but keep its results separate and record its own source identities.
+A run with any other source revision, including the release packages, is a separate experiment. It can use this harness, but keep its results separate and record its own source identities.
