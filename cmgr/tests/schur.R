@@ -17,14 +17,19 @@ v <- cbind(rnorm(length(a)), rnorm(length(a)), 0, 3,
 for (weights in list(rep(1,length(a)), exp(rnorm(length(a))), 10^runif(length(a),-4,4))) {
     D <- model.matrix(~factor(a)+factor(b))
     ref <- lm.wfit(D,v,w=weights)$residuals
+    # Check each column on its own residual scale. The roundoff floor follows
+    # the input scale and allows weighted-QR roundoff, so a small column cannot
+    # pass merely by returning zeros.
+    bound <- 2e-7 * apply(abs(ref), 2L, max) +
+             1e-12 * apply(abs(v), 2L, max)
     for (threads in c(1L,4L)) for (swap in c(FALSE,TRUE)) {
         ids <- if (swap) list(b,a) else list(a,b)
         sizes <- if (swap) c(13,65) else c(65,13)
         ans <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,schur=TRUE,tol=1e-10)
         again <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,tol=1e-10)
         off <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,schur=FALSE,tol=1e-10)
-        stopifnot(max(abs(ans$X_demean-ref)) < 2e-7,
-                  max(abs(ans$X_demean-off$X_demean)) < 2e-7,
+        stopifnot(all(apply(abs(ans$X_demean-ref), 2L, max) <= bound),
+                  all(apply(abs(ans$X_demean-off$X_demean), 2L, max) <= bound),
                   all(ans$fe_moment <= 1e-10),
                   identical(ans$X_demean,again$X_demean),
                   ans$reduction['effect'] == if(swap) 2 else 1,

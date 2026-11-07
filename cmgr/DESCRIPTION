@@ -1,7 +1,7 @@
 Package: cmgr
 Type: Package
 Title: Two-Way Fixed-Effect Projection with Combinatorial Multigrid
-Version: 0.0.2
+Version: 0.0.3
 Authors@R: person("Johannes", "Schmieder", role = c("aut", "cre"), email = "johannes@bu.edu")
 Description: An experimental native interface to the CMG graph solver for
     weighted projection on two categorical fixed effects. Provides batch

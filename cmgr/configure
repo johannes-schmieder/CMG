@@ -3,6 +3,8 @@ set -eu
 if test -f ../Cargo.toml && test -f ../src/lib.rs; then
     python3 tools/prepare_source.py
 elif ! test -f src/rust/vendor/cmg/Cargo.toml; then
-    echo 'Missing CMG source payload. Build the source package with cmgr/tools/build.sh.' >&2
+    echo 'Missing CMG source payload. Install a generated cmgr source tarball from' >&2
+    echo 'https://github.com/johannes-schmieder/CMG/releases' >&2
+    echo 'or build one from a Git checkout with cmgr/tools/build.sh.' >&2
     exit 1
 fi

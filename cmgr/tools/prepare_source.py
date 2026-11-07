@@ -17,15 +17,30 @@ source = package.parent
 if not (source / 'Cargo.toml').is_file() or not (source / 'src/lib.rs').is_file():
     raise SystemExit('Run this tool from the cmgr directory inside the CMG repository.')
 
-# Never silently build a stale committed solver when its working source differs.
+try:
+    git_root = subprocess.check_output(
+        ['git', '-C', str(source), 'rev-parse', '--show-toplevel'],
+        text=True, stderr=subprocess.PIPE).strip()
+except subprocess.CalledProcessError:
+    git_root = ''
+if not git_root or Path(git_root).resolve() != source.resolve():
+    raise SystemExit(
+        'Preparing CMG requires a Git checkout. Install a generated cmgr source '
+        'tarball from https://github.com/johannes-schmieder/CMG/releases instead.')
+
+# The provenance commit must identify both the solver and the maintained R
+# adapter. Git ignores exclude generated payloads, native builds and caches;
+# untracked maintained files must be committed rather than silently packaged.
+source_paths = [*sorted(ROOT_FILES), *sorted(DIRECTORIES), 'cmgr']
 changed = subprocess.check_output(
-    ['git', '-C', str(source), 'diff', 'HEAD', '--name-only', '--',
-     *sorted(ROOT_FILES), *sorted(DIRECTORIES)], text=True).splitlines()
+    ['git', '-C', str(source), 'diff', 'HEAD', '--name-only', '-z', '--',
+     *source_paths], text=True).split('\0')
 untracked = subprocess.check_output(
-    ['git', '-C', str(source), 'ls-files', '--others', '--exclude-standard', '--',
-     *sorted(ROOT_FILES), *sorted(DIRECTORIES)], text=True).splitlines()
-if changed or untracked:
-    raise SystemExit('Commit CMG source changes before packaging: ' + ', '.join(changed + untracked))
+    ['git', '-C', str(source), 'ls-files', '--others', '--exclude-standard', '-z', '--',
+     *source_paths], text=True).split('\0')
+changed = [path for path in changed + untracked if path]
+if changed:
+    raise SystemExit('Commit CMG and cmgr source changes before packaging: ' + ', '.join(changed))
 
 subprocess.run([sys.executable, str(package / 'tools/cmg_vendor.py'), 'refresh',
                 '--source', str(source), '--rev', 'HEAD',
