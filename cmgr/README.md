@@ -21,8 +21,9 @@ The supported interface is two categorical intercept effects, including weighted
 OLS, IV, multiple outcomes, stepwise regressors, split samples, offsets,
 FE-only fits, `feols.fit()` and `demean()`. Three or more effects, varying slopes,
 stepwise fixed-effect specifications and GLM/PPML are rejected. The constructor
-and dispatcher are experimental and should be reconciled with fixest PR #647
-before proposing an upstream interface.
+and dispatcher follow the configuration-object proposal in fixest PR #647.
+The proposal and this integration remain experimental and require maintainer
+agreement before an upstream release.
 
 
 ## Optional exact worker elimination
