@@ -21,7 +21,7 @@ for (weights in list(rep(1,length(a)), exp(rnorm(length(a))), 10^runif(length(a)
         ids <- if (swap) list(b,a) else list(a,b)
         sizes <- if (swap) c(13,65) else c(65,13)
         ans <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,schur=TRUE,tol=1e-10)
-        again <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,schur=TRUE,tol=1e-10)
+        again <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,tol=1e-10)
         off <- demean_fixest(0,v,ids,sizes,weights=weights,nthreads=threads,schur=FALSE,tol=1e-10)
         stopifnot(max(abs(ans$X_demean-ref)) < 2e-7,
                   max(abs(ans$X_demean-off$X_demean)) < 2e-7,

@@ -1,10 +1,10 @@
 \name{CmgDemeaner}
 \alias{CmgDemeaner}
 \title{Configure the optional two-way CMG backend}
-\usage{CmgDemeaner(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = FALSE,
+\usage{CmgDemeaner(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = TRUE,
   tol, maxiter)}
 \arguments{
-\item{schur}{Enable exact low-degree Schur elimination. Defaults to FALSE, preserving the full CMG graph.}
+\item{schur}{Enable exact low-degree Schur elimination. Defaults to TRUE. Set \code{schur = FALSE} to retain the full CMG graph.}
 \item{fixef_tol}{Positive relative weighted fixed-effect moment tolerance, less than one.}
 \item{fixef_maxiter}{Maximum PCG iterations per column.}
 \item{tol,maxiter}{Compatibility aliases. Do not supply an alias and its canonical argument together.}

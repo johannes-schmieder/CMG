@@ -2,7 +2,7 @@
 \alias{demean_fixest}
 \title{Project prepared columns on two categorical fixed effects}
 \usage{demean_fixest(y, X_raw, fe_id_list, r_nb_id_Q, weights = NULL,
-  tol = 1e-8, maxiter = 10000L, nthreads = 1L, schur = FALSE)}
+  tol = 1e-8, maxiter = 10000L, nthreads = 1L, schur = TRUE)}
 \arguments{
 \item{y}{Numeric outcome vector, list of outcome vectors, or scalar zero if absent.}
 \item{X_raw}{Numeric regressor matrix, or scalar zero if absent.}

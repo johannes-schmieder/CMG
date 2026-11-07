@@ -3,9 +3,10 @@
 #' @param fixef_maxiter Maximum PCG iterations per column.
 #' @param tol,maxiter Compatibility aliases for fixef_tol and fixef_maxiter.
 #' @param schur Enable exact elimination of levels with at most five distinct
-#'   neighbors from the larger fixed-effect block (normally workers).
+#'   neighbors from the larger fixed-effect block (normally workers). Enabled
+#'   by default; set FALSE to retain the full CMG graph.
 #' @export
-CmgDemeaner <- function(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = FALSE,
+CmgDemeaner <- function(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = TRUE,
                        tol, maxiter) {
     if (!missing(tol)) {
         if (!missing(fixef_tol)) stop("Supply only one of fixef_tol and tol.")
@@ -41,7 +42,7 @@ CmgDemeaner <- function(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = FALSE,
 #' @export
 demean_fixest <- function(y, X_raw, fe_id_list, r_nb_id_Q,
                          weights = NULL, tol = 1e-8, maxiter = 10000L,
-                         nthreads = 1L, schur = FALSE) {
+                         nthreads = 1L, schur = TRUE) {
     control <- CmgDemeaner(tol, maxiter, schur)
     if (!is.list(fe_id_list) || length(fe_id_list) != 2L)
         stop("CMG requires exactly two categorical fixed effects.")
