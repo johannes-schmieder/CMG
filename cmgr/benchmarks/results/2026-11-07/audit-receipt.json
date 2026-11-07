@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "operation": "verify_benchmark_data",
+  "recorded_utc": "2026-11-07T13:08:37.627191+00:00",
+  "copied_unchanged": [
+    {
+      "file": "timings.csv",
+      "source_sha256": "923096ca50aa2fe06025bdb3b4813e24b217e123e03e8a2d05d9994eb976f58a",
+      "public_sha256": "923096ca50aa2fe06025bdb3b4813e24b217e123e03e8a2d05d9994eb976f58a",
+      "bytes": 16574,
+      "byte_identity_verified": true
+    },
+    {
+      "file": "warmups.csv",
+      "source_sha256": "81846c21e53a60a64fb0548037e775cb8480c1eaf7abb3d49161f40cfa497afc",
+      "public_sha256": "81846c21e53a60a64fb0548037e775cb8480c1eaf7abb3d49161f40cfa497afc",
+      "bytes": 5676,
+      "byte_identity_verified": true
+    },
+    {
+      "file": "summary.csv",
+      "source_sha256": "e1228571d76f772de20812f823f1348c084e019159e56d25c71a995c969e065e",
+      "public_sha256": "e1228571d76f772de20812f823f1348c084e019159e56d25c71a995c969e065e",
+      "bytes": 6325,
+      "byte_identity_verified": true
+    },
+    {
+      "file": "ratios.csv",
+      "source_sha256": "1d7d7aa99f1e3cc4dced49445e1c5453aa33db2380faaa039ab6163c8e3f2bd0",
+      "public_sha256": "1d7d7aa99f1e3cc4dced49445e1c5453aa33db2380faaa039ab6163c8e3f2bd0",
+      "bytes": 16383,
+      "byte_identity_verified": true
+    },
+    {
+      "file": "topology.csv",
+      "source_sha256": "6959871f32f26ffc68119af918268e63f04f39b3854ba764218d5ce3aa2ec8eb",
+      "public_sha256": "6959871f32f26ffc68119af918268e63f04f39b3854ba764218d5ce3aa2ec8eb",
+      "bytes": 524,
+      "byte_identity_verified": true
+    },
+    {
+      "file": "plan.R",
+      "source_sha256": "54cdff1046c944935b18a995a17071856946ea0e8dc2eeb65227ee95543b4ef8",
+      "public_sha256": "54cdff1046c944935b18a995a17071856946ea0e8dc2eeb65227ee95543b4ef8",
+      "bytes": 1336,
+      "byte_identity_verified": true
+    },
+    {
+      "file": "oracle-check.txt",
+      "source_sha256": "39a38c353c690c818f2c527a2a9b5911d66141c2d33a967224edbe7390637293",
+      "public_sha256": "39a38c353c690c818f2c527a2a9b5911d66141c2d33a967224edbe7390637293",
+      "bytes": 59,
+      "byte_identity_verified": true
+    }
+  ],
+  "generated_files": {
+    "manifest.json": {
+      "sha256": "3cd47a9609ce8a6ab4c029979feacd067158e9e36a7e7c1732fc8607b11c2523"
+    }
+  },
+  "independent_recomputation": {
+    "independently_recomputed_timed_rows": 90,
+    "independently_checked_warmup_rows": 30,
+    "independently_recomputed_medians": 30,
+    "independently_checked_ratio_rows": 120,
+    "all_raw_validity_flags_match_recomputed_gates": true,
+    "fit_error_count": 0,
+    "fit_warning_count": 0,
+    "assessment_error_count": 0,
+    "valid_case_counts": {
+      "native_default": 0,
+      "native_tight": 2,
+      "withinr_additive": 6,
+      "cmg_off": 6,
+      "cmg_schur": 6
+    }
+  },
+  "checksum_coverage": "SHA256SUMS covers the published data and metadata; README.md is the accompanying report."
+}

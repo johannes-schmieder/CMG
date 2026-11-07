@@ -24,7 +24,10 @@ execution.
 
 The optional [cmgr R package](cmgr/README.md) lives in this repository alongside
 the Rust solver. It provides two-way fixed-effect projection and an experimental
-fixest backend, including opt-in exact low-degree Schur elimination. The package
+fixest backend. By default it first removes workers with at most five distinct
+firms using exact algebra, then solves the smaller system with CMG; `schur = FALSE`
+makes CMG solve the full worker-firm graph for the same model and observations.
+See [exact worker elimination](cmgr/README.md#exact-worker-elimination). The package
 builds a recorded snapshot of the canonical root source for offline R installation.
 
 ## What CMG does

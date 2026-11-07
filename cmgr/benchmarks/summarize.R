@@ -38,9 +38,9 @@ summarize_benchmark <- function(out) {
     }
   }
   write.csv(do.call(rbind,ratios),file.path(out,"ratios.csv"),row.names=FALSE)
-  lines <- c("# Fresh five-method fixest comparison", "",paste0("Mode: ",plan$mode,"."),"",
+  lines <- c("# Five-method fixest comparison", "",paste0("Mode: ",plan$mode,"."),"",
              "Times are median elapsed seconds for complete feols calls, including backend setup; three timed repetitions after one warmup per method/case.","",
-             "| Case | Native default | Native tight | Withinr additive | CMG | CMG + Schur |",
+             "| Case | Native default | Native tight | Withinr additive | CMG without elimination | CMG with elimination |",
              "|---|---:|---:|---:|---:|---:|")
   for(case in case_order) {
     x <- summary[summary$case==case,,drop=FALSE]
@@ -51,8 +51,8 @@ summarize_benchmark <- function(out) {
     },character(1))
     lines <- c(lines,paste0("| ",paste(c(case,cells),collapse=" | ")," |"))
   }
-  lines <- c(lines,"","† At least one timed run/warmup failed an accuracy/convergence/sample check, or the expected repetitions were incomplete. Timings remain visible but no speedup ratio is reported against invalid configurations.","",
-             "All methods use the same observations and regression; tolerances are solver-specific and are not mathematically interchangeable. Native tight: fixef.tol=1e-10, fixef.iter=20000. Withinr additive: atol=btol=1e-8, maxiter=10000. CMG: tol=1e-8, maxiter=10000; Schur differs only in exact degree-at-most-five elimination.","",
+  lines <- c(lines,"","† At least one timed run/warmup failed an accuracy/convergence/sample check, or the expected repetitions were incomplete. Timings remain visible but no speedup ratio is reported against configurations that did not meet the shared checks.","",
+             "All methods use the same observations and regression; tolerances are solver-specific and are not mathematically interchangeable. Native tight: fixef.tol=1e-10, fixef.iter=20000. Withinr additive: atol=btol=1e-8, maxiter=10000. CMG without and with elimination both use tol=1e-8, maxiter=10000. With elimination, cmgr first removes workers with at most five distinct firms using exact algebra, solves the smaller system with CMG, and then recovers those workers' effects. The model and observations are the same in both CMG columns.","",
              "Accuracy gates against independent sparse direct worker-Schur solve: coefficient <1e-7; original residual <1e-5; demeaned-column projection <1e-5; normalized original-FE moment <1e-8. The direct oracle is checked against dense dummy-variable QR on a small disconnected fixture.","",
              "Thread budget: fixest nthreads=4, Rayon=4, BLAS thread environment=1. Each backend chooses its own use of that budget. Inputs: synthetic unit-weight panel; 20,000 workers × 6 years, 1,000 firms, four controls. These are not large administrative-data or memory benchmarks.","",
              plan$memory,"","See identity.R for source revisions/status, installed binary hashes, package versions and host/thread settings; topology.csv for the realized panel graph; timings.csv and warmups.csv for every fit, warning, error, convergence flag and failed gate; ratios.csv for accuracy-qualified same-run comparisons.")

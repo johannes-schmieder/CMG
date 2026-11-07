@@ -1,10 +1,50 @@
-#' Configure the opt-in two-way CMG demeaner
-#' @param fixef_tol Relative weighted fixed-effect moment tolerance.
-#' @param fixef_maxiter Maximum PCG iterations per column.
-#' @param tol,maxiter Compatibility aliases for fixef_tol and fixef_maxiter.
-#' @param schur Enable exact elimination of levels with at most five distinct
-#'   neighbors from the larger fixed-effect block (normally workers). Enabled
-#'   by default; set FALSE to retain the full CMG graph.
+#' Configure the optional two-way CMG backend
+#'
+#' Creates a validated configuration for two-way fixed-effect projection with
+#' CMG-preconditioned conjugate gradients. It is used by the experimental fixest
+#' backend, which supports OLS with two categorical intercept effects.
+#'
+#' \strong{Exact worker elimination.} A worker with few employers does not need
+#' to be part of the graph that CMG solves. Given the firm effects, that worker's
+#' effect is the worker's weighted mean of the outcome net of those firm effects.
+#' Substituting this into the system removes the worker exactly and connects the
+#' worker's firms directly. After the smaller system is solved, the worker's
+#' effect is recovered.
+#'
+#' This is applied by default, as preprocessing inside cmgr. It works on the
+#' fixed-effect block with more levels (normally workers; the first block on a
+#' tie) and eliminates only levels with at most five distinct neighbors. Repeated
+#' worker-firm observations are combined before counting. Higher-degree levels
+#' stay in the solved graph. Nothing is sampled or approximated, no observations
+#' are dropped, and CMG's options and PCG implementation are unchanged.
+#'
+#' \code{schur = FALSE} is an optional comparison and troubleshooting switch. It
+#' disables this algebraic reduction, so CMG solves the full worker-firm graph
+#' for the same model and observations. It does not select another solver or
+#' estimator.
+#'
+#' \strong{Tolerance.} \code{fixef_tol} bounds the largest weighted group moment,
+#' divided by the square root of the group weight and the weighted norm of the
+#' centered input column. This is recomputed from the returned observations, and
+#' failure raises an error. It is not equivalent to fixest's native stopping
+#' tolerance, and it is not a guarantee of coefficient accuracy on ill-conditioned
+#' graphs.
+#'
+#' @param fixef_tol Numeric scalar, finite and strictly between zero and one.
+#'   Relative weighted fixed-effect moment tolerance; see Details.
+#' @param fixef_maxiter Positive whole number. Maximum PCG iterations per column.
+#' @param schur \code{TRUE} (default) or \code{FALSE}. Whether to apply exact
+#'   worker elimination before the CMG solve; see Details.
+#' @param tol,maxiter Compatibility aliases for \code{fixef_tol} and
+#'   \code{fixef_maxiter}. Supplying an alias together with its canonical argument
+#'   is an error.
+#' @return A list of class \code{c("fixest_demeaner_cmg", "fixest_demeaner")} with
+#'   elements \code{fixef_tol}, \code{fixef_maxiter} (an integer) and \code{schur}.
+#' @seealso \code{\link{demean_fixest}}
+#' @examples
+#' CmgDemeaner()
+#' CmgDemeaner(fixef_tol = 1e-10)
+#' CmgDemeaner(schur = FALSE)
 #' @export
 CmgDemeaner <- function(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = TRUE,
                        tol, maxiter) {
@@ -28,17 +68,76 @@ CmgDemeaner <- function(fixef_tol = 1e-8, fixef_maxiter = 10000L, schur = TRUE,
               class = c("fixest_demeaner_cmg", "fixest_demeaner"))
 }
 
-#' Residualize fixest's prepared columns on two categorical effects
-#' @param y Numeric outcome vector, list of vectors, or scalar zero when absent.
-#' @param X_raw Numeric matrix, or scalar zero when absent.
-#' @param fe_id_list List of two positive integer ID vectors.
-#' @param r_nb_id_Q Two level counts corresponding to the ID vectors.
-#' @param weights Positive observation weights, or NULL for unit weights.
-#' @param tol Relative weighted fixed-effect moment tolerance.
-#' @param maxiter Maximum PCG iterations per column.
-#' @param schur See CmgDemeaner().
-#' @param nthreads Maximum numerical worker count.
-#' @return A list with residualized columns, iterations and diagnostics.
+#' Project prepared columns on two categorical fixed effects
+#'
+#' Residualizes numeric columns on two categorical intercept effects, using
+#' CMG-preconditioned conjugate gradients in native code.
+#'
+#' Input rows must already match the estimator's selected sample; no rows are
+#' removed. Returned columns are in their original units and are not multiplied
+#' by square-root weights.
+#'
+#' Each call builds one hierarchy, which serves all of its columns. Nothing is
+#' cached across calls. Named-effect recovery, GLM or IRLS reweighting, varying
+#' slopes and a total-process memory cap are not provided.
+#'
+#' Invalid input, an exhausted iteration budget or a failed moment check raises an
+#' error rather than returning partial results. An interrupt requests native
+#' cancellation, and all native work is joined before an error is raised. That
+#' error is an ordinary R error, so \code{try()} and error handlers can catch it.
+#'
+#' @param y Numeric outcome vector, list of numeric outcome vectors, or scalar
+#'   zero if absent.
+#' @param X_raw Numeric regressor matrix, or scalar zero if absent.
+#' @param fe_id_list List of two integer ID vectors of equal length (at least two
+#'   observations), with compact one-based IDs.
+#' @param r_nb_id_Q Two positive whole numbers giving the level counts for the ID
+#'   vectors. Every declared level must occur.
+#' @param weights Positive finite observation weights, or \code{NULL} for unit
+#'   weights.
+#' @param tol Numeric scalar, finite and strictly between zero and one. Relative
+#'   weighted fixed-effect moment tolerance; see \code{\link{CmgDemeaner}}.
+#' @param maxiter Positive whole number. Maximum PCG iterations per column.
+#' @param nthreads Whole number from 1 to 1024. Maximum concurrent numerical
+#'   workers.
+#' @param schur \code{TRUE} (default) or \code{FALSE}. Whether to apply exact
+#'   worker elimination before the CMG solve. \code{FALSE} makes CMG solve the full
+#'   worker-firm graph for the same projection; see \code{\link{CmgDemeaner}}.
+#' @return A list with elements:
+#' \describe{
+#' \item{\code{X_demean}}{Residualized regressor matrix with the column names of
+#'   \code{X_raw}, or a 1-by-1 zero matrix if \code{X_raw} is absent.}
+#' \item{\code{y_demean}}{Residualized outcome, with a vector or list shape
+#'   matching \code{y}, or scalar zero if absent.}
+#' \item{\code{iterations}}{PCG iterations for each column.}
+#' \item{\code{means}}{Zero, because no warm-start state is exposed.}
+#' \item{\code{fe_moment}}{Normalized weighted moment for each column, checked
+#'   against both original fixed-effect blocks.}
+#' \item{\code{graph_residual}}{Graph residual diagnostic for each column. It
+#'   refers to the system actually solved, which changes when elimination is
+#'   applied.}
+#' \item{\code{timing}}{Named vector: \code{vertices}, \code{edges} and
+#'   \code{levels} of the solved system, then \code{setup}, \code{projection} and
+#'   \code{total} native seconds. R allocation and binding time are excluded.}
+#' \item{\code{reduction}}{Named vector: \code{original_vertices}; \code{effect},
+#'   the selected block (1 or 2 in the supplied order, 0 when disabled);
+#'   \code{eliminated_levels} and \code{retained_levels} in that block;
+#'   \code{max_degree}, the degree cutoff (5 when enabled, 0 otherwise).}
+#' }
+#' The per-column diagnostics are in X-then-y order.
+#' @seealso \code{\link{CmgDemeaner}}
+#' @examples
+#' set.seed(1)
+#' worker <- rep(1:40, each = 5)
+#' firm <- rep_len(1:8, length(worker))
+#' x <- cbind(x = rnorm(length(worker)))
+#' y <- rnorm(length(worker))
+#'
+#' ans <- demean_fixest(y, x, list(worker, firm), c(40L, 8L))
+#' ans$reduction
+#'
+#' full_graph <- demean_fixest(y, x, list(worker, firm), c(40L, 8L), schur = FALSE)
+#' max(abs(ans$y_demean - full_graph$y_demean))
 #' @export
 demean_fixest <- function(y, X_raw, fe_id_list, r_nb_id_Q,
                          weights = NULL, tol = 1e-8, maxiter = 10000L,

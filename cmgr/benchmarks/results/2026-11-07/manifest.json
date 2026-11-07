@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "experiment_id": "akm-five-method-20261107",
+  "status": "completed_frozen_benchmark",
+  "started_utc": "2026-11-07 12:20:08 UTC",
+  "finished_utc": "2026-11-07 12:23:05 UTC",
+  "scope": "Six synthetic unweighted AKM-style panels; complete feols calls including backend setup.",
+  "tested_sources": {
+    "cmgr": {
+      "repository": "https://github.com/johannes-schmieder/CMG",
+      "package_directory": "cmgr",
+      "commit": "1f577d5e030d1f4b5fbeb99967a38f2bc0a66e47",
+      "R_package_version": "0.0.2",
+      "source_package_sha256": "897c83dcf7a9819b177882f0dcac0fd802135458683f1ad13d17f4c3dca18ce0",
+      "bundled_CMG_files_verified": 119,
+      "constructor_schur_default": false,
+      "benchmark_schur_flags_explicit": true
+    },
+    "benchmark_harness": {
+      "repository": "https://github.com/johannes-schmieder/CMG",
+      "commit": "8d73db3f4221d27bbd2be036383e6e4540200dfd",
+      "directory": "cmgr/benchmarks",
+      "files_sha256": {
+        "benchmark.R": "e9ceac5f9cc3b0d0721d5a6669831591c1c7357faba87d902bf6962ae44ece77",
+        "summarize.R": "3e080781a4bcdd601be5acf2dafe1eb19c39094b2be2487e50a9009154c5f7d0"
+      }
+    },
+    "fixest_integration": {
+      "repository": "https://github.com/johannes-schmieder/fixest-cmg",
+      "commit": "47b832bd4795927a36f05822c1f062b3f117a2ce",
+      "upstream_repository": "https://github.com/lrberge/fixest",
+      "upstream_base_commit": "cf9461331033e6f7276ad39d8203751690e619d4",
+      "R_package_version": "0.14.2",
+      "publication_ref": "codex/cmg-two-way"
+    },
+    "withinr": {
+      "repository": "https://github.com/py-econometrics/within",
+      "pull_request": "https://github.com/py-econometrics/within/pull/84",
+      "commit": "6a85c94b9c42ba6862e1e03e1bb370a067514fcd",
+      "binding_branch": "r-bindings-new",
+      "R_package_version": "0.1.0",
+      "local_rust_crates": [
+        {
+          "name": "schwarz-precond",
+          "version": "0.2.0"
+        },
+        {
+          "name": "within",
+          "version": "0.2.0"
+        },
+        {
+          "name": "withinr",
+          "version": "0.1.0"
+        }
+      ],
+      "source_archive_sha256": "7721f0977001f76ac02f65ccb61ed319ffc95c1a5c006e73361ae0fde436e3ff",
+      "source_files_verified_unchanged": 157,
+      "api": "within_solve_batch(categories, Y, options = NULL, weights = NULL, preconditioner = NULL)",
+      "preconditioner": "additive Schwarz with default approximate Schur",
+      "qualification": "Pinned proposed R bindings; neither the older R-universe binding branch nor latest Rust main."
+    }
+  },
+  "source_tree_state_at_run": [
+    {
+      "name": "CMG",
+      "commit": "8d73db3f4221d27bbd2be036383e6e4540200dfd",
+      "status": [],
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "fixest",
+      "commit": "47b832bd4795927a36f05822c1f062b3f117a2ce",
+      "status": [],
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "hardware": {
+    "cpu_model": "Apple M2 Ultra",
+    "physical_cores": 24,
+    "logical_cores": 24,
+    "memory_bytes": 206158430208,
+    "memory_GiB": 192,
+    "machine_architecture": "arm64",
+    "evidence": "Post-run successful sysctl read; initial in-run hardware query was permission denied.",
+    "recorded_utc": "2026-11-07T12:25:47.305468+00:00"
+  },
+  "software": {
+    "R": "R version 4.6.1 (2026-06-24)",
+    "R_platform": "aarch64-apple-darwin25.4.0",
+    "operating_system": "macOS Tahoe 26.6.2",
+    "kernel_name": "Darwin",
+    "kernel_release": "25.6.0",
+    "rustc": "rustc 1.85.1 (4eb161250 2025-03-15)",
+    "rustc_host": "aarch64-apple-darwin",
+    "cargo": "cargo 1.85.1 (d73d2caf9 2024-12-31)",
+    "rust_toolchain_evidence": "Pinned withinr build receipt; CMGr build used the same Rust 1.85.1 toolchain.",
+    "C_and_CXX_compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+    "fixest_OpenMP": "enabled via libomp",
+    "BLAS": "OpenBLAS 0.3.34",
+    "LAPACK": "3.12.1",
+    "locale": "C.UTF-8/C.UTF-8/C.UTF-8/C/C.UTF-8/C.UTF-8",
+    "namespace_package_versions": {
+      "zoo": "1.9-0",
+      "compiler": "4.6.1",
+      "sandwich": "3.1-3",
+      "tools": "4.6.1",
+      "dreamerr": "1.5.0",
+      "Rcpp": "1.1.2",
+      "nlme": "3.1-169",
+      "grid": "4.6.1",
+      "Formula": "1.2-6",
+      "numDeriv": "2016.8-1.1",
+      "stringmagic": "1.3.0",
+      "lattice": "0.22-9"
+    }
+  },
+  "installed_packages": [
+    {
+      "package": "fixest",
+      "version": "0.14.2",
+      "normalized_R_package_version": "0.14.2",
+      "built": "R 4.6.1; aarch64-apple-darwin25.4.0; 2026-11-07 12:19:03 UTC; unix",
+      "binary_sha256": {
+        "libs/fixest.so": "7fbb8dadb71b3d739cdc5132932d29070627c8af85d2411f559f63e5a41722c4"
+      },
+      "r_code_and_metadata_sha256": {
+        "DESCRIPTION": "1c0449601ae448f589cef719211c90eb75f0ad2c2ccb7ea69e383a5158a3df84",
+        "NAMESPACE": "210b2c921f81cf3013997d776ec1a01dd4c170d4140823c664dc51f7973d26aa",
+        "R/fixest": "570ca456b280cdeb201ef5ebdf22dc8f80092e2c0c68e33c7f73340e420f3759",
+        "R/fixest.rdb": "56ddf3ee7f92ccebe016d38a36d8a88cfdb93124a700680181dcfa269b586631",
+        "R/fixest.rdx": "94cccaa03c82ca1d0254e42da2709640d46f98f3199cdc698154097d24bc24d2"
+      }
+    },
+    {
+      "package": "cmgr",
+      "version": "0.0.2",
+      "normalized_R_package_version": "0.0.2",
+      "built": "R 4.6.1; aarch64-apple-darwin25.4.0; 2026-11-07 12:13:48 UTC; unix",
+      "binary_sha256": {
+        "libs/cmgr.so": "c79ca61c95a6887d37061a91de8ef3d89b477ae0f0e101ac129cdf80b1879fce"
+      },
+      "r_code_and_metadata_sha256": {
+        "DESCRIPTION": "4b9808acb0f19a5c1925e1b5a01f408d73f4a3f6e77c7aa40d8f51b871fd00aa",
+        "NAMESPACE": "5ba504661937ec1a34bcc322ddaa14803be74136817ea5c66507a273cea8b11e",
+        "R/cmgr": "570ca456b280cdeb201ef5ebdf22dc8f80092e2c0c68e33c7f73340e420f3759",
+        "R/cmgr.rdb": "6a11a8ce9ed61fc0eb2846dd01f4d85e575b6d7610ba8e347b97fff46a29066a",
+        "R/cmgr.rdx": "74b50e475aa115334949b87f3184f001fc7c310c2dd0b17dcba24d5d72e2be11"
+      }
+    },
+    {
+      "package": "withinr",
+      "version": "0.1.0",
+      "normalized_R_package_version": "0.1.0",
+      "built": "R 4.6.1; aarch64-apple-darwin25.4.0; 2026-11-07 12:09:56 UTC; unix",
+      "binary_sha256": {
+        "libs/withinr.so": "00142e964e5899a4593f5a32dee90aa13b266efd9ad0dd707f72a22a6a18a3e5"
+      },
+      "r_code_and_metadata_sha256": {
+        "DESCRIPTION": "924238e2298179bd5635d67efeb7aad628e65d2a3e1da51b4481f9bab0e33f0d",
+        "NAMESPACE": "490d2df9ec64bf68fb6ced026fece129a69ad9f39aa590246ee16f358c6ac975",
+        "R/withinr": "570ca456b280cdeb201ef5ebdf22dc8f80092e2c0c68e33c7f73340e420f3759",
+        "R/withinr.rdb": "ed4a06226a45144ff0aaa9074817c879f5906c581444c4f79add8a8c1e4a835d",
+        "R/withinr.rdx": "09de83dd47cc25ffac06ccbd99e2e4aa9fd78c50d8c8aa42e593658dc6578c45"
+      }
+    },
+    {
+      "package": "Matrix",
+      "version": "1.7-5",
+      "normalized_R_package_version": "1.7.5",
+      "built": "R 4.6.1; aarch64-apple-darwin25.4.0; 2026-07-05 00:44:49 UTC; unix",
+      "binary_sha256": {
+        "libs/Matrix.so": "810018ad41364660981c1d5bd0d5621cac06799c9cce17c6170dc5aba0544188"
+      },
+      "r_code_and_metadata_sha256": {
+        "DESCRIPTION": "358942a20822869accac4c3f8b02d2f253d7a804c6178e0db683baf2d5a78bc1",
+        "NAMESPACE": "f55f8023db909a97394aefbd5092158e9839f19a327eb5bdd3e5606a94eab221",
+        "R/Matrix": "570ca456b280cdeb201ef5ebdf22dc8f80092e2c0c68e33c7f73340e420f3759",
+        "R/Matrix.rdb": "3682c3c048f00a14cd5e45a7bcb74045935b0ca369ae1cf947bb09be637362f6",
+        "R/Matrix.rdx": "c1cbe56b698108ed0ccc42103481a6abab9f5a1e34f229a7e325f645aa743928"
+      }
+    }
+  ],
+  "installed_hash_interpretation": "Identifies the actual timed build; rebuilt native libraries and R databases need not have identical bytes on another installation.",
+  "threads": {
+    "environment": {
+      "OMP_NUM_THREADS": "4",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "BLIS_NUM_THREADS": "1",
+      "VECLIB_MAXIMUM_THREADS": "1",
+      "RAYON_NUM_THREADS": "4"
+    },
+    "fixest_nthreads": 4,
+    "withinr_control": "RAYON_NUM_THREADS set before loading packages in a fresh Rscript process; no per-call thread parameter.",
+    "actual_CPU_utilization_measured": false
+  },
+  "experiment_plan": {
+    "seed": 20261107,
+    "workers": 20000,
+    "years": 6,
+    "firms": 1000,
+    "controls": 4,
+    "threads": 4,
+    "repetitions": 3,
+    "probabilities": [
+      0.005,
+      0.01,
+      0.02,
+      0.05,
+      0.2
+    ],
+    "extra_case": "5% annual moves, 99% neighboring-firm destinations",
+    "methods": [
+      "native_default",
+      "native_tight",
+      "withinr_additive",
+      "cmg_off",
+      "cmg_schur"
+    ],
+    "native_default": {
+      "tol": 1e-06,
+      "iter": 10000
+    },
+    "native_tight": {
+      "tol": 1e-10,
+      "iter": 20000
+    },
+    "withinr": {
+      "fixef_atol": 1e-08,
+      "fixef_btol": 1e-08,
+      "fixef_maxiter": 10000,
+      "preconditioner": "additive"
+    },
+    "cmg": {
+      "fixef_tol": 1e-08,
+      "fixef_maxiter": 10000
+    },
+    "schur": {
+      "max_degree": 5,
+      "selection": "larger FE",
+      "cmg_settings": "unchanged"
+    },
+    "gates": {
+      "coef": 1e-07,
+      "residual": 1e-05,
+      "projection": 1e-05,
+      "normalized_fe_moment": 1e-08
+    },
+    "weights": "unit",
+    "mode": "timed full plan",
+    "timing": "complete feols call; demeaned=TRUE; one warmup per method and case; cyclic timed method order; GC outside timer",
+    "acceptance": "sample size unchanged, no reported nonconvergence, finite metrics, all four errors strictly below gates",
+    "oracle": "independent sparse direct worker-Schur solve, one firm anchor per component",
+    "memory": "Not measured. In-process RSS cannot fairly isolate method allocations/reusable runtime pools."
+  },
+  "method_settings": {
+    "native_default": {
+      "demeaner": "native MAP",
+      "fixef_tol": 1e-06,
+      "fixef_maxiter": 10000
+    },
+    "native_tight": {
+      "demeaner": "native MAP",
+      "fixef_tol": 1e-10,
+      "fixef_maxiter": 20000
+    },
+    "withinr_additive": {
+      "demeaner": "LSMR",
+      "fixef_atol": 1e-08,
+      "fixef_btol": 1e-08,
+      "effective_withinr_tol": 1e-08,
+      "fixef_maxiter": 10000,
+      "preconditioner": "additive"
+    },
+    "cmg_off": {
+      "demeaner": "CMG-preconditioned PCG",
+      "fixef_tol": 1e-08,
+      "fixef_maxiter": 10000,
+      "schur": false,
+      "system": "full worker-firm graph"
+    },
+    "cmg_schur": {
+      "demeaner": "CMG-preconditioned PCG",
+      "fixef_tol": 1e-08,
+      "fixef_maxiter": 10000,
+      "schur": true,
+      "system": "exactly eliminate levels with at most five distinct neighbors from the larger fixed-effect block, solve reduced graph, recover eliminated effects"
+    }
+  },
+  "common_fit_settings": {
+    "formula": "y ~ x1 + x2 + x3 + x4 | worker + firm",
+    "demeaned": true,
+    "vcov": "iid",
+    "nthreads": 4,
+    "weights": "unit"
+  },
+  "accuracy_checks": {
+    "gates": {
+      "coef": 1e-07,
+      "residual": 1e-05,
+      "projection": 1e-05,
+      "normalized_fe_moment": 1e-08
+    },
+    "comparison": "Every metric must be finite and strictly less than its gate; unchanged sample and no reported nonconvergence are also required.",
+    "coefficient_metric": "maximum absolute difference from reference regression coefficients",
+    "residual_metric": "maximum absolute difference from reference original-regression residuals",
+    "projection_metric": "maximum absolute difference across demeaned outcome and all four demeaned controls",
+    "normalized_FE_moment_metric": "maximum across outcome/control columns and worker/firm groups of abs(sum of projected values in group) / (sqrt(group observation count) * centered original column Euclidean norm)",
+    "oracle": "Independent R/Matrix sparse direct worker-Schur solve with one firm anchor per connected component and sparse Cholesky; no CMGr calls.",
+    "oracle_dense_QR_fixture_max_absolute_difference": 5.875300246316328e-13,
+    "native_convStatus_missing_means": "No returned failure flag, not an explicit convergence certificate; independent gates still apply.",
+    "valid_summary_requirement": "All three timed calls and the single warmup for that case/method pass.",
+    "ratio_policy": "Only pairs with both valid summaries receive a numerical ratio."
+  },
+  "verification": {
+    "independently_recomputed_timed_rows": 90,
+    "independently_checked_warmup_rows": 30,
+    "independently_recomputed_medians": 30,
+    "independently_checked_ratio_rows": 120,
+    "all_raw_validity_flags_match_recomputed_gates": true,
+    "fit_error_count": 0,
+    "fit_warning_count": 0,
+    "assessment_error_count": 0,
+    "valid_case_counts": {
+      "native_default": 0,
+      "native_tight": 2,
+      "withinr_additive": 6,
+      "cmg_off": 6,
+      "cmg_schur": 6
+    }
+  },
+  "limitations": [
+    "One seed and one generated data set per mobility case; repetitions time the same data.",
+    "Synthetic balanced six-period unit-weight panels with Gaussian controls and roughly uniform firm sizes.",
+    "Short panels and low mobility produce many low-degree workers and are well suited to the elimination step.",
+    "Low-mobility cases can be disconnected; topology.csv reports components.",
+    "Three timing repetitions and partial cyclic order provide exploratory medians, not confidence intervals or general speed guarantees.",
+    "Tolerances are solver-specific; accepted fits need not have identical achieved error.",
+    "Failed native gates vary in magnitude and do not all imply inaccurate slope coefficients.",
+    "No peak-memory measurement, large administrative-data qualification or multi-platform benchmark.",
+    "Withinr uses its own approximate Schur step; the comparison is between complete configured methods."
+  ],
+  "provenance_mapping": {
+    "run_environment_and_installed_hashes": "Recorded before the first fit.",
+    "CMGr_source_identity": "Source-package build receipt and generated CMG file manifest.",
+    "withinr_source_identity": "Pinned archive, unchanged-source verification and build receipt.",
+    "hardware_identity": "Successful post-run read, independently retained.",
+    "method_plan_and_accuracy_gates": "Frozen plan.R and benchmark source.",
+    "results": "Exact original CSV and oracle-check bytes, copied without recalculation or filtering."
+  },
+  "files": {
+    "timings.csv": {
+      "sha256": "923096ca50aa2fe06025bdb3b4813e24b217e123e03e8a2d05d9994eb976f58a",
+      "bytes": 16574
+    },
+    "warmups.csv": {
+      "sha256": "81846c21e53a60a64fb0548037e775cb8480c1eaf7abb3d49161f40cfa497afc",
+      "bytes": 5676
+    },
+    "summary.csv": {
+      "sha256": "e1228571d76f772de20812f823f1348c084e019159e56d25c71a995c969e065e",
+      "bytes": 6325
+    },
+    "ratios.csv": {
+      "sha256": "1d7d7aa99f1e3cc4dced49445e1c5453aa33db2380faaa039ab6163c8e3f2bd0",
+      "bytes": 16383
+    },
+    "topology.csv": {
+      "sha256": "6959871f32f26ffc68119af918268e63f04f39b3854ba764218d5ce3aa2ec8eb",
+      "bytes": 524
+    },
+    "plan.R": {
+      "sha256": "54cdff1046c944935b18a995a17071856946ea0e8dc2eeb65227ee95543b4ef8",
+      "bytes": 1336
+    },
+    "oracle-check.txt": {
+      "sha256": "39a38c353c690c818f2c527a2a9b5911d66141c2d33a967224edbe7390637293",
+      "bytes": 59
+    }
+  }
+}
