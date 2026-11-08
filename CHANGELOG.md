@@ -16,6 +16,19 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
   reduction, hierarchies, factors, repeats and every bit are unchanged; only
   the partition tree, and with it where a cancellation query lands, differs.
 
+- Team applications run every level a `ParallelCmgPlan` marks for the team
+  in fixed row blocks: plans now retain restriction rows (the transfer's
+  coarse-row transpose) for operator levels and for operator-free levels at
+  the fixed-chunk reduction floor, so restriction (coarse rows gathered in
+  ascending fine order), pruned-transfer prolongation and the centering
+  subtraction join the existing rows, row operators and full prolongation on
+  the borrowed team; operator-free large levels keep the serial edge-list
+  product. Every team kernel keeps the serial per-entry operation order, so
+  interleaved batches of every width equal the team-free bits at every worker
+  ceiling, as do scalar cycles without the fixed-chunk centering of one large
+  component (unchanged). `ParallelCmgPlan::restriction_count` reports the
+  rows; `byte_len` and the plan construction bound include them.
+
 ## 0.2.0 - 2026-11-06
 
 ### Consolidation

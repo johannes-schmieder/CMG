@@ -113,16 +113,58 @@ impl PrunedTransfer {
         )
     }
 
-    /// Add the transpose action for vertex-major lanes; retired rows are unchanged.
+    /// Add the transpose action for vertex-major lanes; retired rows are
+    /// unchanged. Above the team's parallel threshold, fixed fine-row blocks
+    /// run on the team, each adding the entries of its own rows (every fine
+    /// row has at most one entry), so the bits equal the serial loop's.
     pub(crate) fn prolong_add_lanes<W: Width, M: Meter>(
         &self,
         coarse: &[f64],
         fine: &mut [f64],
         width: W,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<
+            crate::execution::Team<'_>,
+        >,
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = width.get();
         self.validate_lanes(fine.len(), coarse.len(), columns)?;
+        #[cfg(feature = "parallel")]
+        if let Some(team) = team.filter(|team| team.should_parallel(fine.len())) {
+            let rows = team.work_chunk_len(self.fine_dimension);
+            let entries = &self.entries;
+            let result = team.chunks_mut(
+                fine,
+                rows * columns,
+                meter.query(),
+                |block, values, poll| {
+                    let first = block * rows;
+                    let last = first + values.len() / columns;
+                    let start = entries.partition_point(|&(row, _)| (row as usize) < first);
+                    let span = &entries[start..];
+                    let span = &span[..span.partition_point(|&(row, _)| (row as usize) < last)];
+                    row_lanes(
+                        poll,
+                        "CMG pruned prolongation",
+                        span.len(),
+                        columns,
+                        1,
+                        |entries, lanes| {
+                            for &(target, source) in &span[entries] {
+                                let target = (target as usize - first) * columns;
+                                let source = source as usize * columns;
+                                for lane in lanes.clone() {
+                                    values[target + lane] += coarse[source + lane];
+                                }
+                            }
+                            Ok(())
+                        },
+                    )
+                },
+            );
+            meter.joined("CMG pruned prolongation")?;
+            return result;
+        }
         row_lanes(
             meter,
             "CMG pruned prolongation",

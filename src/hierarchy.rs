@@ -140,8 +140,57 @@ impl HierarchyLevel {
         }
     }
 
-    /// Add prolonged coarse lanes through this level's transfer; a full
-    /// aggregation uses `team` above its parallel threshold.
+    /// `(fine, coarse, entries)` of this level's transfer, when it has one.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn transfer_dimensions(&self) -> Option<(usize, usize, usize)> {
+        match self.transfer.as_ref()? {
+            LevelTransfer::Full(aggregation) => Some((
+                aggregation.fine_dimension(),
+                aggregation.coarse_dimension(),
+                aggregation.fine_dimension(),
+            )),
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => Some((
+                transfer.fine_dimension(),
+                transfer.coarse_dimension(),
+                transfer.entries().len(),
+            )),
+        }
+    }
+
+    /// The coarse-row transpose of this level's transfer.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn restriction_rows<M: Meter>(
+        &self,
+        meter: &mut M,
+    ) -> Result<crate::preconditioner::RestrictionRows, CmgError> {
+        use crate::preconditioner::RestrictionRows;
+        match self.transfer.as_ref().ok_or(CmgError::InvalidHierarchy {
+            context: "nonterminal level has no transfer",
+        })? {
+            LevelTransfer::Full(aggregation) => RestrictionRows::build(
+                aggregation.fine_dimension(),
+                aggregation.coarse_dimension(),
+                aggregation.fine_dimension(),
+                |fine| (fine, aggregation.label_at(fine)),
+                meter,
+            ),
+            #[cfg(feature = "experimental-components")]
+            LevelTransfer::Pruned(transfer) => RestrictionRows::build(
+                transfer.fine_dimension(),
+                transfer.coarse_dimension(),
+                transfer.entries().len(),
+                |index| {
+                    let (fine, coarse) = transfer.entries()[index];
+                    (fine as usize, coarse as usize)
+                },
+                meter,
+            ),
+        }
+    }
+
+    /// Add prolonged coarse lanes through this level's transfer on `team`
+    /// above its parallel threshold (fine rows are independent outputs).
     pub(crate) fn prolong_add_lanes<W: Width, M: Meter>(
         &self,
         coarse: &[f64],
@@ -158,7 +207,7 @@ impl HierarchyLevel {
             }
             #[cfg(feature = "experimental-components")]
             LevelTransfer::Pruned(transfer) => {
-                transfer.prolong_add_lanes(coarse, fine, width, meter)
+                transfer.prolong_add_lanes(coarse, fine, width, team, meter)
             }
         }
     }

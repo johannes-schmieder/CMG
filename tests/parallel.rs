@@ -585,7 +585,13 @@ fn prepared_solver_routes_single_and_batch_workloads() {
         vector_only_report.execution(),
         ParallelPcgExecution::Planned
     );
-    assert_eq!(vector_only_report.plan_bytes(), 0);
+    // Operator-free: the plan retains only the restriction rows of its
+    // large sparse levels.
+    let vector_only_plan = vector_only_solver
+        .try_plan(vector_only_solver_executor.team())
+        .unwrap();
+    assert!(vector_only_plan.restriction_count() > 0);
+    assert_eq!(vector_only_report.plan_bytes(), vector_only_plan.byte_len());
 
     let disconnected_paths = routing_disconnected_paths(1_501);
     let (disconnected_solver_executor, disconnected_solver) = routing_solver_with_options(
