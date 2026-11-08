@@ -5,6 +5,17 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ## Unreleased
 
+- The canonical edge introsort classifies partition records with branch-free
+  two-way (Lomuto) steps instead of three-way branching, separates records
+  equal to a range's lower bound in one equal-pivot pass, and shifts instead
+  of swapping in its insertion leaves. Polled construction and every team
+  sort are faster (about 2.5-3x on the sort of a million-edge graph); pivot
+  rules, the depth limit, the heapsort fallback, the counting cadence (16
+  units per partition record, 1,024 every 64 steps) and allocation-freedom
+  are unchanged. The total comparator makes the order identical, so duplicate
+  reduction, hierarchies, factors, repeats and every bit are unchanged; only
+  the partition tree, and with it where a cancellation query lands, differs.
+
 ## 0.2.0 - 2026-11-06
 
 ### Consolidation
