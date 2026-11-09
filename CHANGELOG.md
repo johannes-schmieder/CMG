@@ -5,6 +5,10 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-09
+
+### Performance
+
 - The canonical edge introsort classifies partition records with branch-free
   two-way (Lomuto) steps instead of three-way branching, separates records
   equal to a range's lower bound in one equal-pivot pass, and shifts instead
