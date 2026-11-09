@@ -840,15 +840,28 @@ mod cancellation_tests {
                 ..planned
             };
             let mut output = vec![0.0; n];
-            assert!(matches!(
-                preconditioner.apply_compatible_into_with(
-                    &rhs,
-                    &mut output,
-                    &mut workspace,
-                    context
+            let outcome = preconditioner.apply_compatible_into_with(
+                &rhs,
+                &mut output,
+                &mut workspace,
+                context,
+            );
+            match outcome {
+                Err(CmgError::Cancelled { .. }) => {
+                    assert!(calls.load(Ordering::SeqCst) > threshold);
+                }
+                Ok(()) if threshold == total - 1 => {
+                    // Lane counters span dynamically claimed chunks, so the
+                    // last ordinal from another run may never be reached.
+                    // Success must still mean the query never returned true.
+                    assert!(calls.load(Ordering::SeqCst) <= threshold);
+                    assert_eq!(bits(&output), bits(&expected));
+                }
+                other => panic!(
+                    "threshold {threshold}, observed {}, baseline {total}, outcome {other:?}",
+                    calls.load(Ordering::SeqCst)
                 ),
-                Err(CmgError::Cancelled { .. })
-            ));
+            }
             // Returned only after every lane joined: no lane still queries.
             let settled = calls.load(Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(5));
