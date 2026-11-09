@@ -145,20 +145,32 @@ banks: the second covers the transient compaction copy that duplicate
 reduction (`from_sorted_edges`) allocates while the merged bank is live.
 
 Every canonical edge sort (initial graph, contraction, owned compact edges) is
-the one introsort in `graph/edge_sort.rs`: three-way partitions, insertion
-below 17 records and a heapsort fallback at depth `2 log2(n)`. Partitions of
+the one introsort in `graph/edge_sort.rs`: branch-free two-way partitions,
+equal-pivot partitions, insertion below 17 records and a heapsort fallback at
+depth `2 log2(n)`. Partitions of
 more than 40 records take Tukey's ninther as pivot (Bentley and McIlroy): with
 `s = len / 8`, `last = len - 1` and `m = last / 2`, the median of the medians
 of positions (0, s, 2s), (m - s, m, m + s) and (last - 2s, last - s, last).
 Smaller partitions take the median of the first, middle and last records.
 Pivot selection is conservatively charged after it runs: 192 units for at
 most twelve comparisons in a ninther, or 48 for at most three in a median
-of three (16 units per possible comparison). A partition then advances its meter by
-1,024 units (16 per step) after every 64 steps; the meter queries
-cancellation once 65,536 units have accumulated, so inside a partition a
+of three (16 units per possible comparison). The pivot then moves to the
+front and every other record is classified by one comparison with it
+(Lomuto): the record swaps with the first record of the right side and the
+boundary advances by the comparison's outcome, so classification has no
+data-dependent branch. Finally the pivot moves between the sides. A range's
+lower bound is the pivot of the partition that produced its lower end; when
+the pivot is not above it, every record of the range is at least the pivot,
+and the partition separates the records equal to the pivot instead
+(pattern-defeating quicksort, Peters 2021), so a run of equal records
+finishes in one pass. A partition advances its meter by
+1,024 units (16 per step) after every 64 steps and by 16 for the pivot move,
+so it still counts 16 units per record; the meter queries cancellation once
+65,536 units have accumulated, so inside a partition a
 query falls about every 4,096 steps. Work between two queries is at most
 65,535 + 1,024 counted units plus one uncounted bounded segment: 64
-partition steps, one pivot selection (at most twelve comparisons and nine record copies),
+partition steps, one pivot selection (at most twelve comparisons) with the
+pivot move and one comparison with the bound,
 one insertion record or one heap step. The ninther avoids the depth fallback
 on the tested sorted, reversed, organ-pipe and block-structured fixtures;
 an adaptive

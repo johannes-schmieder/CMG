@@ -123,11 +123,14 @@ reserved once rather than grown. All CMG-owned allocations occur on the caller
 before parallel fill. Rayon task/queue allocations remain explicitly uncovered;
 the presence of a finite CMG-owned layout bound does not certify that runtime.
 
-Plan construction reserves both level descriptor banks first, then builds levels
-in their original order. At each eligible level, add its construction bound to
-both descriptor banks and all earlier retained operators; take the maximum
-across levels. Shared lineage clones allocate nothing. Partial failure drops all
-earlier operators and both banks. The profiling-only result adds its own profile
+Plan construction reserves its three level descriptor banks (operators,
+restriction rows, lineages) first, then builds levels in their original order.
+At each eligible level, add its construction bound to the descriptor banks and
+all earlier retained operators and restriction rows; take the maximum across
+levels. A level's restriction rows (`u32` offsets for its coarse rows plus one,
+`u32` members for its transfer entries) follow its operator without scratch and
+raise the running total. Shared lineage clones allocate nothing. Partial
+failure drops all earlier operators, restriction rows and the banks. The profiling-only result adds its own profile
 bank and is outside this admitted entry point. Old plans remain separately live.
 
 `ParallelPcgSolver::plan_construction_allocation_bound` and

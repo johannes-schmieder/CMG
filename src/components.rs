@@ -282,7 +282,10 @@ impl CenteringPlan {
     /// Each lane sums its component's values in ascending vertex order with
     /// Neumaier compensation, divides `sum + correction` by the component size
     /// and subtracts the mean. A non-finite value is reported before any value
-    /// is changed.
+    /// is changed. The sums stay serial; with `team`, the elementwise
+    /// subtraction runs in fixed row blocks above the team's parallel
+    /// threshold, so the bits never depend on the team.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn center_lanes<W: Width, M: Meter>(
         &self,
         values: &mut [f64],
@@ -290,6 +293,7 @@ impl CenteringPlan {
         sums: &mut [f64],
         corrections: &mut [f64],
         means: &mut [f64],
+        team: Option<Team<'_>>,
         meter: &mut M,
     ) -> Result<(), CmgError> {
         let columns = width.get();
@@ -319,6 +323,7 @@ impl CenteringPlan {
                 sums,
                 corrections,
                 means,
+                team,
                 meter,
             ),
             CenteringLabels::Compact(labels) => center_labeled(
@@ -329,6 +334,7 @@ impl CenteringPlan {
                 sums,
                 corrections,
                 means,
+                team,
                 meter,
             ),
             CenteringLabels::Native(labels) => center_labeled(
@@ -339,6 +345,7 @@ impl CenteringPlan {
                 sums,
                 corrections,
                 means,
+                team,
                 meter,
             ),
         }
@@ -383,13 +390,14 @@ impl CenteringPlan {
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn center_labeled<M: Meter>(
-    label: impl Fn(usize) -> usize,
+    label: impl Fn(usize) -> usize + Sync,
     values: &mut [f64],
     columns: usize,
     sizes: &[usize],
     sums: &mut [f64],
     corrections: &mut [f64],
     means: &mut [f64],
+    #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] team: Option<Team<'_>>,
     meter: &mut M,
 ) -> Result<(), CmgError> {
     crate::cancel::zero(meter, "CMG centering", sums)?;
@@ -438,6 +446,24 @@ fn center_labeled<M: Meter>(
             Ok(())
         },
     )?;
+    #[cfg(feature = "parallel")]
+    if let Some(team) = team.filter(|team| team.should_parallel(values.len())) {
+        let means = &*means;
+        let rows = crate::preconditioner::rows_parallel(
+            team,
+            meter.query(),
+            values,
+            columns,
+            |vertex, first, values| {
+                let mean = &means[label(vertex) * columns + first..];
+                for (value, mean) in values.iter_mut().zip(mean) {
+                    *value -= mean;
+                }
+            },
+        );
+        meter.joined("CMG centering")?;
+        return rows;
+    }
     row_lanes(
         meter,
         "CMG centering",

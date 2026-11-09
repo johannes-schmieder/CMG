@@ -277,6 +277,7 @@ fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
         PEAK.with(|p| p.set(before));
         let plan = ParallelCmgPlan::build_with_budget(&pre, executor.team(), bound).unwrap();
         assert_eq!(plan.operator_count(), 1);
+        assert_eq!(plan.restriction_count(), 1);
         let observed_peak = (PEAK.with(Cell::get) - before) as usize;
         assert_eq!(observed_peak, bound);
         assert_eq!(
@@ -307,7 +308,9 @@ fn csr_and_plan_admit_before_allocating_and_clean_up_partial_owners() {
             }
             failures += 1;
         }
-        assert_eq!(failures, 6); // two descriptor banks and four serial CSR banks
+        // Three descriptor banks, four serial CSR banks, and the restriction
+        // rows' offsets and members.
+        assert_eq!(failures, 9);
         let solver = ParallelPcgSolver::from_preconditioner(
             pre,
             executor.team(),

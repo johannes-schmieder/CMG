@@ -5,6 +5,30 @@ semantic-style version numbers; release dates use ISO `YYYY-MM-DD` format.
 
 ## Unreleased
 
+- The canonical edge introsort classifies partition records with branch-free
+  two-way (Lomuto) steps instead of three-way branching, separates records
+  equal to a range's lower bound in one equal-pivot pass, and shifts instead
+  of swapping in its insertion leaves. Polled construction and every team
+  sort are faster (about 2.5-3x on the sort of a million-edge graph); pivot
+  rules, the depth limit, the heapsort fallback, the counting cadence (16
+  units per partition record, 1,024 every 64 steps) and allocation-freedom
+  are unchanged. The total comparator makes the order identical, so duplicate
+  reduction, hierarchies, factors, repeats and every bit are unchanged; only
+  the partition tree, and with it where a cancellation query lands, differs.
+
+- Team applications run every level a `ParallelCmgPlan` marks for the team
+  in fixed row blocks: plans now retain restriction rows (the transfer's
+  coarse-row transpose) for operator levels and for operator-free levels at
+  the fixed-chunk reduction floor, so restriction (coarse rows gathered in
+  ascending fine order), pruned-transfer prolongation and the centering
+  subtraction join the existing rows, row operators and full prolongation on
+  the borrowed team; operator-free large levels keep the serial edge-list
+  product. Every team kernel keeps the serial per-entry operation order, so
+  interleaved batches of every width equal the team-free bits at every worker
+  ceiling, as do scalar cycles without the fixed-chunk centering of one large
+  component (unchanged). `ParallelCmgPlan::restriction_count` reports the
+  rows; `byte_len` and the plan construction bound include them.
+
 ## 0.2.0 - 2026-11-06
 
 ### Consolidation

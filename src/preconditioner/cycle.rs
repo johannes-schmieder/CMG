@@ -11,6 +11,11 @@
 //!   component; interleaved lanes keep serial compensated sums.
 //! * The level operator: a [`ParallelCmgPlan`] row operator (gather) where the
 //!   plan retained one, else the canonical edge list (scatter).
+//! * Team levels: with a team, a level whose row operator or restriction
+//!   rows the plan retained runs its elementwise rows, restriction (coarse
+//!   rows gathered in ascending fine order), prolongation and centering
+//!   subtraction in fixed row blocks above the team's parallel threshold;
+//!   centering sums, terminal solves and other levels stay serial.
 //! * The meter: [`crate::cancel::Unmetered`] compiles every poll away;
 //!   a cancellation meter polls every bounded chunk of items in every kernel,
 //!   and parallel lanes poll the sticky query before joining.
@@ -255,11 +260,12 @@ impl<S: Store> Cycle<'_, S> {
                 self.matvec(index, output, parts.residual, meter)?;
                 recorder.finish(index, CmgApplyPhase::ResidualMatvec, stamp);
                 let stamp = R::start();
-                level.restrict_residual_lanes(
+                self.restrict(
+                    index,
+                    parallel,
                     rhs,
                     parts.residual,
                     parts.coarse_rhs,
-                    width,
                     meter,
                 )?;
                 recorder.finish(index, CmgApplyPhase::Restriction, stamp);
@@ -269,6 +275,7 @@ impl<S: Store> Cycle<'_, S> {
                 // before the recursive solve.
                 self.center(
                     index,
+                    parallel,
                     parts.coarse_rhs,
                     parts.sums,
                     parts.corrections,
@@ -310,13 +317,13 @@ impl<S: Store> Cycle<'_, S> {
         Ok(())
     }
 
-    /// Whether the plan retained a row operator for this level.
+    /// Whether the plan retained a row operator or restriction rows for
+    /// this level.
     #[inline]
     fn parallel_level(&self, index: usize) -> bool {
         #[cfg(feature = "parallel")]
         {
-            self.plan
-                .is_some_and(|plan| plan.level_operator(index).is_some())
+            self.plan.is_some_and(|plan| plan.team_level(index))
         }
         #[cfg(not(feature = "parallel"))]
         {
@@ -454,11 +461,45 @@ impl<S: Store> Cycle<'_, S> {
             .matvec_lanes(input, output, width, meter)
     }
 
+    /// `coarse = R (rhs - product)`: the plan's restriction rows on the team
+    /// above its parallel threshold, else the transfer's serial scatter. Both
+    /// add each coarse row's members in ascending fine order from zero.
+    fn restrict<M: Meter>(
+        &self,
+        index: usize,
+        #[cfg_attr(not(feature = "parallel"), allow(unused_variables))] parallel: bool,
+        rhs: &[f64],
+        product: &[f64],
+        coarse: &mut [f64],
+        meter: &mut M,
+    ) -> Result<(), CmgError> {
+        let width = self.store.width();
+        #[cfg(feature = "parallel")]
+        if let (Some(team), Some(rows)) = (
+            self.parallel_team(parallel),
+            self.plan.and_then(|plan| plan.level_restriction(index)),
+        ) {
+            if team.should_parallel(rhs.len()) {
+                return rows.restrict_residual_lanes(
+                    rhs,
+                    product,
+                    coarse,
+                    width.get(),
+                    team,
+                    meter,
+                );
+            }
+        }
+        self.cmg.hierarchy.levels()[index]
+            .restrict_residual_lanes(rhs, product, coarse, width, meter)
+    }
+
     /// Remove coarse component means from restricted residuals.
     #[allow(clippy::too_many_arguments)]
     fn center<M: Meter>(
         &self,
         index: usize,
+        parallel: bool,
         values: &mut [f64],
         sums: &mut [f64],
         corrections: &mut [f64],
@@ -474,7 +515,16 @@ impl<S: Store> Cycle<'_, S> {
                 }
             }
         }
-        plan.center_lanes(values, self.store.width(), sums, corrections, means, meter)
+        let team = self.parallel_team(parallel);
+        plan.center_lanes(
+            values,
+            self.store.width(),
+            sums,
+            corrections,
+            means,
+            team,
+            meter,
+        )
     }
 }
 

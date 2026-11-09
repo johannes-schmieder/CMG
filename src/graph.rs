@@ -811,10 +811,32 @@ const fn endpoint_key(edge: &Edge) -> u64 {
     edge.key
 }
 
+/// The canonical total edge order: endpoint key, then [`f64::total_cmp`]
+/// weight. Equal records are identical. Sorts use [`raw_edge_less`]; this is
+/// the reference definition their witnesses compare against.
+#[cfg(test)]
 fn compare_raw_edges(left: &Edge, right: &Edge) -> core::cmp::Ordering {
     endpoint_key(left)
         .cmp(&endpoint_key(right))
         .then_with(|| left.weight.total_cmp(&right.weight))
+}
+
+/// `compare_raw_edges(left, right).is_lt()` without data-dependent branches:
+/// the endpoint key, then the weight's [`f64::total_cmp`] key as an unsigned
+/// integer.
+#[inline(always)]
+fn raw_edge_less(left: &Edge, right: &Edge) -> bool {
+    let left_weight = total_weight_key(left.weight);
+    let right_weight = total_weight_key(right.weight);
+    (left.key < right.key) | ((left.key == right.key) & (left_weight < right_weight))
+}
+
+/// The unsigned integer whose order is [`f64::total_cmp`]'s: negative values
+/// flip every bit but the sign, then the sign bit flips for unsigned order.
+#[inline(always)]
+const fn total_weight_key(weight: f64) -> u64 {
+    let bits = weight.to_bits();
+    (bits ^ ((((bits as i64) >> 63) as u64) >> 1)) ^ (1 << 63)
 }
 
 fn sort_compact_edge_endpoints(raw: &mut [Edge]) {

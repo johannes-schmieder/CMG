@@ -24,10 +24,14 @@ pub(crate) use with_meter;
 
 mod batch;
 mod cycle;
+#[cfg(feature = "parallel")]
+mod restriction;
 pub use batch::CmgBatchWorkspace;
 pub(crate) use cycle::{LevelParts, One, Parts, Store, Width, rows_serial};
 #[cfg(feature = "parallel")]
 pub(crate) use cycle::{rows_parallel, rows_parallel_with};
+#[cfg(feature = "parallel")]
+pub(crate) use restriction::RestrictionRows;
 
 use crate::cancel::{Meter, Unmetered};
 use crate::cmg_profile::CycleRecorder;
@@ -235,10 +239,20 @@ impl PreconditionerBuildProfile {
 /// retain the compact one-edge-per-undirected-edge hierarchy without duplicated
 /// adjacency storage. Operators are retained only for nonterminal levels large
 /// enough to use the supplied team.
+///
+/// A level runs on the team when the plan holds its row operator (Laplacian
+/// gather) or its restriction rows (the transfer's coarse-row transpose,
+/// gathered in ascending fine order). Restriction rows are retained for
+/// every operator level whose fine dimension reaches the team's parallel
+/// threshold, and for operator-free (sparse) levels whose fine dimension
+/// reaches the team's fixed-chunk reduction floor. Every team kernel
+/// reproduces the serial kernel's per-entry operation order, so a plan and
+/// a team never change application bits; they only choose where rows run.
 #[cfg(feature = "parallel")]
 #[derive(Debug, Clone)]
 pub struct ParallelCmgPlan {
     level_operators: Vec<Option<CsrLaplacian>>,
+    level_restrictions: Vec<Option<RestrictionRows>>,
     level_lineages: Vec<Arc<()>>,
 }
 
@@ -263,12 +277,16 @@ impl ParallelCmgPlan {
         use crate::storage::{add, bytes};
         let levels = preconditioner.hierarchy.levels();
         let mut retained = add(
-            bytes::<Option<CsrLaplacian>>(levels.len())?,
+            add(
+                bytes::<Option<CsrLaplacian>>(levels.len())?,
+                bytes::<Option<RestrictionRows>>(levels.len())?,
+            )?,
             bytes::<Arc<()>>(levels.len())?,
         )?;
         let mut peak = retained;
         for level in levels {
-            if Self::level_is_eligible(level, shape) {
+            let operator = Self::level_is_eligible(level, shape);
+            if operator {
                 let graph = level.graph();
                 peak = peak.max(add(
                     retained,
@@ -281,6 +299,14 @@ impl ParallelCmgPlan {
                         graph.edge_count(),
                     )?,
                 )?;
+            }
+            if let Some((_, coarse, entries)) = Self::restriction_shape(level, shape, operator) {
+                // Built without scratch after the level's operator.
+                retained = add(
+                    retained,
+                    RestrictionRows::allocation_bytes(coarse, entries)?,
+                )?;
+                peak = peak.max(retained);
             }
         }
         Ok(peak)
@@ -363,6 +389,24 @@ impl ParallelCmgPlan {
             && shape.should_parallel(graph.edges().len())
     }
 
+    /// `(fine, coarse, entries)` of a level that retains restriction rows:
+    /// nonterminal with a nonempty compact transfer whose fine dimension
+    /// reaches the parallel threshold, and, without a row operator, the
+    /// fixed-chunk reduction floor.
+    fn restriction_shape(
+        level: &HierarchyLevel,
+        shape: crate::ParallelOptions,
+        operator: bool,
+    ) -> Option<(usize, usize, usize)> {
+        let (fine, coarse, entries) = level.transfer_dimensions()?;
+        (level.terminal_reason().is_none()
+            && coarse > 0
+            && RestrictionRows::representable(fine, entries)
+            && shape.should_parallel(fine)
+            && (operator || fine >= shape.reduction_floor()))
+        .then_some((fine, coarse, entries))
+    }
+
     /// Build deterministic row operators for one immutable preconditioner.
     pub fn build(preconditioner: &CmgPreconditioner, team: Team<'_>) -> Result<Self, CmgError> {
         Self::build_with(
@@ -390,12 +434,14 @@ impl ParallelCmgPlan {
     ) -> Result<Self, CmgError> {
         let levels = preconditioner.hierarchy.levels();
         let mut level_operators = meter.try_capacity(levels.len(), "plan operators")?;
+        let mut level_restrictions = meter.try_capacity(levels.len(), "plan restrictions")?;
         let mut level_lineages = meter.try_capacity(levels.len(), "plan lineages")?;
         for (index, level) in levels.iter().enumerate() {
             meter.work("plan level", 64)?;
             let graph = level.graph();
             let start = PROFILE.then(Instant::now);
-            let (operator, profile) = if Self::level_is_eligible(level, team.options()) {
+            let eligible = Self::level_is_eligible(level, team.options());
+            let (operator, profile) = if eligible {
                 let (operator, profile) =
                     CsrLaplacian::from_laplacian_with_team_impl::<PROFILE, M>(graph, team, meter)?;
                 (Some(operator), profile)
@@ -410,12 +456,18 @@ impl ParallelCmgPlan {
                     (start.elapsed().as_nanos(), profile),
                 )?;
             }
+            let restriction = match Self::restriction_shape(level, team.options(), eligible) {
+                Some(_) => Some(level.restriction_rows(meter)?),
+                None => None,
+            };
             level_operators.push(operator);
+            level_restrictions.push(restriction);
             level_lineages.push(Arc::clone(graph.lineage()));
         }
         meter.checkpoint("plan publication")?;
         Ok(Self {
             level_operators,
+            level_restrictions,
             level_lineages,
         })
     }
@@ -480,29 +532,47 @@ impl ParallelCmgPlan {
         self.level_operators.iter().flatten().count()
     }
 
-    /// Return retained heap bytes for all row operators.
+    /// Return the number of hierarchy levels carrying restriction rows.
+    #[must_use]
+    pub fn restriction_count(&self) -> usize {
+        self.level_restrictions.iter().flatten().count()
+    }
+
+    /// Return retained heap bytes for all row operators and restriction rows.
     #[must_use]
     pub fn byte_len(&self) -> usize {
         self.level_operators
             .iter()
             .flatten()
             .map(CsrLaplacian::byte_len)
+            .chain(
+                self.level_restrictions
+                    .iter()
+                    .flatten()
+                    .map(RestrictionRows::byte_len),
+            )
             .sum()
     }
 
     pub(crate) fn validate(&self, preconditioner: &CmgPreconditioner) -> Result<(), CmgError> {
-        if self.level_operators.len() != preconditioner.hierarchy.levels().len()
-            || self.level_lineages.len() != preconditioner.hierarchy.levels().len()
+        let levels = preconditioner.hierarchy.levels().len();
+        if self.level_operators.len() != levels
+            || self.level_restrictions.len() != levels
+            || self.level_lineages.len() != levels
         {
             return Err(CmgError::dimension(
                 "ParallelCmgPlan level count",
-                preconditioner.hierarchy.levels().len(),
-                self.level_operators.len().min(self.level_lineages.len()),
+                levels,
+                self.level_operators
+                    .len()
+                    .min(self.level_restrictions.len())
+                    .min(self.level_lineages.len()),
             ));
         }
-        for ((operator, lineage), level) in self
+        for (((operator, restriction), lineage), level) in self
             .level_operators
             .iter()
+            .zip(&self.level_restrictions)
             .zip(&self.level_lineages)
             .zip(preconditioner.hierarchy.levels())
         {
@@ -510,6 +580,11 @@ impl ParallelCmgPlan {
                 || operator
                     .as_ref()
                     .is_some_and(|operator| !operator.shares_lineage(level.graph()))
+                || restriction.as_ref().is_some_and(|rows| {
+                    level
+                        .transfer_dimensions()
+                        .is_none_or(|(fine, coarse, entries)| !rows.matches(fine, coarse, entries))
+                })
             {
                 return Err(CmgError::InvalidHierarchy {
                     context: "parallel CMG plan belongs to a different hierarchy",
@@ -523,6 +598,17 @@ impl ParallelCmgPlan {
         self.level_operators
             .get(level_index)
             .and_then(Option::as_ref)
+    }
+
+    fn level_restriction(&self, level_index: usize) -> Option<&RestrictionRows> {
+        self.level_restrictions
+            .get(level_index)
+            .and_then(Option::as_ref)
+    }
+
+    /// Whether level `level_index` runs on the team (see the type docs).
+    fn team_level(&self, level_index: usize) -> bool {
+        self.level_operator(level_index).is_some() || self.level_restriction(level_index).is_some()
     }
 
     /// Finest-level `output = L input` with this plan's row operator, when
@@ -561,7 +647,12 @@ crate::storage::storage_fields!(
     repeat_counts
 );
 #[cfg(feature = "parallel")]
-crate::storage::storage_fields!(ParallelCmgPlan, level_operators, level_lineages);
+crate::storage::storage_fields!(
+    ParallelCmgPlan,
+    level_operators,
+    level_restrictions,
+    level_lineages
+);
 
 impl CmgPreconditioner {
     /// Conservative requested storage for one scalar application workspace,
@@ -1209,11 +1300,16 @@ impl CmgPreconditioner {
 ///
 /// The default is the serial, uncancellable cycle. A [`ParallelCmgPlan`]
 /// selects its row operator on every level where it retained one; a team runs
-/// those levels' row kernels and transfers in parallel and centers a scalar
-/// workspace's single large coarse component with fixed-chunk team sums. These
-/// are the existing scalar-planned and interleaved arithmetic: results never
-/// depend on the worker count beyond the plan's operator set and that
-/// centering choice. With `cancel`, every kernel polls the sticky query after
+/// the plan's team levels (those with a row operator or restriction rows) in
+/// fixed row blocks above its parallel threshold: diagonal and Jacobi rows,
+/// row-operator products, restriction, prolongation and the centering
+/// subtraction, each with the serial kernel's per-entry operation order. The
+/// team also centers a scalar workspace's single large coarse component with
+/// fixed-chunk team sums. Centering sums, terminal solves and other levels
+/// stay serial. Results therefore never depend on the worker count, the
+/// plan's levels or the borrowed pool: interleaved batches and scalar cycles
+/// without that centering equal the team-free bits, and with it they equal
+/// the one-lane team's bits. With `cancel`, every kernel polls the sticky query after
 /// a bounded number of processed items (edges, rows, transfer entries, factor
 /// entries), parallel lanes poll it between bounded sub-ranges, and all lanes
 /// join before [`CmgError::Cancelled`] is returned; outputs are then
