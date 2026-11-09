@@ -2938,10 +2938,25 @@ mod cancellation_tests {
                 cancel: Some(&query),
                 ..planned
             };
-            assert!(matches!(
-                solve(&graph, &preconditioner, &rhs, &mut workspace, context),
-                Err(CmgError::Cancelled { .. })
-            ));
+            let outcome = solve(&graph, &preconditioner, &rhs, &mut workspace, context);
+            match outcome {
+                Err(CmgError::Cancelled { .. }) => {
+                    assert!(calls.load(Ordering::SeqCst) > threshold);
+                }
+                Ok(actual) if threshold == total - 1 => {
+                    // Each lane carries its own counter across dynamically
+                    // claimed chunks, so a later run can finish with fewer
+                    // polls. Success is valid only if the query never turned
+                    // true; the three earlier thresholds must still cancel.
+                    assert!(calls.load(Ordering::SeqCst) <= threshold);
+                    assert_eq!(actual, expected);
+                }
+                other => panic!(
+                    "threshold {threshold}, observed {}, baseline {total}, outcome {:?}",
+                    calls.load(Ordering::SeqCst),
+                    other.as_ref().map(|(diagnostics, _)| diagnostics)
+                ),
+            }
             let settled = calls.load(Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(5));
             assert_eq!(calls.load(Ordering::SeqCst), settled);
